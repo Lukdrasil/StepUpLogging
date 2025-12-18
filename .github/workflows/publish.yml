@@ -29,8 +29,11 @@ jobs:
     - name: Build main library
       run: dotnet build "${{ env.PROJECT_PATH }}" --configuration Release --no-restore /p:TreatWarningsAsErrors=true
     
+    - name: Build tests
+      run: dotnet build "${{ env.TEST_PROJECT_PATH }}" --configuration Release --no-restore
+    
     - name: Run tests
-      run: dotnet test "${{ env.TEST_PROJECT_PATH }}" --configuration Release --no-build --verbosity normal
+      run: dotnet test "${{ env.TEST_PROJECT_PATH }}" --configuration Release --no-build
     
     - name: Create NuGet package
       run: dotnet pack "${{ env.PROJECT_PATH }}" --configuration Release --no-build --output ./nuget-packages
