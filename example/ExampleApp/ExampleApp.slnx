@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="ExampleApp.AppHost/ExampleApp.AppHost.csproj" />
+  <Project Path="ExampleApp.ServiceDefaults/ExampleApp.ServiceDefaults.csproj" />
+  <Project Path="SimpleApi/SimpleApi.csproj" />
+  <Project Path="StepUpApi/StepUpApi.csproj" />
+</Solution>
