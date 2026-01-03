@@ -5,6 +5,15 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      publish_to_nuget:
+        description: 'Publish to NuGet (requires NUGET_API_KEY secret)'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
 
 env:
   PROJECT_PATH: 'src/Lukdrasil.StepUpLogging/Lukdrasil.StepUpLogging.csproj'
@@ -43,7 +52,9 @@ jobs:
       run: echo "⚠️ NUGET_API_KEY secret is not set. NuGet publish will be skipped. Set it in GitHub Settings → Secrets and variables → Actions"
     
     - name: Publish to NuGet
-      if: secrets.NUGET_API_KEY != ''
+      if: |
+        secrets.NUGET_API_KEY != '' && 
+        (github.event_name == 'push' || github.event.inputs.publish_to_nuget == 'true')
       run: dotnet nuget push ./nuget-packages/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
     
     - name: Upload NuGet package as artifact
