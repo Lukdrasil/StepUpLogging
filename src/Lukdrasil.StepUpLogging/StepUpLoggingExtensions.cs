@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using System.IO;
 using System.Linq;
@@ -13,6 +14,8 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using OpenTelemetry.Metrics;
 using Serilog;
+using Serilog.Core;
+using Serilog.Enrichers.OpenTelemetry;
 using Serilog.Formatting.Compact;
 using Serilog.Events;
 using Serilog.Sinks.File;
@@ -66,6 +69,9 @@ public static class StepUpLoggingExtensions
             lc.ReadFrom.Configuration(ctx.Configuration)
               .MinimumLevel.ControlledBy(stepUpController.LevelSwitch)
               .Enrich.FromLogContext()
+              .Enrich.WithOpenTelemetryTraceId()
+              .Enrich.WithOpenTelemetrySpanId()
+              .Enrich.With<ActivityContextEnricher>()
               .Enrich.WithProperty("Application", ctx.HostingEnvironment.ApplicationName);
 
             if (opts.EnrichWithEnvironment)
@@ -218,3 +224,4 @@ internal sealed class CompiledRedactionPatterns
         return input;
     }
 }
+
