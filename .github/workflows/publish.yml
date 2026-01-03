@@ -48,12 +48,16 @@ jobs:
       run: dotnet pack "${{ env.PROJECT_PATH }}" --configuration Release --no-build --output ./nuget-packages
     
     - name: Check NuGet API Key
-      if: secrets.NUGET_API_KEY == ''
+      env:
+        NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+      if: env.NUGET_API_KEY == ''
       run: echo "⚠️ NUGET_API_KEY secret is not set. NuGet publish will be skipped. Set it in GitHub Settings → Secrets and variables → Actions"
     
     - name: Publish to NuGet
+      env:
+        NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
       if: |
-        secrets.NUGET_API_KEY != '' && 
+        env.NUGET_API_KEY != '' && 
         (github.event_name == 'push' || github.event.inputs.publish_to_nuget == 'true')
       run: dotnet nuget push ./nuget-packages/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
     
