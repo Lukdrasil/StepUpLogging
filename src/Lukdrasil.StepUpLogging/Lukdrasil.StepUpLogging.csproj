@@ -8,7 +8,7 @@
     <!-- Package Metadata -->
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <PackageId>Lukdrasil.StepUpLogging</PackageId>
-    <Version>1.1.0</Version>
+    <Version>1.1.1</Version>
     <Authors>Lukdrasil</Authors>
     <Description>Dynamic step-up logging for ASP.NET Core with Serilog - automatically increase log verbosity when errors occur, with minimal performance overhead. Includes request body capture, sensitive data redaction, and OpenTelemetry metrics.</Description>
     <PackageTags>serilog;logging;aspnetcore;observability;otel;stepup;dynamic-logging;error-logging</PackageTags>

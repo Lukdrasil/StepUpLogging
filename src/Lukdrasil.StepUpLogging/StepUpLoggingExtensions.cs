@@ -28,7 +28,7 @@ public static class StepUpLoggingExtensions
     private static readonly Counter<long> BodyCaptureCounter = RequestMeter.CreateCounter<long>("request_body_captured_total", "count", "Number of requests with captured body");
     private static readonly Counter<long> RedactionCounter = RequestMeter.CreateCounter<long>("request_redaction_applied_total", "count", "Number of requests with redaction applied");
 
-    public static WebApplicationBuilder AddStepUpLogging(this WebApplicationBuilder builder,
+    public static IHostApplicationBuilder AddStepUpLogging(this IHostApplicationBuilder builder,
         Action<HostBuilderContext, IServiceProvider, LoggerConfiguration>? configure = null,
         string configSectionName = "SerilogStepUp",
         bool enableConsoleLogging = false,
@@ -61,22 +61,22 @@ public static class StepUpLoggingExtensions
             return new StepUpLoggingController(opts);
         });
 
-        builder.Host.UseSerilog((ctx, services, lc) =>
+        builder.Services.AddSerilog((services, lc) =>
         {
             var stepUpController = services.GetRequiredService<StepUpLoggingController>();
             var opts = services.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
 
-            lc.ReadFrom.Configuration(ctx.Configuration)
+            lc.ReadFrom.Configuration(builder.Configuration)
               .MinimumLevel.ControlledBy(stepUpController.LevelSwitch)
               .Enrich.FromLogContext()
               .Enrich.WithOpenTelemetryTraceId()
               .Enrich.WithOpenTelemetrySpanId()
               .Enrich.With<ActivityContextEnricher>()
-              .Enrich.WithProperty("Application", ctx.HostingEnvironment.ApplicationName);
+              .Enrich.WithProperty("Application", builder.Environment.ApplicationName);
 
             if (opts.EnrichWithEnvironment)
             {
-                lc.Enrich.WithProperty("Environment", ctx.HostingEnvironment.EnvironmentName);
+                lc.Enrich.WithProperty("Environment", builder.Environment.EnvironmentName);
             }
 
             if (!string.IsNullOrWhiteSpace(opts.ServiceVersion))
@@ -95,7 +95,7 @@ public static class StepUpLoggingExtensions
             {
                 var absolutePath = Path.IsPathRooted(logFilePath)
                     ? logFilePath
-                    : Path.Combine(ctx.HostingEnvironment.ContentRootPath, logFilePath);
+                    : Path.Combine(builder.Environment.ContentRootPath, logFilePath);
                 
                 lc.WriteTo.Async(a => a.File(
                     formatter: new CompactJsonFormatter(),
@@ -106,7 +106,7 @@ public static class StepUpLoggingExtensions
 
             lc.WriteTo.Sink(new StepUpTriggerSink(stepUpController));
 
-            configure?.Invoke(ctx, services, lc);
+            configure?.Invoke(new HostBuilderContext(new Dictionary<object, object>()), services, lc);
         }, writeToProviders: true);
 
         return builder;
