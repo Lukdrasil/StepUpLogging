@@ -230,6 +230,15 @@ public static class StepUpLoggingExtensions
                     "Authorization-Token", "Proxy-Authorization", "WWW-Authenticate", "Sec-WebSocket-Key"
                 };
 
+                // Add configured additional sensitive headers
+                if (opts.AdditionalSensitiveHeaders?.Length > 0)
+                {
+                    foreach (var header in opts.AdditionalSensitiveHeaders)
+                    {
+                        sensitiveHeaders.Add(header);
+                    }
+                }
+
                 foreach (var header in httpContext.Request.Headers)
                 {
                     if (sensitiveHeaders.Contains(header.Key))

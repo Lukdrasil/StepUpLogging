@@ -47,6 +47,12 @@ public sealed class StepUpLoggingOptions
     public bool CaptureRequestBody { get; set; } = false;
     public int MaxBodyCaptureBytes { get; set; } = 16 * 1024;
 
+    /// <summary>
+    /// Additional sensitive header names to redact in request logging.
+    /// Built-in sensitive headers (Authorization, Cookie, X-API-Key, etc.) are always redacted.
+    /// </summary>
+    public string[] AdditionalSensitiveHeaders { get; set; } = [];
+
     public bool EnableOtlpExporter { get; set; } = true;
     public bool EnableConsoleLogging { get; set; } = false;
     public bool StructuredExceptionDetails { get; set; } = true;
