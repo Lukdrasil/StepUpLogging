@@ -238,7 +238,7 @@ public static class StepUpLoggingExtensions
                     }
                     else
                     {
-                        var value = string.Join(", ", header.Value);
+                        var value = string.Join(", ", header.Value.Where(v => v != null) ?? Array.Empty<string>());
                         var redactedValue = compiledPatterns.Redact(value);
                         headers[header.Key] = redactedValue;
                         
