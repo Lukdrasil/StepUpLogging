@@ -49,17 +49,11 @@ using Lukdrasil.StepUpLogging;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Override or configure programmatically
 builder.AddStepUpLogging(opts =>
 {
     opts.Mode = StepUpMode.Auto;
     opts.BaseLevel = "Warning";
     opts.StepUpLevel = "Debug";
-    opts.EnableOtlpExporter = true;
-    opts.OtlpEndpoint = "http://otel-collector:4317";
-    opts.OtlpHeaders["Authorization"] = "Bearer xyz";
-    opts.OtlpResourceAttributes["service.name"] = "MyApi";
-    opts.OtlpResourceAttributes["deployment.environment"] = "production";
     opts.EnableConsoleLogging = builder.Environment.IsDevelopment();
 });
 
@@ -99,18 +93,6 @@ builder.AddStepUpLogging(opts =>
     "DurationSeconds": 180,
     
     "EnableOtlpExporter": true,
-    "OtlpEndpoint": "http://localhost:4317",
-    "OtlpProtocol": "grpc",
-    "OtlpHeaders": {
-      "Authorization": "Bearer token123",
-      "X-Custom-Header": "value"
-    },
-    "OtlpResourceAttributes": {
-      "service.name": "MyApi",
-      "deployment.environment": "production",
-      "service.version": "1.0.0"
-    },
-    
     "EnableConsoleLogging": false,
     "CaptureRequestBody": true,
     "MaxBodyCaptureBytes": 16384,
@@ -130,17 +112,14 @@ builder.AddStepUpLogging(opts =>
 
 ### OpenTelemetry Configuration
 
-StepUpLogging respects standard OpenTelemetry environment variables for OTLP configuration:
+StepUpLogging uses standard OpenTelemetry environment variables for OTLP configuration. OTLP endpoint and protocol are configured exclusively via environment variables and cannot be overridden programmatically:
 
 | Environment Variable | Purpose | Default |
-|----------------------|---------|---------|
+|---|---|---|
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP collector endpoint | `http://localhost:4317` |
 | `OTEL_EXPORTER_OTLP_PROTOCOL` | Protocol: `grpc` or `http/protobuf` | `grpc` |
-
-**Configuration Priority** (highest to lowest):
-1. `appsettings.json` (SerilogStepUp section) - Overrides environment variables
-2. Environment variables (OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_EXPORTER_OTLP_PROTOCOL)
-3. Built-in defaults (http://localhost:4317, grpc)
+| `OTEL_EXPORTER_OTLP_HEADERS` | Headers (format: `key1=value1,key2=value2`) | (none) |
+| `OTEL_RESOURCE_ATTRIBUTES` | Resource attributes (format: `key1=value1,key2=value2`) | (none) |
 
 **Example with environment variables:**
 
@@ -148,20 +127,13 @@ StepUpLogging respects standard OpenTelemetry environment variables for OTLP con
 # Docker or Kubernetes deployment
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
 export OTEL_EXPORTER_OTLP_PROTOCOL=grpc
+export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer xyz,X-Custom=value"
+export OTEL_RESOURCE_ATTRIBUTES="service.name=MyApi,deployment.environment=production"
 
 dotnet MyApp.dll
 ```
 
-**Override with appsettings.json (if needed):**
-
-```json
-{
-  "SerilogStepUp": {
-    "OtlpEndpoint": "http://custom-collector:4317",
-    "OtlpProtocol": "http/protobuf"
-  }
-}
-```
+For other OTLP options (like additional headers or resource attributes), use environment variables or configure via `appsettings.json`.
 
 ### Step-Up Modes
 
@@ -270,34 +242,22 @@ builder.AddStepUpLogging(opts =>
 
 ### With Authentication Headers
 
-```csharp
-builder.AddStepUpLogging(opts =>
-{
-    opts.OtlpHeaders["Authorization"] = $"Bearer {authToken}";
-    opts.OtlpHeaders["X-API-Key"] = apiKey;
-    opts.OtlpResourceAttributes["service.name"] = "MyAPI";
-    opts.OtlpResourceAttributes["service.version"] = "1.2.3";
-    opts.OtlpResourceAttributes["deployment.environment"] = "staging";
-});
+```bash
+# Use environment variables for OTLP authentication
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://secure-collector:4317
+export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer xyz,X-API-Key=secret"
+export OTEL_RESOURCE_ATTRIBUTES="service.name=MyAPI,service.version=1.2.3,deployment.environment=production"
+
+dotnet MyApp.dll
 ```
 
 ### Multiple Resource Attributes
 
-```json
-{
-  "SerilogStepUp": {
-    "OtlpResourceAttributes": {
-      "service.name": "payment-service",
-      "service.version": "2.1.0",
-      "service.namespace": "ecommerce",
-      "deployment.environment": "production",
-      "cloud.provider": "azure",
-      "cloud.region": "westeurope",
-      "k8s.cluster.name": "prod-cluster",
-      "k8s.namespace.name": "payment"
-    }
-  }
-}
+```bash
+# Use environment variable for multiple resource attributes
+export OTEL_RESOURCE_ATTRIBUTES="service.name=payment-service,service.version=2.1.0,service.namespace=ecommerce,deployment.environment=production,cloud.provider=azure,cloud.region=westeurope,k8s.cluster.name=prod-cluster,k8s.namespace.name=payment"
+
+dotnet MyApp.dll
 ```
 
 ## Performance
@@ -339,7 +299,7 @@ See full [performance test results](tests/k6/performance_test_results.md).
 ## Configuration Options
 
 | Option | Default | Environment Variable | Description |
-|--------|---------|----------------------|-------------|
+|---|---|---|---|
 | **Step-Up Behavior** |
 | `Mode` | `Auto` | - | Step-up mode: `Auto`, `AlwaysOn`, `Disabled` |
 | `BaseLevel` | `"Warning"` | - | Normal log level |
@@ -347,10 +307,7 @@ See full [performance test results](tests/k6/performance_test_results.md).
 | `DurationSeconds` | `180` | - | How long step-up remains active (Auto mode) |
 | **OpenTelemetry** |
 | `EnableOtlpExporter` | `true` | - | Export logs to OTLP endpoint |
-| `OtlpEndpoint` | `http://localhost:4317` | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP collector endpoint (environment variable only; no corresponding StepUpLoggingOptions property) |
-| `OtlpProtocol` | `grpc` | `OTEL_EXPORTER_OTLP_PROTOCOL` | Protocol: `grpc` or `http/protobuf` (environment variable only; no corresponding StepUpLoggingOptions property) |
-| `OtlpHeaders` | `{}` | - | Custom headers as key-value pairs (environment variable–driven; no corresponding StepUpLoggingOptions property) |
-| `OtlpResourceAttributes` | `{}` | - | Resource attributes for service identification (environment variable–driven; no corresponding StepUpLoggingOptions property) |
+| (Endpoint/Protocol) | (env only) | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL` | OTLP configuration (environment variables only) |
 | **Additional Sinks** |
 | `EnableConsoleLogging` | `false` | - | Enable console output (dev scenarios) |
 | **Enrichers** |

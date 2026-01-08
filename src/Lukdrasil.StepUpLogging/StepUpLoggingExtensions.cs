@@ -30,17 +30,56 @@ public static class StepUpLoggingExtensions
     private static readonly Counter<long> BodyCaptureCounter = RequestMeter.CreateCounter<long>("request_body_captured_total", "count", "Number of requests with captured body");
     private static readonly Counter<long> RedactionCounter = RequestMeter.CreateCounter<long>("request_redaction_applied_total", "count", "Number of requests with redaction applied");
 
+    /// <summary>
+    /// Adds StepUp logging with OpenTelemetry as the primary export mechanism.
+    /// Configuration is loaded from appsettings.json section (default: "SerilogStepUp").
+    /// </summary>
+    /// <param name="builder">The host application builder</param>
+    /// <param name="configureOptions">Action to configure StepUpLoggingOptions</param>
+    /// <param name="configSectionName">Configuration section name (default: SerilogStepUp)</param>
+    /// <param name="enableConsoleLogging">Enable console logging</param>
+    /// <param name="logFilePath">Optional file path for additional file sink</param>
     public static IHostApplicationBuilder AddStepUpLogging(this IHostApplicationBuilder builder,
-        Action<HostBuilderContext, IServiceProvider, LoggerConfiguration>? configure = null,
+        Action<StepUpLoggingOptions>? configureOptions = null,
         string configSectionName = "SerilogStepUp",
         bool enableConsoleLogging = false,
         string? logFilePath = null)
+    {
+        return AddStepUpLoggingInternal(builder, configureOptions, null, configSectionName, enableConsoleLogging, logFilePath);
+    }
+
+    /// <summary>
+    /// Adds StepUp logging with OpenTelemetry as the primary export mechanism.
+    /// Configuration is loaded from appsettings.json section (default: "SerilogStepUp").
+    /// </summary>
+    /// <param name="builder">The host application builder</param>
+    /// <param name="configure">Optional additional Serilog configuration</param>
+    /// <param name="configSectionName">Configuration section name (default: SerilogStepUp)</param>
+    /// <param name="enableConsoleLogging">Enable console logging</param>
+    /// <param name="logFilePath">Optional file path for additional file sink</param>
+    public static IHostApplicationBuilder AddStepUpLogging(this IHostApplicationBuilder builder,
+        Action<HostBuilderContext, IServiceProvider, LoggerConfiguration>? configure,
+        string configSectionName = "SerilogStepUp",
+        bool enableConsoleLogging = false,
+        string? logFilePath = null)
+    {
+        return AddStepUpLoggingInternal(builder, null, configure, configSectionName, enableConsoleLogging, logFilePath);
+    }
+
+    private static IHostApplicationBuilder AddStepUpLoggingInternal(
+        IHostApplicationBuilder builder,
+        Action<StepUpLoggingOptions>? configureOptions,
+        Action<HostBuilderContext, IServiceProvider, LoggerConfiguration>? configure,
+        string configSectionName,
+        bool enableConsoleLogging,
+        string? logFilePath)
     {
         // Ensure default values are preserved when configuration section doesn't exist
         builder.Services.AddSingleton<IOptions<StepUpLoggingOptions>>(sp =>
         {
             var options = new StepUpLoggingOptions(); // Initialize with default values from properties
             builder.Configuration.GetSection(configSectionName).Bind(options); // Override with config if exists
+            configureOptions?.Invoke(options); // Allow programmatic override
             return Options.Create(options);
         });
 
