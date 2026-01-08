@@ -177,7 +177,7 @@ public static class StepUpLoggingExtensions
             lc.WriteTo.Sink(new StepUpTriggerSink(stepUpController));
 
             configure?.Invoke(new HostBuilderContext(new Dictionary<object, object>()), services, lc);
-        }, writeToProviders: true);
+        }, writeToProviders: false); 
 
         return builder;
     }

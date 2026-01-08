@@ -82,6 +82,43 @@ builder.AddStepUpLogging(opts =>
 });
 ```
 
+**Option 4: Aspire ServiceDefaults Integration**
+
+When using Aspire ServiceDefaults which already configures Serilog, use the `UseStepUpLogging()` extension method on `LoggerConfiguration`:
+
+```csharp
+// In ServiceDefaults/Extensions.cs
+public static TBuilder AddServiceDefaults<TBuilder>(this TBuilder builder) 
+    where TBuilder : IHostApplicationBuilder
+{
+    builder.ConfigureOpenTelemetry();
+    builder.AddDefaultHealthChecks();
+    builder.Services.AddServiceDiscovery();
+    
+    // Configure Serilog with StepUp logging
+    builder.Services.AddSerilog((services, lc) =>
+    {
+        lc.ReadFrom.Configuration(builder.Configuration)
+          .UseStepUpLogging(builder, opts =>
+          {
+              opts.Mode = builder.Environment.IsDevelopment() 
+                  ? StepUpMode.AlwaysOn 
+                  : StepUpMode.Auto;
+          });
+    });
+    
+    return builder;
+}
+
+// In your API Program.cs
+var builder = WebApplication.CreateBuilder(args);
+builder.AddServiceDefaults(); // Includes StepUp logging
+
+var app = builder.Build();
+app.UseStepUpRequestLogging(); // Add request logging middleware
+app.Run();
+```
+
 ### Configuration (appsettings.json)
 
 ```json
