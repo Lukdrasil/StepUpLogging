@@ -1,5 +1,7 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
+using Serilog.Events;
 
 namespace Lukdrasil.StepUpLogging.Tests;
 

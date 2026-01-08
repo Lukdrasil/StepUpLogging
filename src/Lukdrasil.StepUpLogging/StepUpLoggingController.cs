@@ -10,6 +10,7 @@ namespace Lukdrasil.StepUpLogging;
 public sealed class StepUpLoggingController : IDisposable
 {
     private readonly Lock _gate = new();
+    private readonly StepUpMode _mode;
     private readonly LogEventLevel _baseLevel;
     private readonly LogEventLevel _stepUpLevel;
     private readonly TimeSpan _duration;
@@ -30,17 +31,36 @@ public sealed class StepUpLoggingController : IDisposable
     public StepUpLoggingController(StepUpLoggingOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
+        _mode = options.Mode;
         _baseLevel = Parse(options.BaseLevel, LogEventLevel.Warning);
         _stepUpLevel = Parse(options.StepUpLevel, LogEventLevel.Information);
         _duration = TimeSpan.FromSeconds(options.DurationSeconds <= 0 ? 300 : options.DurationSeconds);
 
-        LevelSwitch = new LoggingLevelSwitch(_baseLevel);
+        // Initialize level based on mode
+        var initialLevel = _mode switch
+        {
+            StepUpMode.AlwaysOn => _stepUpLevel,
+            StepUpMode.Disabled => _baseLevel,
+            _ => _baseLevel
+        };
+        LevelSwitch = new LoggingLevelSwitch(initialLevel);
     }
 
-    public bool IsSteppedUp => LevelSwitch.MinimumLevel == _stepUpLevel;
+    public bool IsSteppedUp => _mode switch
+    {
+        StepUpMode.AlwaysOn => true,
+        StepUpMode.Disabled => false,
+        _ => LevelSwitch.MinimumLevel == _stepUpLevel
+    };
 
     public void Trigger()
     {
+        // Ignore triggers in AlwaysOn or Disabled mode
+        if (_mode == StepUpMode.AlwaysOn || _mode == StepUpMode.Disabled)
+        {
+            return;
+        }
+
         // Fast-path: if already stepped up and recently triggered, just extend timer
         if (LevelSwitch.MinimumLevel == _stepUpLevel)
         {

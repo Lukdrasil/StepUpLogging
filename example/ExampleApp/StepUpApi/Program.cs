@@ -10,8 +10,9 @@ builder.AddServiceDefaults();
 builder.Services.AddOpenApi();
 
 // Enable StepUp logging (Serilog + request logging)
-// enableConsoleLogging: true = logs to console, logFilePath: relative path to store daily log files
-builder.AddStepUpLogging(enableConsoleLogging: true);
+// Logs are exported to OpenTelemetry OTLP endpoint (default: localhost:4317)
+// Console logging can be enabled via configuration for dev scenarios
+builder.AddStepUpLogging();
 
 var app = builder.Build();
 

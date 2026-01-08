@@ -58,4 +58,60 @@ public class StepUpTriggerSinkTests
 
         Assert.False(controller.IsSteppedUp);
     }
+
+    [Fact]
+    public async Task Emit_Critical_TriggersController()
+    {
+        var opts = new StepUpLoggingOptions
+        {
+            BaseLevel = "Warning",
+            StepUpLevel = "Information",
+            DurationSeconds = 2
+        };
+        using var controller = new StepUpLoggingController(opts);
+        using var sink = new StepUpTriggerSink(controller);
+
+        Assert.False(controller.IsSteppedUp);
+
+        var parser = new MessageTemplateParser();
+        var logEvent = new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Fatal, exception: null,
+            messageTemplate: parser.Parse("critical"),
+            properties: Array.Empty<LogEventProperty>());
+
+        sink.Emit(logEvent);
+        await Task.Delay(100);
+
+        Assert.True(controller.IsSteppedUp);
+    }
+
+    [Fact]
+    public void ConstructorWithNullController_ThrowsArgumentNullException()
+    {
+        Assert.Throws<ArgumentNullException>(() => new StepUpTriggerSink(null!));
+    }
+
+    [Fact]
+    public async Task Emit_Warning_DoesNotTrigger()
+    {
+        var opts = new StepUpLoggingOptions
+        {
+            BaseLevel = "Warning",
+            StepUpLevel = "Information",
+            DurationSeconds = 2
+        };
+        using var controller = new StepUpLoggingController(opts);
+        using var sink = new StepUpTriggerSink(controller);
+
+        Assert.False(controller.IsSteppedUp);
+
+        var parser = new MessageTemplateParser();
+        var logEvent = new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Warning, exception: null,
+            messageTemplate: parser.Parse("warning"),
+            properties: Array.Empty<LogEventProperty>());
+
+        sink.Emit(logEvent);
+        await Task.Delay(100);
+
+        Assert.False(controller.IsSteppedUp);
+    }
 }

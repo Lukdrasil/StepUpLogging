@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Serilog.Exceptions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -19,6 +20,7 @@ using Serilog.Enrichers.OpenTelemetry;
 using Serilog.Formatting.Compact;
 using Serilog.Events;
 using Serilog.Sinks.File;
+using Serilog.Sinks.OpenTelemetry;
 
 namespace Lukdrasil.StepUpLogging;
 
@@ -84,7 +86,36 @@ public static class StepUpLoggingExtensions
                 lc.Enrich.WithProperty("ServiceVersion", opts.ServiceVersion);
             }
 
-            // Conditionally add Console sink
+            // Primary sink: OpenTelemetry OTLP exporter (production-ready)
+            if (opts.EnableOtlpExporter)
+            {
+                lc.WriteTo.Async(a => a.OpenTelemetry(otlpOptions =>
+                {
+                    var endpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT");
+                    var protocol = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_PROTOCOL");
+
+                    otlpOptions.Endpoint = endpoint;
+                    otlpOptions.Protocol = protocol == "http"
+                        ? OtlpProtocol.HttpProtobuf
+                        : OtlpProtocol.Grpc;
+
+                    // Apply headers from OTEL_EXPORTER_OTLP_HEADERS environment variable
+                    var headers = ParseOtlpHeaders(Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_HEADERS"));
+                    foreach (var header in headers)
+                    {
+                        otlpOptions.Headers[header.Key] = header.Value;
+                    }
+
+                    // Apply resource attributes from OTEL_RESOURCE_ATTRIBUTES environment variable
+                    var attributes = ParseResourceAttributes(Environment.GetEnvironmentVariable("OTEL_RESOURCE_ATTRIBUTES"));
+                    foreach (var attr in attributes)
+                    {
+                        otlpOptions.ResourceAttributes[attr.Key] = attr.Value;
+                    }
+                }));
+            }
+
+            // Optional: Console sink (for dev scenarios or direct console log collection)
             if (enableConsoleLogging)
             {
                 lc.WriteTo.Async(a => a.Console(new CompactJsonFormatter()));
@@ -96,7 +127,7 @@ public static class StepUpLoggingExtensions
                 var absolutePath = Path.IsPathRooted(logFilePath)
                     ? logFilePath
                     : Path.Combine(builder.Environment.ContentRootPath, logFilePath);
-                
+
                 lc.WriteTo.Async(a => a.File(
                     formatter: new CompactJsonFormatter(),
                     path: absolutePath,
@@ -195,6 +226,45 @@ public static class StepUpLoggingExtensions
         });
 
         return app;
+    }
+    /// <summary>
+    /// Parse OTEL_EXPORTER_OTLP_HEADERS environment variable (format: key1=value1,key2=value2)
+    /// </summary>
+    private static Dictionary<string, string> ParseOtlpHeaders(string? headerString)
+    {
+        var headers = new Dictionary<string, string>();
+        if (string.IsNullOrWhiteSpace(headerString)) return headers;
+
+        foreach (var pair in headerString.Split(','))
+        {
+            var parts = pair.Split('=', 2);
+            if (parts.Length == 2)
+            {
+                headers[parts[0].Trim()] = parts[1].Trim();
+            }
+        }
+
+        return headers;
+    }
+
+    /// <summary>
+    /// Parse OTEL_RESOURCE_ATTRIBUTES environment variable (format: key1=value1,key2=value2)
+    /// </summary>
+    private static Dictionary<string, object> ParseResourceAttributes(string? attributeString)
+    {
+        var attributes = new Dictionary<string, object>();
+        if (string.IsNullOrWhiteSpace(attributeString)) return attributes;
+
+        foreach (var pair in attributeString.Split(','))
+        {
+            var parts = pair.Split('=', 2);
+            if (parts.Length == 2)
+            {
+                attributes[parts[0].Trim()] = parts[1].Trim();
+            }
+        }
+
+        return attributes;
     }
 }
 
