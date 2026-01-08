@@ -13,6 +13,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
+using OpenTelemetry;
 using OpenTelemetry.Metrics;
 using Serilog;
 using Serilog.Core;
@@ -74,6 +75,15 @@ public static class StepUpLoggingExtensions
         bool enableConsoleLogging,
         string? logFilePath)
     {
+        var configSnapshot = new StepUpLoggingOptions();
+        builder.Configuration.GetSection(configSectionName).Bind(configSnapshot);
+
+        if (configSnapshot.EnableOtlpExporter && !IsOpenTelemetryRegistered(builder.Services))
+        {
+            // Align with Aspire defaults: ensure OTLP exporter is registered when OTLP logging is enabled
+            builder.Services.AddOpenTelemetry().UseOtlpExporter();
+        }
+
         // Ensure default values are preserved when configuration section doesn't exist
         builder.Services.AddSingleton<IOptions<StepUpLoggingOptions>>(sp =>
         {
@@ -266,6 +276,14 @@ public static class StepUpLoggingExtensions
 
         return app;
     }
+
+    private static bool IsOpenTelemetryRegistered(IServiceCollection services)
+    {
+        return services.Any(sd =>
+            sd.ServiceType == typeof(IHostedService) &&
+            sd.ImplementationType?.FullName == "OpenTelemetry.Extensions.Hosting.OpenTelemetrySdkHostedService");
+    }
+
     /// <summary>
     /// Parse OTEL_EXPORTER_OTLP_HEADERS environment variable (format: key1=value1,key2=value2)
     /// </summary>
