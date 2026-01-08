@@ -411,7 +411,8 @@ public static class StepUpLoggingExtensions
         }
 
         // Optional: Console sink (for dev scenarios or direct console log collection)
-        if (enableConsoleLogging)
+        // Priority: opts.EnableConsoleLogging (from options) > enableConsoleLogging (from method parameter)
+        if (opts.EnableConsoleLogging || enableConsoleLogging)
         {
             lc.WriteTo.Async(a => a.Console(new CompactJsonFormatter()));
         }
