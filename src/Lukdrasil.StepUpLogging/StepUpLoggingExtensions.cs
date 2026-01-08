@@ -31,6 +31,13 @@ public static class StepUpLoggingExtensions
     private static readonly Counter<long> BodyCaptureCounter = RequestMeter.CreateCounter<long>("request_body_captured_total", "count", "Number of requests with captured body");
     private static readonly Counter<long> RedactionCounter = RequestMeter.CreateCounter<long>("request_redaction_applied_total", "count", "Number of requests with redaction applied");
 
+    // Built-in sensitive headers (static to avoid allocation on every request)
+    private static readonly HashSet<string> BuiltInSensitiveHeaders = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Authorization", "Cookie", "X-API-Key", "X-Auth-Token", "X-Access-Token",
+        "Authorization-Token", "Proxy-Authorization", "WWW-Authenticate", "Sec-WebSocket-Key"
+    };
+
     /// <summary>
     /// Adds StepUp logging with OpenTelemetry as the primary export mechanism.
     /// Configuration is loaded from appsettings.json section (default: "SerilogStepUp").
@@ -176,16 +183,44 @@ public static class StepUpLoggingExtensions
             .AddMeter("StepUpLogging.Buffer");
     }
 
+    /// <summary>
+    /// Adds Serilog request logging middleware with enriched context (route parameters, headers, body capture).
+    /// Integrates with StepUp logging to capture detailed request information when logging is stepped-up (on errors).
+    /// </summary>
+    /// <param name="app">The web application</param>
+    /// <returns>The web application for method chaining</returns>
+    /// <remarks>
+    /// This middleware logs the following request context:
+    /// - Request path and query string (with sensitive data redaction)
+    /// - Route parameters (e.g., {id}, {role})
+    /// - HTTP headers (with automatic redaction of Authorization, Cookie, X-API-Key, etc.)
+    /// - Request body (when CaptureRequestBody is enabled and logging is stepped-up)
+    /// 
+    /// Additional header names can be marked as sensitive via StepUpLoggingOptions.AdditionalSensitiveHeaders
+    /// for automatic redaction in the logs.
+    /// </remarks>
     public static WebApplication UseStepUpRequestLogging(this WebApplication app)
     {
         var opts = app.Services.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
         var stepUpController = app.Services.GetRequiredService<StepUpLoggingController>();
         var compiledPatterns = app.Services.GetRequiredService<CompiledRedactionPatterns>();
+        
+        // Cache exclude paths computation (done once, not per request)
         var exclude = new HashSet<string>(opts.ExcludePaths ?? Array.Empty<string>(), StringComparer.OrdinalIgnoreCase);
         var excludePrefixes = (opts.ExcludePaths ?? Array.Empty<string>())
             .Where(p => p.EndsWith("*", StringComparison.Ordinal))
             .Select(p => p.TrimEnd('*').TrimEnd('/'))
             .ToArray();
+        
+        // Build combined sensitive headers set (built-in + configured)
+        var sensitiveHeaders = new HashSet<string>(BuiltInSensitiveHeaders);
+        if (opts.AdditionalSensitiveHeaders?.Length > 0)
+        {
+            foreach (var header in opts.AdditionalSensitiveHeaders)
+            {
+                sensitiveHeaders.Add(header);
+            }
+        }
 
         app.UseSerilogRequestLogging(options =>
         {
@@ -224,20 +259,6 @@ public static class StepUpLoggingExtensions
 
                 // Log headers (with redaction of sensitive headers)
                 var headers = new Dictionary<string, object?>();
-                var sensitiveHeaders = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-                {
-                    "Authorization", "Cookie", "X-API-Key", "X-Auth-Token", "X-Access-Token",
-                    "Authorization-Token", "Proxy-Authorization", "WWW-Authenticate", "Sec-WebSocket-Key"
-                };
-
-                // Add configured additional sensitive headers
-                if (opts.AdditionalSensitiveHeaders?.Length > 0)
-                {
-                    foreach (var header in opts.AdditionalSensitiveHeaders)
-                    {
-                        sensitiveHeaders.Add(header);
-                    }
-                }
 
                 foreach (var header in httpContext.Request.Headers)
                 {
@@ -411,15 +432,8 @@ public static class StepUpLoggingExtensions
     }
 }
 
-internal sealed class CompiledRedactionPatterns
+internal sealed record CompiledRedactionPatterns(Regex[] Patterns)
 {
-    public Regex[] Patterns { get; }
-
-    public CompiledRedactionPatterns(Regex[] patterns)
-    {
-        Patterns = patterns;
-    }
-
     public string Redact(string input)
     {
         if (string.IsNullOrEmpty(input) || Patterns.Length == 0) return input;

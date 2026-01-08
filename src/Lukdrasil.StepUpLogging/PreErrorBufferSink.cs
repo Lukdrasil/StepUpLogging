@@ -15,11 +15,11 @@ namespace Lukdrasil.StepUpLogging;
 /// to an inner logger when an Error or Fatal event is observed. Context is keyed by
 /// OpenTelemetry/Activity <c>TraceId</c> when available; otherwise a global buffer is used.
 /// </summary>
-internal sealed class PreErrorBufferSink : ILogEventSink, IDisposable
+internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerContext, int maxContexts) : ILogEventSink, IDisposable
 {
-    private readonly ILogger _bypassLogger;
-    private readonly int _capacityPerContext;
-    private readonly int _maxContexts;
+    private readonly ILogger _bypassLogger = bypassLogger ?? throw new ArgumentNullException(nameof(bypassLogger));
+    private readonly int _capacityPerContext = Math.Max(1, capacityPerContext);
+    private readonly int _maxContexts = Math.Max(1, maxContexts);
 
     private readonly ConcurrentDictionary<string, Buffer> _buffers = new();
     private readonly object _lruGate = new();
@@ -81,13 +81,6 @@ internal sealed class PreErrorBufferSink : ILogEventSink, IDisposable
 
             return items.Length;
         }
-    }
-
-    public PreErrorBufferSink(ILogger bypassLogger, int capacityPerContext, int maxContexts)
-    {
-        _bypassLogger = bypassLogger ?? throw new ArgumentNullException(nameof(bypassLogger));
-        _capacityPerContext = Math.Max(1, capacityPerContext);
-        _maxContexts = Math.Max(1, maxContexts);
     }
 
     public void Emit(LogEvent logEvent)

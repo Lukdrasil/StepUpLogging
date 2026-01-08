@@ -205,6 +205,80 @@ For other OTLP options (like additional headers or resource attributes), use env
 }
 ```
 
+## Request Logging
+
+The `UseStepUpRequestLogging()` middleware enriches each request with detailed context:
+
+### Captured Information
+
+- **RequestPath** - Normalized request path (trailing slashes removed)
+- **QueryString** - Query parameters (redacted based on `RedactionRegexes`)
+- **RouteParameters** - Route parameter values (e.g., `{id}`, `{role}`)
+- **Headers** - HTTP request headers with automatic redaction of sensitive headers
+- **RequestBody** - POST/PUT/PATCH bodies (when `CaptureRequestBody` is enabled and logging is stepped-up)
+
+### Example Log Output
+
+```json
+{
+  "Timestamp": "2025-01-08T12:34:56.789Z",
+  "Level": "Information",
+  "MessageTemplate": "HTTP {Method} {Path} responded {StatusCode} in {Elapsed:0.00}ms",
+  "RequestPath": "/api/users/123",
+  "RouteParameters": {
+    "id": "123"
+  },
+  "QueryString": "?filter=active&sort=name",
+  "Headers": {
+    "content-type": "application/json",
+    "user-agent": "Mozilla/5.0",
+    "authorization": "[REDACTED]",
+    "cookie": "[REDACTED]"
+  },
+  "RequestBody": "{\"name\": \"John Doe\", \"password\": \"[REDACTED]\"}"
+}
+```
+
+### Sensitive Header Redaction
+
+Built-in redacted headers:
+- `Authorization`
+- `Cookie`
+- `X-API-Key`
+- `X-Auth-Token`
+- `X-Access-Token`
+- `Authorization-Token`
+- `Proxy-Authorization`
+- `WWW-Authenticate`
+- `Sec-WebSocket-Key`
+
+Add custom sensitive headers via configuration:
+
+**appsettings.json:**
+```json
+{
+  "SerilogStepUp": {
+    "AdditionalSensitiveHeaders": [
+      "X-Custom-Secret",
+      "X-Internal-Token",
+      "X-Database-Password"
+    ]
+  }
+}
+```
+
+**Programmatically:**
+```csharp
+builder.AddStepUpLogging(opts =>
+{
+    opts.AdditionalSensitiveHeaders = new[]
+    {
+        "X-Custom-Secret",
+        "X-Internal-Token"
+    };
+});
+```
+
 ## Manual Control
 
 Add endpoints to manually trigger step-up or check status:
@@ -434,6 +508,7 @@ See full [performance test results](tests/k6/performance_test_results.md).
 | `MaxBodyCaptureBytes` | `16384` | - | Max bytes to capture from request body |
 | `ExcludePaths` | `["/health", "/metrics"]` | - | Paths to exclude from logging |
 | `RedactionRegexes` | `[]` | - | Regex patterns for redacting sensitive data |
+| `AdditionalSensitiveHeaders` | `[]` | - | Custom header names to redact in request logging |
 | **Service Identification** |
 | `ServiceVersion` | `null` | `APP_VERSION` | Service version for enrichment |
 
