@@ -203,6 +203,53 @@ public static class StepUpLoggingExtensions
                 }
                 diagnosticContext.Set("QueryString", redactedQs);
 
+                // Log route parameters
+                if (httpContext.Request.RouteValues?.Count > 0)
+                {
+                    var routeParams = new Dictionary<string, object?>();
+                    foreach (var kvp in httpContext.Request.RouteValues)
+                    {
+                        // Redact sensitive route parameter values
+                        var value = kvp.Value?.ToString() ?? string.Empty;
+                        var redactedValue = compiledPatterns.Redact(value);
+                        routeParams[kvp.Key] = redactedValue;
+                        
+                        if (!string.Equals(redactedValue, value, StringComparison.Ordinal))
+                        {
+                            RedactionCounter.Add(1);
+                        }
+                    }
+                    diagnosticContext.Set("RouteParameters", routeParams);
+                }
+
+                // Log headers (with redaction of sensitive headers)
+                var headers = new Dictionary<string, object?>();
+                var sensitiveHeaders = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    "Authorization", "Cookie", "X-API-Key", "X-Auth-Token", "X-Access-Token",
+                    "Authorization-Token", "Proxy-Authorization", "WWW-Authenticate", "Sec-WebSocket-Key"
+                };
+
+                foreach (var header in httpContext.Request.Headers)
+                {
+                    if (sensitiveHeaders.Contains(header.Key))
+                    {
+                        headers[header.Key] = "[REDACTED]";
+                    }
+                    else
+                    {
+                        var value = string.Join(", ", header.Value);
+                        var redactedValue = compiledPatterns.Redact(value);
+                        headers[header.Key] = redactedValue;
+                        
+                        if (!string.Equals(redactedValue, value, StringComparison.Ordinal))
+                        {
+                            RedactionCounter.Add(1);
+                        }
+                    }
+                }
+                diagnosticContext.Set("Headers", headers);
+
                 if (opts.CaptureRequestBody && stepUpController.IsSteppedUp)
                 {
                     var method = httpContext.Request.Method;
