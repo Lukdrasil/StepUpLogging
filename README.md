@@ -9,6 +9,7 @@
 
 ✅ **Flexible step-up modes** - `Auto` (production), `AlwaysOn` (dev), `Disabled` (minimal)  
 ✅ **Automatic step-up on errors** - Triggers detailed logging when `Error` level logs are detected  
+✅ **Pre-error buffering** - In-memory per-request log buffering, flushed when errors occur  
 ✅ **OpenTelemetry-first** - Primary export via OTLP with optional console/file sinks  
 ✅ **Minimal overhead** - 18-29% faster than standard Serilog in baseline tests  
 ✅ **Request body capture** - Optional capture during step-up with configurable size limits  
@@ -139,6 +140,10 @@ app.Run();
       "authorization:.*"
     ],
     
+    "EnablePreErrorBuffering": true,
+    "PreErrorBufferSize": 100,
+    "PreErrorMaxContexts": 1024,
+    
     "EnrichWithExceptionDetails": true,
     "EnrichWithThreadId": true,
     "EnrichWithProcessId": true,
@@ -216,6 +221,73 @@ app.MapGet("/stepup/status", (StepUpLoggingController controller) =>
     return Results.Ok(new { active = controller.IsSteppedUp });
 });
 ```
+
+## Pre-Error Buffering
+
+**Pre-error buffering** automatically captures recent log events in memory per request/activity and flushes them when an error occurs. This provides context around the error without increasing log verbosity in normal operation.
+
+### How It Works
+
+1. **Buffering phase**: All non-error logs are stored in a ring buffer per OpenTelemetry trace ID (one buffer per request)
+2. **Flush trigger**: When an `Error` or `Fatal` log is emitted, the buffer flushes all captured events from that request to the output
+3. **Memory management**: Uses LRU eviction to prevent unbounded memory growth (configurable limits on buffer size and active contexts)
+
+### Configuration
+
+**Enable via appsettings.json:**
+
+```json
+{
+  "SerilogStepUp": {
+    "EnablePreErrorBuffering": true,
+    "PreErrorBufferSize": 100,
+    "PreErrorMaxContexts": 1024
+  }
+}
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `EnablePreErrorBuffering` | `true` | Enable/disable pre-error buffering |
+| `PreErrorBufferSize` | `100` | Max events to retain per request before oldest are dropped |
+| `PreErrorMaxContexts` | `1024` | Max concurrent request contexts to track; older ones are evicted |
+
+**Enable programmatically:**
+
+```csharp
+builder.AddStepUpLogging(opts =>
+{
+    opts.EnablePreErrorBuffering = true;
+    opts.PreErrorBufferSize = 200;      // Capture more events per request
+    opts.PreErrorMaxContexts = 512;     // Fewer concurrent requests in memory
+});
+```
+
+### Benefits
+
+- **Diagnostics**: See what happened before an error (request headers, SQL queries, business logic) without enabling debug logging for all requests
+- **Production-safe**: Buffering is per-request; no global state that could consume unbounded memory
+- **Configurable**: Tune buffer size and context limits based on your memory budget and traffic patterns
+- **Automatic**: No code changes needed; works transparently in the logging pipeline
+
+### Example Scenario
+
+Without buffering:
+```
+[Warning] Request started: GET /api/users/123
+[Error] User not found (id=123)
+```
+
+With buffering:
+```
+[Information] Request started: GET /api/users/123
+[Debug] Querying user database: SELECT * FROM Users WHERE Id = @id
+[Debug] Query parameters: @id = 123
+[Debug] Database response: no rows
+[Error] User not found (id=123)
+```
+
+All `Debug`/`Information` events are buffered internally; when the error occurs, they are flushed to provide diagnostic context.
 
 ## Common Scenarios
 
@@ -342,6 +414,10 @@ See full [performance test results](tests/k6/performance_test_results.md).
 | `BaseLevel` | `"Warning"` | - | Normal log level |
 | `StepUpLevel` | `"Information"` | - | Elevated log level during step-up |
 | `DurationSeconds` | `180` | - | How long step-up remains active (Auto mode) |
+| **Pre-Error Buffering** |
+| `EnablePreErrorBuffering` | `true` | - | Enable/disable pre-error buffering |
+| `PreErrorBufferSize` | `100` | - | Max events per request before oldest are dropped |
+| `PreErrorMaxContexts` | `1024` | - | Max concurrent request contexts; older ones are evicted |
 | **OpenTelemetry** |
 | `EnableOtlpExporter` | `true` | - | Export logs to OTLP endpoint |
 | (Endpoint/Protocol) | (env only) | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL` | OTLP configuration (environment variables only) |
@@ -370,6 +446,10 @@ Exposed metrics for monitoring:
 - `stepup_duration_seconds` - Duration histogram of step-up windows
 - `request_body_captured_total` - Number of requests with captured body
 - `request_redaction_applied_total` - Number of requests with redaction applied
+- `buffer_events_total` - Total events buffered by pre-error buffer
+- `buffer_flushed_events_total` - Events flushed due to error
+- `buffer_flush_total` - Number of buffer flush operations
+- `buffer_evicted_contexts_total` - Contexts evicted due to LRU pressure
 
 ## License
 

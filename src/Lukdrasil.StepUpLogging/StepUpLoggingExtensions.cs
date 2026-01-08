@@ -113,81 +113,56 @@ public static class StepUpLoggingExtensions
         });
 
         builder.Services.AddSerilog((services, lc) =>
+{
+    var stepUpController = services.GetRequiredService<StepUpLoggingController>();
+    var opts = services.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
+
+    lc.ReadFrom.Configuration(builder.Configuration)
+                // Root stays verbose; we gate actual outputs via sub-loggers so that buffering can see all events
+                .MinimumLevel.Verbose()
+  .Enrich.FromLogContext()
+  .Enrich.WithOpenTelemetryTraceId()
+  .Enrich.WithOpenTelemetrySpanId()
+  .Enrich.With<ActivityContextEnricher>()
+  .Enrich.WithProperty("Application", builder.Environment.ApplicationName);
+
+    if (opts.EnrichWithEnvironment)
+    {
+        lc.Enrich.WithProperty("Environment", builder.Environment.EnvironmentName);
+    }
+
+    if (!string.IsNullOrWhiteSpace(opts.ServiceVersion))
+    {
+        lc.Enrich.WithProperty("ServiceVersion", opts.ServiceVersion);
+    }
+
+    // Build a sub-logger for main outputs gated by the step-up level switch
+    lc.WriteTo.Logger(l =>
+    {
+        l.MinimumLevel.ControlledBy(stepUpController.LevelSwitch);
+        ConfigureStepUpSinks(l, builder, enableConsoleLogging, logFilePath, opts);
+    });
+
+    // Buffered pre-error branch (always receives all events); flushes to bypass logger
+    if (opts.EnablePreErrorBuffering)
+    {
+        var bypassLoggerConfig = new LoggerConfiguration()
+            .MinimumLevel.Verbose(); // Always write buffered events regardless of level
+        ConfigureStepUpSinks(bypassLoggerConfig, builder, enableConsoleLogging, logFilePath, opts);
+        var bypassLogger = bypassLoggerConfig.CreateLogger();
+
+        lc.WriteTo.Logger(l =>
         {
-            var stepUpController = services.GetRequiredService<StepUpLoggingController>();
-            var opts = services.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
+            l.MinimumLevel.Verbose();
+            l.WriteTo.Sink(new PreErrorBufferSink(bypassLogger, opts.PreErrorBufferSize, opts.PreErrorMaxContexts));
+        });
+    }
 
-            lc.ReadFrom.Configuration(builder.Configuration)
-              .MinimumLevel.ControlledBy(stepUpController.LevelSwitch)
-              .Enrich.FromLogContext()
-              .Enrich.WithOpenTelemetryTraceId()
-              .Enrich.WithOpenTelemetrySpanId()
-              .Enrich.With<ActivityContextEnricher>()
-              .Enrich.WithProperty("Application", builder.Environment.ApplicationName);
+    // Trigger sink observes error-level events (after enrichment) and triggers step-up
+    lc.WriteTo.Sink(new StepUpTriggerSink(stepUpController));
 
-            if (opts.EnrichWithEnvironment)
-            {
-                lc.Enrich.WithProperty("Environment", builder.Environment.EnvironmentName);
-            }
-
-            if (!string.IsNullOrWhiteSpace(opts.ServiceVersion))
-            {
-                lc.Enrich.WithProperty("ServiceVersion", opts.ServiceVersion);
-            }
-
-            // Primary sink: OpenTelemetry OTLP exporter (production-ready)
-            if (opts.EnableOtlpExporter)
-            {
-                lc.WriteTo.Async(a => a.OpenTelemetry(otlpOptions =>
-                {
-                    var endpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT");
-                    var protocol = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_PROTOCOL");
-
-                    otlpOptions.Endpoint = endpoint;
-                    otlpOptions.Protocol = protocol == "http"
-                        ? OtlpProtocol.HttpProtobuf
-                        : OtlpProtocol.Grpc;
-
-                    // Apply headers from OTEL_EXPORTER_OTLP_HEADERS environment variable
-                    var headers = ParseOtlpHeaders(Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_HEADERS"));
-                    foreach (var header in headers)
-                    {
-                        otlpOptions.Headers[header.Key] = header.Value;
-                    }
-
-                    // Apply resource attributes from OTEL_RESOURCE_ATTRIBUTES environment variable
-                    var attributes = ParseResourceAttributes(Environment.GetEnvironmentVariable("OTEL_RESOURCE_ATTRIBUTES"));
-                    foreach (var attr in attributes)
-                    {
-                        otlpOptions.ResourceAttributes[attr.Key] = attr.Value;
-                    }
-                }));
-            }
-
-            // Optional: Console sink (for dev scenarios or direct console log collection)
-            if (enableConsoleLogging)
-            {
-                lc.WriteTo.Async(a => a.Console(new CompactJsonFormatter()));
-            }
-
-            // Conditionally add File sink
-            if (!string.IsNullOrWhiteSpace(logFilePath))
-            {
-                var absolutePath = Path.IsPathRooted(logFilePath)
-                    ? logFilePath
-                    : Path.Combine(builder.Environment.ContentRootPath, logFilePath);
-
-                lc.WriteTo.Async(a => a.File(
-                    formatter: new CompactJsonFormatter(),
-                    path: absolutePath,
-                    rollingInterval: RollingInterval.Day,
-                    retainedFileCountLimit: 30));
-            }
-
-            lc.WriteTo.Sink(new StepUpTriggerSink(stepUpController));
-
-            configure?.Invoke(new HostBuilderContext(new Dictionary<object, object>()), services, lc);
-        }, writeToProviders: false); 
+    configure?.Invoke(new HostBuilderContext(new Dictionary<object, object>()), services, lc);
+}, writeToProviders: false);
 
         return builder;
     }
@@ -197,7 +172,8 @@ public static class StepUpLoggingExtensions
         return builder
             .AddMeter("StepUpLogging")
             .AddMeter("StepUpLogging.Sink")
-            .AddMeter("StepUpLogging.RequestLogging");
+            .AddMeter("StepUpLogging.RequestLogging")
+            .AddMeter("StepUpLogging.Buffer");
     }
 
     public static WebApplication UseStepUpRequestLogging(this WebApplication app)
@@ -322,6 +298,60 @@ public static class StepUpLoggingExtensions
         }
 
         return attributes;
+    }
+
+    private static void ConfigureStepUpSinks(LoggerConfiguration lc,
+        IHostApplicationBuilder builder,
+        bool enableConsoleLogging,
+        string? logFilePath,
+        StepUpLoggingOptions opts)
+    {
+        // Primary sink: OpenTelemetry OTLP exporter (production-ready)
+        if (opts.EnableOtlpExporter)
+        {
+            lc.WriteTo.Async(a => a.OpenTelemetry(otlpOptions =>
+            {
+                var endpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT");
+                var protocol = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_PROTOCOL");
+
+                otlpOptions.Endpoint = endpoint;
+                otlpOptions.Protocol = protocol == "http"
+                    ? OtlpProtocol.HttpProtobuf
+                    : OtlpProtocol.Grpc;
+
+                var headers = ParseOtlpHeaders(Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_HEADERS"));
+                foreach (var header in headers)
+                {
+                    otlpOptions.Headers[header.Key] = header.Value;
+                }
+
+                var attributes = ParseResourceAttributes(Environment.GetEnvironmentVariable("OTEL_RESOURCE_ATTRIBUTES"));
+                foreach (var attr in attributes)
+                {
+                    otlpOptions.ResourceAttributes[attr.Key] = attr.Value;
+                }
+            }));
+        }
+
+        // Optional: Console sink (for dev scenarios or direct console log collection)
+        if (enableConsoleLogging)
+        {
+            lc.WriteTo.Async(a => a.Console(new CompactJsonFormatter()));
+        }
+
+        // Conditionally add File sink
+        if (!string.IsNullOrWhiteSpace(logFilePath))
+        {
+            var absolutePath = Path.IsPathRooted(logFilePath)
+                ? logFilePath
+                : Path.Combine(builder.Environment.ContentRootPath, logFilePath);
+
+            lc.WriteTo.Async(a => a.File(
+                formatter: new CompactJsonFormatter(),
+                path: absolutePath!,
+                rollingInterval: RollingInterval.Day,
+                retainedFileCountLimit: 30));
+        }
     }
 }
 

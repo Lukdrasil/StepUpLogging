@@ -55,4 +55,23 @@ public sealed class StepUpLoggingOptions
     /// Service instance ID. If not set, uses host name and process ID
     /// </summary>
     public string? ServiceInstanceId { get; set; }
+
+    /// <summary>
+    /// Enables pre-error buffering: recent log events are stored in-memory per request/activity
+    /// and flushed when an Error/Fatal event occurs. Useful for diagnosing issues by including
+    /// context prior to the error.
+    /// </summary>
+    public bool EnablePreErrorBuffering { get; set; } = true;
+
+    /// <summary>
+    /// Maximum number of events to retain per logical context (Activity/Trace). Oldest events
+    /// are dropped when the capacity is exceeded.
+    /// </summary>
+    public int PreErrorBufferSize { get; set; } = 100;
+
+    /// <summary>
+    /// Maximum number of concurrent logical contexts tracked by the buffer. When exceeded,
+    /// least-recently used contexts will be evicted to bound memory usage.
+    /// </summary>
+    public int PreErrorMaxContexts { get; set; } = 1024;
 }
