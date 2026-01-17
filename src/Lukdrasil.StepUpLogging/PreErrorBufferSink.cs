@@ -15,7 +15,9 @@ namespace Lukdrasil.StepUpLogging;
 /// to an inner logger when an Error or Fatal event is observed. Context is keyed by
 /// OpenTelemetry/Activity <c>TraceId</c> when available; otherwise a global buffer is used.
 /// Implements proper disposal to prevent memory leaks in LRU cache.
-/// Instruments buffer flush operations with ActivitySource for distributed tracing.
+/// 
+/// Optionally instruments buffer flush operations with ActivitySource for distributed tracing.
+/// To enable tracing, register StepUpLoggingExtensions.BufferActivitySourceName in your OpenTelemetry config.
 /// </summary>
 internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerContext, int maxContexts) : ILogEventSink, IDisposable
 {
@@ -27,8 +29,6 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
     private readonly object _lruGate = new();
     private readonly LinkedList<string> _lru = new();
     private bool _disposed;
-
-    private static readonly ActivitySource BufferActivitySource = new("Lukdrasil.StepUpLogging.Buffer", "1.0.0");
 
     private static readonly Meter Meter = new("StepUpLogging.Buffer", "1.0.0");
     private static readonly Counter<long> BufferedEventsCounter = Meter.CreateCounter<long>("buffer_events_total", unit: "count", description: "Total number of events buffered");
@@ -78,8 +78,8 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
                 LastTouchedUtc = DateTime.UtcNow;
             }
 
-            // Write outside lock - with tracing
-            using (BufferActivitySource.StartActivity("FlushBufferedEvents", ActivityKind.Internal))
+            // Write outside lock - optionally with tracing if ActivitySource is registered
+            using (StepUpLoggingExtensions.BufferActivitySource.StartActivity("FlushBufferedEvents", ActivityKind.Internal))
             {
                 foreach (var e in items)
                 {

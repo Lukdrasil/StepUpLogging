@@ -28,10 +28,45 @@ namespace Lukdrasil.StepUpLogging;
 public static class StepUpLoggingExtensions
 {
     /// <summary>
-    /// ActivitySource for tracing request logging operations.
-    /// Used to instrument sensitive operations like body capture, redaction, and buffer flushing.
+    /// ActivitySource for request logging operations (optional instrumentation).
+    /// 
+    /// Use this to enable tracing of request body capture and redaction operations in distributed tracing systems (Jaeger, Tempo).
+    /// This is completely optional - if you don't register this ActivitySource in your OpenTelemetry config,
+    /// the logging will work normally without distributed tracing.
+    /// 
+    /// Example registration:
+    /// <code>
+    /// builder.Services.AddOpenTelemetry()
+    ///     .WithTracing(tracing => 
+    ///         tracing.AddSource(StepUpLoggingExtensions.RequestLoggingActivitySourceName));
+    /// </code>
     /// </summary>
-    private static readonly ActivitySource RequestLoggingActivitySource = new("Lukdrasil.StepUpLogging.RequestLogging", "1.0.0");
+    public static readonly ActivitySource RequestLoggingActivitySource = new("Lukdrasil.StepUpLogging.RequestLogging", "1.0.0");
+
+    /// <summary>
+    /// ActivitySource for buffer flush operations (optional instrumentation).
+    /// 
+    /// Use this to enable tracing of pre-error buffer flushing in distributed tracing systems.
+    /// This is optional - buffer flushing works without this ActivitySource being registered.
+    /// 
+    /// Example registration:
+    /// <code>
+    /// builder.Services.AddOpenTelemetry()
+    ///     .WithTracing(tracing => 
+    ///         tracing.AddSource(StepUpLoggingExtensions.BufferActivitySourceName));
+    /// </code>
+    /// </summary>
+    public static readonly ActivitySource BufferActivitySource = new("Lukdrasil.StepUpLogging.Buffer", "1.0.0");
+
+    /// <summary>
+    /// ActivitySource name for request logging (for explicit registration).
+    /// </summary>
+    public const string RequestLoggingActivitySourceName = "Lukdrasil.StepUpLogging.RequestLogging";
+
+    /// <summary>
+    /// ActivitySource name for buffer operations (for explicit registration).
+    /// </summary>
+    public const string BufferActivitySourceName = "Lukdrasil.StepUpLogging.Buffer";
 
     private static readonly Meter RequestMeter = new("StepUpLogging.RequestLogging", "1.0.0");
     private static readonly Counter<long> BodyCaptureCounter = RequestMeter.CreateCounter<long>("request_body_captured_total", "count", "Number of requests with captured body");
