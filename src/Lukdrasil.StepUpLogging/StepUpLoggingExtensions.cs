@@ -27,6 +27,12 @@ namespace Lukdrasil.StepUpLogging;
 
 public static class StepUpLoggingExtensions
 {
+    /// <summary>
+    /// ActivitySource for tracing request logging operations.
+    /// Used to instrument sensitive operations like body capture, redaction, and buffer flushing.
+    /// </summary>
+    private static readonly ActivitySource RequestLoggingActivitySource = new("Lukdrasil.StepUpLogging.RequestLogging", "1.0.0");
+
     private static readonly Meter RequestMeter = new("StepUpLogging.RequestLogging", "1.0.0");
     private static readonly Counter<long> BodyCaptureCounter = RequestMeter.CreateCounter<long>("request_body_captured_total", "count", "Number of requests with captured body");
     private static readonly Counter<long> RedactionCounter = RequestMeter.CreateCounter<long>("request_redaction_applied_total", "count", "Number of requests with redaction applied");
@@ -133,14 +139,40 @@ public static class StepUpLoggingExtensions
   .Enrich.With<ActivityContextEnricher>()
   .Enrich.WithProperty("Application", builder.Environment.ApplicationName);
 
+    // Add exception details enrichment when enabled
+    if (opts.EnrichWithExceptionDetails && opts.StructuredExceptionDetails)
+    {
+        lc.Enrich.WithExceptionDetails();
+    }
+
     if (opts.EnrichWithEnvironment)
     {
         lc.Enrich.WithProperty("Environment", builder.Environment.EnvironmentName);
     }
 
+    if (opts.EnrichWithThreadId)
+    {
+        lc.Enrich.WithThreadId();
+    }
+
+    if (opts.EnrichWithProcessId)
+    {
+        lc.Enrich.WithProcessId();
+    }
+
+    if (opts.EnrichWithMachineName)
+    {
+        lc.Enrich.WithMachineName();
+    }
+
     if (!string.IsNullOrWhiteSpace(opts.ServiceVersion))
     {
         lc.Enrich.WithProperty("ServiceVersion", opts.ServiceVersion);
+    }
+
+    if (!string.IsNullOrWhiteSpace(opts.ServiceInstanceId))
+    {
+        lc.Enrich.WithProperty("ServiceInstanceId", opts.ServiceInstanceId);
     }
 
     // Build a sub-logger for main outputs gated by the step-up level switch
@@ -226,6 +258,11 @@ public static class StepUpLoggingExtensions
         {
             options.EnrichDiagnosticContext = (diagnosticContext, httpContext) =>
             {
+                // Use ActivitySource for body capture and redaction operations when appropriate
+                using var activity = RequestLoggingActivitySource.StartActivity("LogRequest", ActivityKind.Server);
+                activity?.SetTag("http.method", httpContext.Request.Method);
+                activity?.SetTag("http.target", httpContext.Request.Path.Value);
+
                 var rawPath = httpContext.Request.Path.Value ?? string.Empty;
                 var path = rawPath.Length > 1 ? rawPath.TrimEnd('/') : rawPath; // normalize trailing slash
                 diagnosticContext.Set("RequestPath", path);
@@ -235,6 +272,7 @@ public static class StepUpLoggingExtensions
                 if (!string.Equals(redactedQs, qs, StringComparison.Ordinal))
                 {
                     RedactionCounter.Add(1);
+                    activity?.SetTag("security.redaction_applied", true);
                 }
                 diagnosticContext.Set("QueryString", redactedQs);
 
@@ -287,19 +325,23 @@ public static class StepUpLoggingExtensions
                     {
                         try
                         {
-                            httpContext.Request.EnableBuffering();
-                            var contentLength = httpContext.Request.ContentLength ?? 0;
-                            var maxBytes = Math.Min(opts.MaxBodyCaptureBytes, (int)contentLength);
-
-                            if (maxBytes > 0)
+                            // Create activity span for body capture operation
+                            using (RequestLoggingActivitySource.StartActivity("CaptureRequestBody", ActivityKind.Internal))
                             {
-                                var buffer = new char[maxBytes];
-                                using var sr = new StreamReader(httpContext.Request.Body, Encoding.UTF8, true, maxBytes, leaveOpen: true);
-                                var read = sr.Read(buffer, 0, maxBytes);
-                                httpContext.Request.Body.Position = 0;
-                                var body = new string(buffer, 0, read);
-                                diagnosticContext.Set("RequestBody", compiledPatterns.Redact(body));
-                                BodyCaptureCounter.Add(1);
+                                httpContext.Request.EnableBuffering();
+                                var contentLength = httpContext.Request.ContentLength ?? 0;
+                                var maxBytes = Math.Min(opts.MaxBodyCaptureBytes, (int)contentLength);
+
+                                if (maxBytes > 0)
+                                {
+                                    var buffer = new char[maxBytes];
+                                    using var sr = new StreamReader(httpContext.Request.Body, Encoding.UTF8, true, maxBytes, leaveOpen: true);
+                                    var read = sr.Read(buffer, 0, maxBytes);
+                                    httpContext.Request.Body.Position = 0;
+                                    var body = new string(buffer, 0, read);
+                                    diagnosticContext.Set("RequestBody", compiledPatterns.Redact(body));
+                                    BodyCaptureCounter.Add(1);
+                                }
                             }
                         }
                         catch

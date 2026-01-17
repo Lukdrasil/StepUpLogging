@@ -14,6 +14,8 @@ namespace Lukdrasil.StepUpLogging;
 /// In-memory per-context ring buffer that captures recent log events and flushes them
 /// to an inner logger when an Error or Fatal event is observed. Context is keyed by
 /// OpenTelemetry/Activity <c>TraceId</c> when available; otherwise a global buffer is used.
+/// Implements proper disposal to prevent memory leaks in LRU cache.
+/// Instruments buffer flush operations with ActivitySource for distributed tracing.
 /// </summary>
 internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerContext, int maxContexts) : ILogEventSink, IDisposable
 {
@@ -24,6 +26,9 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
     private readonly ConcurrentDictionary<string, Buffer> _buffers = new();
     private readonly object _lruGate = new();
     private readonly LinkedList<string> _lru = new();
+    private bool _disposed;
+
+    private static readonly ActivitySource BufferActivitySource = new("Lukdrasil.StepUpLogging.Buffer", "1.0.0");
 
     private static readonly Meter Meter = new("StepUpLogging.Buffer", "1.0.0");
     private static readonly Counter<long> BufferedEventsCounter = Meter.CreateCounter<long>("buffer_events_total", unit: "count", description: "Total number of events buffered");
@@ -73,10 +78,13 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
                 LastTouchedUtc = DateTime.UtcNow;
             }
 
-            // Write outside lock
-            foreach (var e in items)
+            // Write outside lock - with tracing
+            using (BufferActivitySource.StartActivity("FlushBufferedEvents", ActivityKind.Internal))
             {
-                logger.Write(e);
+                foreach (var e in items)
+                {
+                    logger.Write(e);
+                }
             }
 
             return items.Length;
@@ -85,7 +93,7 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
 
     public void Emit(LogEvent logEvent)
     {
-        if (logEvent is null)
+        if (logEvent is null || _disposed)
         {
             return;
         }
@@ -136,14 +144,17 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
             }
             _lru.AddFirst(key);
 
-            // Enforce max contexts
+            // Enforce max contexts, evicting oldest first
             while (_lru.Count > _maxContexts)
             {
-                var last = _lru.Last!;
-                _lru.RemoveLast();
-                if (_buffers.TryRemove(last.Value, out _))
+                var last = _lru.Last;
+                if (last is not null)
                 {
-                    EvictedContextsCounter.Add(1);
+                    _lru.RemoveLast();
+                    if (_buffers.TryRemove(last.Value, out _))
+                    {
+                        EvictedContextsCounter.Add(1);
+                    }
                 }
             }
         }
@@ -168,13 +179,27 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
         return "__global__";
     }
 
+    /// <summary>
+    /// Flushes all remaining buffered events and releases resources.
+    /// </summary>
     public void Dispose()
     {
-        // Best effort flush all remaining buffers on dispose
-        foreach (var kvp in _buffers.ToArray())
+        if (_disposed)
         {
-            kvp.Value.FlushTo(_bypassLogger);
+            return;
         }
-        _buffers.Clear();
+
+        _disposed = true;
+
+        // Best effort flush all remaining buffers on dispose
+        lock (_lruGate)
+        {
+            foreach (var kvp in _buffers.ToArray())
+            {
+                kvp.Value.FlushTo(_bypassLogger);
+            }
+            _buffers.Clear();
+            _lru.Clear();
+        }
     }
 }

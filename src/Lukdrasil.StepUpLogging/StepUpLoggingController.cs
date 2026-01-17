@@ -7,9 +7,14 @@ using Serilog.Events;
 
 namespace Lukdrasil.StepUpLogging;
 
+/// <summary>
+/// Manages step-up logging level transitions and duration control.
+/// Implements proper timer lifecycle management to prevent resource leaks.
+/// Thread-safe design with minimal locking.
+/// </summary>
 public sealed class StepUpLoggingController : IDisposable
 {
-    private readonly Lock _gate = new();
+    private readonly object _gate = new();
     private readonly StepUpMode _mode;
     private readonly LogEventLevel _baseLevel;
     private readonly LogEventLevel _stepUpLevel;
@@ -19,6 +24,7 @@ public sealed class StepUpLoggingController : IDisposable
     private Timer? _timer;
     private DateTime _lastTriggerTime = DateTime.MinValue;
     private DateTime _stepUpStartTime;
+    private bool _disposed;
 
     private static readonly Meter Meter = new("StepUpLogging", "1.0.0");
     private static readonly Counter<long> TriggerCounter = Meter.CreateCounter<long>("stepup_trigger_total", "count", "Total number of step-up triggers");
@@ -61,26 +67,29 @@ public sealed class StepUpLoggingController : IDisposable
             return;
         }
 
-        // Fast-path: if already stepped up and recently triggered, just extend timer
-        if (LevelSwitch.MinimumLevel == _stepUpLevel)
+        lock (_gate)
         {
-            var now = DateTime.UtcNow;
-            if (now - _lastTriggerTime < _minTriggerInterval)
+            if (_disposed)
             {
-                SkippedTriggerCounter.Add(1);
                 return;
             }
 
-            lock (_gate)
+            // Fast-path: if already stepped up and recently triggered, just extend timer
+            if (LevelSwitch.MinimumLevel == _stepUpLevel)
             {
+                var now = DateTime.UtcNow;
+                if (now - _lastTriggerTime < _minTriggerInterval)
+                {
+                    SkippedTriggerCounter.Add(1);
+                    return;
+                }
+
                 _timer?.Change(_duration, Timeout.InfiniteTimeSpan);
                 _lastTriggerTime = now;
                 return;
             }
-        }
 
-        lock (_gate)
-        {
+            // Transition to stepped-up state
             LevelSwitch.MinimumLevel = _stepUpLevel;
             _lastTriggerTime = DateTime.UtcNow;
             _stepUpStartTime = _lastTriggerTime;
@@ -88,24 +97,41 @@ public sealed class StepUpLoggingController : IDisposable
             TriggerCounter.Add(1);
             _activeStepUpCounter.Add(1);
 
-            Log.Warning("Logging step up: increased minimum level to {Level} for {DurationSeconds} seconds", _stepUpLevel, (int)_duration.TotalSeconds);
+            Log.Warning("Logging step up: increased minimum level to {Level} for {DurationSeconds} seconds", 
+                _stepUpLevel, (int)_duration.TotalSeconds);
 
-            _timer?.Change(_duration, Timeout.InfiniteTimeSpan);
-            _timer ??= new Timer(_ =>
+            // Ensure timer is created and started
+            if (_timer is null)
             {
-                lock (_gate)
-                {
-                    LevelSwitch.MinimumLevel = _baseLevel;
+                _timer = new Timer(StepDownCallback, null, _duration, Timeout.InfiniteTimeSpan);
+            }
+            else
+            {
+                _timer.Change(_duration, Timeout.InfiniteTimeSpan);
+            }
+        }
+    }
 
-                    var duration = (DateTime.UtcNow - _stepUpStartTime).TotalSeconds;
-                    StepUpDurationHistogram.Record(duration);
-                    _activeStepUpCounter.Add(-1);
+    /// <summary>
+    /// Timer callback that transitions logging back to base level.
+    /// Executed in thread pool context; uses lock to coordinate state.
+    /// </summary>
+    private void StepDownCallback(object? state)
+    {
+        lock (_gate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
 
-                    Log.Warning("Logging step down: restored minimum level to {Level}", _baseLevel);
+            LevelSwitch.MinimumLevel = _baseLevel;
 
-                    _timer?.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
-                }
-            }, null, _duration, Timeout.InfiniteTimeSpan);
+            var duration = (DateTime.UtcNow - _stepUpStartTime).TotalSeconds;
+            StepUpDurationHistogram.Record(duration);
+            _activeStepUpCounter.Add(-1);
+
+            Log.Warning("Logging step down: restored minimum level to {Level}", _baseLevel);
         }
     }
 
@@ -113,6 +139,14 @@ public sealed class StepUpLoggingController : IDisposable
     {
         lock (_gate)
         {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+
+            // Dispose and null timer - prevents further scheduling
             _timer?.Dispose();
             _timer = null;
         }

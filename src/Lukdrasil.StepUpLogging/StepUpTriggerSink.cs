@@ -8,13 +8,17 @@ using Serilog.Events;
 
 namespace Lukdrasil.StepUpLogging;
 
-// Serilog sink that observes error-level events and triggers step-up logging without blocking the pipeline
-internal sealed class StepUpTriggerSink : ILogEventSink, IDisposable
+/// <summary>
+/// Serilog sink that observes error-level events and triggers step-up logging without blocking the pipeline.
+/// Implements proper async disposal to prevent memory leaks from background task.
+/// </summary>
+internal sealed class StepUpTriggerSink : ILogEventSink, IAsyncDisposable, IDisposable
 {
     private readonly StepUpLoggingController _controller;
     private readonly Channel<bool> _triggerChannel;
     private readonly Task _processingTask;
     private readonly CancellationTokenSource _cts;
+    private bool _disposed;
 
     private static readonly Meter Meter = new("StepUpLogging.Sink", "1.0.0");
     private static readonly Counter<long> ErrorEventsCounter = Meter.CreateCounter<long>("sink_error_events_total", "count", "Total number of error-level events observed");
@@ -35,6 +39,11 @@ internal sealed class StepUpTriggerSink : ILogEventSink, IDisposable
 
     public void Emit(LogEvent logEvent)
     {
+        if (_disposed)
+        {
+            return; // Ignore emissions after disposal
+        }
+
         if (logEvent.Level >= LogEventLevel.Error)
         {
             ErrorEventsCounter.Add(1);
@@ -61,18 +70,72 @@ internal sealed class StepUpTriggerSink : ILogEventSink, IDisposable
         }
     }
 
-    public void Dispose()
+    /// <summary>
+    /// Asynchronously disposes the sink, ensuring the background processing task completes gracefully.
+    /// </summary>
+    public async ValueTask DisposeAsync()
     {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
         _triggerChannel.Writer.Complete();
         _cts.Cancel();
+
         try
         {
-            _processingTask.Wait(TimeSpan.FromSeconds(2));
+            // Give background task time to complete gracefully
+            await _processingTask.ConfigureAwait(false);
         }
-        catch
+        catch (OperationCanceledException)
         {
-            // ignore
+            // Expected when cancellation is requested
         }
-        _cts.Dispose();
+        catch (Exception)
+        {
+            // Suppress other exceptions during disposal
+        }
+        finally
+        {
+            _cts.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Synchronous disposal fallback (converts to async internally).
+    /// </summary>
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        _triggerChannel.Writer.Complete();
+        _cts.Cancel();
+
+        try
+        {
+            // Best-effort sync wait with timeout for disposal
+            if (!_processingTask.IsCompleted && !_processingTask.Wait(TimeSpan.FromSeconds(2)))
+            {
+                // Task did not complete in time - will eventually complete on app shutdown
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected
+        }
+        catch (Exception)
+        {
+            // Suppress exceptions during synchronous disposal
+        }
+        finally
+        {
+            _cts.Dispose();
+        }
     }
 }
