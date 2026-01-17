@@ -28,33 +28,27 @@ namespace Lukdrasil.StepUpLogging;
 public static class StepUpLoggingExtensions
 {
     /// <summary>
-    /// ActivitySource for request logging operations (optional instrumentation).
-    /// 
-    /// Use this to enable tracing of request body capture and redaction operations in distributed tracing systems (Jaeger, Tempo).
-    /// This is completely optional - if you don't register this ActivitySource in your OpenTelemetry config,
-    /// the logging will work normally without distributed tracing.
-    /// 
-    /// Example registration:
-    /// <code>
-    /// builder.Services.AddOpenTelemetry()
-    ///     .WithTracing(tracing => 
-    ///         tracing.AddSource(StepUpLoggingExtensions.RequestLoggingActivitySourceName));
-    /// </code>
+    /// ActivitySource for request logging operations (instrumentation can be disabled via EnableActivityInstrumentation).
+    /// Activities:
+    /// - LogRequest: Main request processing
+    /// - CaptureRequestBody: Body capture for POST/PUT/PATCH
+    /// - ApplyRedaction: Sensitive data redaction operations
     /// </summary>
     public static readonly ActivitySource RequestLoggingActivitySource = new("Lukdrasil.StepUpLogging.RequestLogging", "1.0.0");
 
     /// <summary>
-    /// ActivitySource for buffer flush operations (optional instrumentation).
-    /// 
-    /// Use this to enable tracing of pre-error buffer flushing in distributed tracing systems.
-    /// This is optional - buffer flushing works without this ActivitySource being registered.
-    /// 
-    /// Example registration:
-    /// <code>
-    /// builder.Services.AddOpenTelemetry()
-    ///     .WithTracing(tracing => 
-    ///         tracing.AddSource(StepUpLoggingExtensions.BufferActivitySourceName));
-    /// </code>
+    /// ActivitySource for controller state transitions.
+    /// Activities:
+    /// - TriggerStepUp: When logging level steps up on error
+    /// - PerformStepDown: When logging level steps down after timeout
+    /// </summary>
+    public static readonly ActivitySource ControllerActivitySource = new("Lukdrasil.StepUpLogging.Controller", "1.0.0");
+
+    /// <summary>
+    /// ActivitySource for buffer operations.
+    /// Activities:
+    /// - FlushBufferedEvents: When buffer is flushed due to error
+    /// - BufferEvent: Individual event buffering (use sparingly)
     /// </summary>
     public static readonly ActivitySource BufferActivitySource = new("Lukdrasil.StepUpLogging.Buffer", "1.0.0");
 
@@ -62,6 +56,11 @@ public static class StepUpLoggingExtensions
     /// ActivitySource name for request logging (for explicit registration).
     /// </summary>
     public const string RequestLoggingActivitySourceName = "Lukdrasil.StepUpLogging.RequestLogging";
+
+    /// <summary>
+    /// ActivitySource name for controller operations (for explicit registration).
+    /// </summary>
+    public const string ControllerActivitySourceName = "Lukdrasil.StepUpLogging.Controller";
 
     /// <summary>
     /// ActivitySource name for buffer operations (for explicit registration).
@@ -293,10 +292,15 @@ public static class StepUpLoggingExtensions
         {
             options.EnrichDiagnosticContext = (diagnosticContext, httpContext) =>
             {
-                // Use ActivitySource for body capture and redaction operations when appropriate
-                using var activity = RequestLoggingActivitySource.StartActivity("LogRequest", ActivityKind.Server);
+                // Use ActivitySource for body capture and redaction operations when enabled
+                using var activity = opts.EnableActivityInstrumentation 
+                    ? RequestLoggingActivitySource.StartActivity("LogRequest", ActivityKind.Server) 
+                    : null;
+                
                 activity?.SetTag("http.method", httpContext.Request.Method);
                 activity?.SetTag("http.target", httpContext.Request.Path.Value);
+                activity?.SetTag("http.scheme", httpContext.Request.Scheme);
+                activity?.SetTag("http.host", httpContext.Request.Host.Value);
 
                 var rawPath = httpContext.Request.Path.Value ?? string.Empty;
                 var path = rawPath.Length > 1 ? rawPath.TrimEnd('/') : rawPath; // normalize trailing slash
@@ -342,12 +346,19 @@ public static class StepUpLoggingExtensions
                     else
                     {
                         var value = string.Join(", ", header.Value.Where(v => v != null) ?? Array.Empty<string>());
-                        var redactedValue = compiledPatterns.Redact(value);
-                        headers[header.Key] = redactedValue;
                         
-                        if (!string.Equals(redactedValue, value, StringComparison.Ordinal))
+                        // Track redaction operations
+                        using (opts.EnableActivityInstrumentation 
+                            ? RequestLoggingActivitySource.StartActivity("ApplyRedaction", ActivityKind.Internal) 
+                            : null)
                         {
-                            RedactionCounter.Add(1);
+                            var redactedValue = compiledPatterns.Redact(value);
+                            headers[header.Key] = redactedValue;
+                            
+                            if (!string.Equals(redactedValue, value, StringComparison.Ordinal))
+                            {
+                                RedactionCounter.Add(1);
+                            }
                         }
                     }
                 }
@@ -361,7 +372,9 @@ public static class StepUpLoggingExtensions
                         try
                         {
                             // Create activity span for body capture operation
-                            using (RequestLoggingActivitySource.StartActivity("CaptureRequestBody", ActivityKind.Internal))
+                            using (opts.EnableActivityInstrumentation 
+                                ? RequestLoggingActivitySource.StartActivity("CaptureRequestBody", ActivityKind.Internal) 
+                                : null)
                             {
                                 httpContext.Request.EnableBuffering();
                                 var contentLength = httpContext.Request.ContentLength ?? 0;

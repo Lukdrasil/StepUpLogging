@@ -74,6 +74,18 @@ public sealed class StepUpLoggingOptions
     public bool EnableOtlpExporter { get; set; } = true;
 
     /// <summary>
+    /// Enables ActivitySource instrumentation for distributed tracing (default: true).
+    /// When enabled, activities are created for:
+    /// - Request logging (LogRequest, CaptureRequestBody, ApplyRedaction)
+    /// - Step-up/step-down transitions (TriggerStepUp, PerformStepDown)
+    /// - Buffer operations (FlushBufferedEvents, BufferEvent)
+    /// 
+    /// Activities are created regardless, but only propagated if registered in OpenTelemetry config.
+    /// Set to false to disable activity creation entirely (minimal performance overhead reduction).
+    /// </summary>
+    public bool EnableActivityInstrumentation { get; set; } = true;
+
+    /// <summary>
     /// Enables console sink for log output (typically for development/debugging).
     /// Logs are formatted as compact JSON.
     /// </summary>

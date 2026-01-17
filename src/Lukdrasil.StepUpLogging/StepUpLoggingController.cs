@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using System.Threading;
 using Serilog;
@@ -20,6 +21,7 @@ public sealed class StepUpLoggingController : IDisposable
     private readonly LogEventLevel _stepUpLevel;
     private readonly TimeSpan _duration;
     private readonly TimeSpan _minTriggerInterval = TimeSpan.FromSeconds(5);
+    private readonly bool _enableActivityInstrumentation;
 
     private Timer? _timer;
     private DateTime _lastTriggerTime = DateTime.MinValue;
@@ -41,6 +43,7 @@ public sealed class StepUpLoggingController : IDisposable
         _baseLevel = Parse(options.BaseLevel, LogEventLevel.Warning);
         _stepUpLevel = Parse(options.StepUpLevel, LogEventLevel.Information);
         _duration = TimeSpan.FromSeconds(options.DurationSeconds <= 0 ? 300 : options.DurationSeconds);
+        _enableActivityInstrumentation = options.EnableActivityInstrumentation;
 
         // Initialize level based on mode
         var initialLevel = _mode switch
@@ -90,24 +93,27 @@ public sealed class StepUpLoggingController : IDisposable
             }
 
             // Transition to stepped-up state
-            LevelSwitch.MinimumLevel = _stepUpLevel;
-            _lastTriggerTime = DateTime.UtcNow;
-            _stepUpStartTime = _lastTriggerTime;
-
-            TriggerCounter.Add(1);
-            _activeStepUpCounter.Add(1);
-
-            Log.Warning("Logging step up: increased minimum level to {Level} for {DurationSeconds} seconds", 
-                _stepUpLevel, (int)_duration.TotalSeconds);
-
-            // Ensure timer is created and started
-            if (_timer is null)
+            using (_enableActivityInstrumentation ? StepUpLoggingExtensions.ControllerActivitySource.StartActivity("TriggerStepUp", ActivityKind.Internal) : null)
             {
-                _timer = new Timer(StepDownCallback, null, _duration, Timeout.InfiniteTimeSpan);
-            }
-            else
-            {
-                _timer.Change(_duration, Timeout.InfiniteTimeSpan);
+                LevelSwitch.MinimumLevel = _stepUpLevel;
+                _lastTriggerTime = DateTime.UtcNow;
+                _stepUpStartTime = _lastTriggerTime;
+
+                TriggerCounter.Add(1);
+                _activeStepUpCounter.Add(1);
+
+                Log.Warning("Logging step up: increased minimum level to {Level} for {DurationSeconds} seconds", 
+                    _stepUpLevel, (int)_duration.TotalSeconds);
+
+                // Ensure timer is created and started
+                if (_timer is null)
+                {
+                    _timer = new Timer(StepDownCallback, null, _duration, Timeout.InfiniteTimeSpan);
+                }
+                else
+                {
+                    _timer.Change(_duration, Timeout.InfiniteTimeSpan);
+                }
             }
         }
     }
@@ -125,13 +131,16 @@ public sealed class StepUpLoggingController : IDisposable
                 return;
             }
 
-            LevelSwitch.MinimumLevel = _baseLevel;
+            using (_enableActivityInstrumentation ? StepUpLoggingExtensions.ControllerActivitySource.StartActivity("PerformStepDown", ActivityKind.Internal) : null)
+            {
+                LevelSwitch.MinimumLevel = _baseLevel;
 
-            var duration = (DateTime.UtcNow - _stepUpStartTime).TotalSeconds;
-            StepUpDurationHistogram.Record(duration);
-            _activeStepUpCounter.Add(-1);
+                var duration = (DateTime.UtcNow - _stepUpStartTime).TotalSeconds;
+                StepUpDurationHistogram.Record(duration);
+                _activeStepUpCounter.Add(-1);
 
-            Log.Warning("Logging step down: restored minimum level to {Level}", _baseLevel);
+                Log.Warning("Logging step down: restored minimum level to {Level}", _baseLevel);
+            }
         }
     }
 
