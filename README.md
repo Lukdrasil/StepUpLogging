@@ -11,6 +11,7 @@
 ✅ **Automatic step-up on errors** - Triggers detailed logging when `Error` level logs are detected  
 ✅ **Pre-error buffering** - In-memory per-request log buffering, flushed when errors occur  
 ✅ **OpenTelemetry-first** - Primary export via OTLP with optional console/file sinks  
+✅ **OpenTelemetry Activities** - Built-in distributed tracing with 6+ instrumentation points (default-enabled)  
 ✅ **Minimal overhead** - 18-29% faster than standard Serilog in baseline tests  
 ✅ **Request body capture** - Optional capture during step-up with configurable size limits  
 ✅ **Sensitive data redaction** - Regex-based redaction for query strings and request bodies  
@@ -279,6 +280,74 @@ builder.AddStepUpLogging(opts =>
 });
 ```
 
+## OpenTelemetry Activities & Instrumentation
+
+StepUpLogging automatically instruments your requests with OpenTelemetry `Activity` objects for distributed tracing. This feature is **enabled by default** but can be disabled if needed.
+
+### Activity Instrumentation Points
+
+The library creates activities at these key points:
+
+| Activity | Type | Description | Triggered |
+|----------|------|-------------|----------|
+| `LogRequest` | `Server` | Request processing span | Every HTTP request |
+| `TriggerStepUp` | `Internal` | Step-up event triggered | When error detected |
+| `PerformStepDown` | `Internal` | Step-down event executed | When duration expires |
+| `ApplyRedaction` | `Internal` | Sensitive data redaction | Per redaction pattern |
+| `CaptureRequestBody` | `Internal` | Request body capture | When step-up active |
+| `FlushBufferedEvents` | `Internal` | Pre-error buffer flush | When error occurs |
+
+### Enable/Disable Activities
+
+**Enabled by default** - Activities are created automatically when OTEL is registered:
+
+```json
+{
+  "SerilogStepUp": {
+    "EnableActivityInstrumentation": true
+  }
+}
+```
+
+**Disable if needed** (opt-out):
+
+```csharp
+builder.AddStepUpLogging(opts =>
+{
+    opts.EnableActivityInstrumentation = false;  // Disable activity creation
+});
+```
+
+### Zero Overhead When OTEL Not Registered
+
+When OpenTelemetry is not registered in the service container:
+- Activities are created but not propagated
+- No performance overhead (activities are internal)
+- Enable/disable flag has no effect
+
+### Example with Aspire Observability
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+
+// ConfigureOpenTelemetry() automatically registers traces
+builder.AddServiceDefaults();
+
+builder.AddStepUpLogging(opts =>
+{
+    opts.EnableActivityInstrumentation = true;  // Default
+});
+
+var app = builder.Build();
+app.UseStepUpRequestLogging();
+app.Run();
+
+// Activities now visible in:
+// - Grafana Tempo / Jaeger
+// - Application Insights
+// - Custom OTEL collectors
+```
+
 ## Manual Control
 
 Add endpoints to manually trigger step-up or check status:
@@ -492,6 +561,8 @@ See full [performance test results](tests/k6/performance_test_results.md).
 | `EnablePreErrorBuffering` | `true` | - | Enable/disable pre-error buffering |
 | `PreErrorBufferSize` | `100` | - | Max events per request before oldest are dropped |
 | `PreErrorMaxContexts` | `1024` | - | Max concurrent request contexts; older ones are evicted |
+| **OpenTelemetry Instrumentation** |
+| `EnableActivityInstrumentation` | `true` | - | Enable/disable Activity creation (default-enabled, opt-out) |
 | **OpenTelemetry** |
 | `EnableOtlpExporter` | `true` | - | Export logs to OTLP endpoint |
 | (Endpoint/Protocol) | (env only) | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL` | OTLP configuration (environment variables only) |
@@ -512,7 +583,21 @@ See full [performance test results](tests/k6/performance_test_results.md).
 | **Service Identification** |
 | `ServiceVersion` | `null` | `APP_VERSION` | Service version for enrichment |
 
-## OpenTelemetry Metrics
+## OpenTelemetry Activities & Metrics
+
+### Activities
+
+When `EnableActivityInstrumentation` is enabled (default), these activities are created:
+- **Request-level**: `LogRequest` (server-side span) tracking entire HTTP request
+- **Operation-level**: `TriggerStepUp`, `PerformStepDown`, `FlushBufferedEvents` (internal operations)
+- **Sub-operation**: `ApplyRedaction`, `CaptureRequestBody` (child spans of LogRequest)
+
+Activities include W3C trace context tags and semantic conventions:
+- `http.scheme` - Protocol (http/https)
+- `http.host` - Host header value
+- `security.redaction_applied` - Whether redaction was performed
+
+### Metrics
 
 Exposed metrics for monitoring:
 
