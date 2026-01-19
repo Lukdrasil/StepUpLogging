@@ -78,7 +78,7 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
                 LastTouchedUtc = DateTime.UtcNow;
             }
 
-            // Write outside lock - optionally with tracing if ActivitySource is registered
+            // Create activity span only if there are actual events to flush
             using (StepUpLoggingExtensions.BufferActivitySource.StartActivity("FlushBufferedEvents", ActivityKind.Internal))
             {
                 foreach (var e in items)

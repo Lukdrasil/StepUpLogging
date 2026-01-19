@@ -310,6 +310,14 @@ public static class StepUpLoggingExtensions
                 var redactedQs = compiledPatterns.Redact(qs);
                 if (!string.Equals(redactedQs, qs, StringComparison.Ordinal))
                 {
+                    if (opts.EnableActivityInstrumentation)
+                    {
+                        using (var redactionActivity = RequestLoggingActivitySource.StartActivity("ApplyRedaction", ActivityKind.Internal))
+                        {
+                            redactionActivity?.SetTag("security.redaction_type", "query_string");
+                            redactionActivity?.SetTag("security.redaction_target", "query_string");
+                        }
+                    }
                     RedactionCounter.Add(1);
                     activity?.SetTag("security.redaction_applied", true);
                 }
@@ -324,12 +332,21 @@ public static class StepUpLoggingExtensions
                         // Redact sensitive route parameter values
                         var value = kvp.Value?.ToString() ?? string.Empty;
                         var redactedValue = compiledPatterns.Redact(value);
-                        routeParams[kvp.Key] = redactedValue;
                         
                         if (!string.Equals(redactedValue, value, StringComparison.Ordinal))
                         {
+                            if (opts.EnableActivityInstrumentation)
+                            {
+                                using (var redactionActivity = RequestLoggingActivitySource.StartActivity("ApplyRedaction", ActivityKind.Internal))
+                                {
+                                    redactionActivity?.SetTag("security.redaction_type", "route_parameter");
+                                    redactionActivity?.SetTag("security.redaction_target", kvp.Key);
+                                }
+                            }
                             RedactionCounter.Add(1);
                         }
+                        
+                        routeParams[kvp.Key] = redactedValue;
                     }
                     diagnosticContext.Set("RouteParameters", routeParams);
                 }
@@ -342,24 +359,38 @@ public static class StepUpLoggingExtensions
                     if (sensitiveHeaders.Contains(header.Key))
                     {
                         headers[header.Key] = "[REDACTED]";
+                        
+                        // Create activity only if redaction actually occurred
+                        if (opts.EnableActivityInstrumentation)
+                        {
+                            using (var redactionActivity = RequestLoggingActivitySource.StartActivity("ApplyRedaction", ActivityKind.Internal))
+                            {
+                                redactionActivity?.SetTag("security.redaction_type", "sensitive_header");
+                                redactionActivity?.SetTag("security.redaction_target", header.Key);
+                            }
+                        }
+                        RedactionCounter.Add(1);
                     }
                     else
                     {
                         var value = string.Join(", ", header.Value.Where(v => v != null) ?? Array.Empty<string>());
+                        var redactedValue = compiledPatterns.Redact(value);
                         
-                        // Track redaction operations
-                        using (opts.EnableActivityInstrumentation 
-                            ? RequestLoggingActivitySource.StartActivity("ApplyRedaction", ActivityKind.Internal) 
-                            : null)
+                        // Create activity only if pattern-based redaction actually occurred
+                        if (!string.Equals(redactedValue, value, StringComparison.Ordinal))
                         {
-                            var redactedValue = compiledPatterns.Redact(value);
-                            headers[header.Key] = redactedValue;
-                            
-                            if (!string.Equals(redactedValue, value, StringComparison.Ordinal))
+                            if (opts.EnableActivityInstrumentation)
                             {
-                                RedactionCounter.Add(1);
+                                using (var redactionActivity = RequestLoggingActivitySource.StartActivity("ApplyRedaction", ActivityKind.Internal))
+                                {
+                                    redactionActivity?.SetTag("security.redaction_type", "pattern");
+                                    redactionActivity?.SetTag("security.redaction_target", header.Key);
+                                }
                             }
+                            RedactionCounter.Add(1);
                         }
+                        
+                        headers[header.Key] = redactedValue;
                     }
                 }
                 diagnosticContext.Set("Headers", headers);
@@ -371,16 +402,16 @@ public static class StepUpLoggingExtensions
                     {
                         try
                         {
-                            // Create activity span for body capture operation
-                            using (opts.EnableActivityInstrumentation 
-                                ? RequestLoggingActivitySource.StartActivity("CaptureRequestBody", ActivityKind.Internal) 
-                                : null)
-                            {
-                                httpContext.Request.EnableBuffering();
-                                var contentLength = httpContext.Request.ContentLength ?? 0;
-                                var maxBytes = Math.Min(opts.MaxBodyCaptureBytes, (int)contentLength);
+                            httpContext.Request.EnableBuffering();
+                            var contentLength = httpContext.Request.ContentLength ?? 0;
+                            var maxBytes = Math.Min(opts.MaxBodyCaptureBytes, (int)contentLength);
 
-                                if (maxBytes > 0)
+                            // Create activity span only if there's actual content to capture
+                            if (maxBytes > 0)
+                            {
+                                using (opts.EnableActivityInstrumentation 
+                                    ? RequestLoggingActivitySource.StartActivity("CaptureRequestBody", ActivityKind.Internal) 
+                                    : null)
                                 {
                                     var buffer = new char[maxBytes];
                                     using var sr = new StreamReader(httpContext.Request.Body, Encoding.UTF8, true, maxBytes, leaveOpen: true);
@@ -390,6 +421,10 @@ public static class StepUpLoggingExtensions
                                     diagnosticContext.Set("RequestBody", compiledPatterns.Redact(body));
                                     BodyCaptureCounter.Add(1);
                                 }
+                            }
+                            else
+                            {
+                                diagnosticContext.Set("RequestBody", "[EMPTY]");
                             }
                         }
                         catch
