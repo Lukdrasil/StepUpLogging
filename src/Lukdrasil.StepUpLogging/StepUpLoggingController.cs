@@ -131,6 +131,7 @@ public sealed class StepUpLoggingController : IDisposable
                 return;
             }
 
+            // Activity is only created if step down actually occurs (not when disposed)
             using (_enableActivityInstrumentation ? StepUpLoggingExtensions.ControllerActivitySource.StartActivity("PerformStepDown", ActivityKind.Internal) : null)
             {
                 LevelSwitch.MinimumLevel = _baseLevel;
