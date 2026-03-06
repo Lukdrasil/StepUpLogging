@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="src/Lukdrasil.StepUpLogging/Lukdrasil.StepUpLogging.csproj" />
+  <Project Path="tests/Lukdrasil.StepUpLogging/Lukdrasil.StepUpLogging.Tests.csproj" />
+</Solution>

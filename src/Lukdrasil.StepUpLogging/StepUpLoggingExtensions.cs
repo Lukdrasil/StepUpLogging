@@ -211,6 +211,43 @@ public static class StepUpLoggingExtensions
             return new StepUpLoggingController(opts, summaryLogger);
         });
 
+        // Ensure Serilog DiagnosticContext is registered so Serilog.AspNetCore's RequestLoggingMiddleware can be activated.
+        // Use reflection to be robust across Serilog package versions/assembly names.
+        var diagTypeToResolve = Type.GetType("Serilog.Extensions.Hosting.DiagnosticContext, Serilog.Extensions.Hosting")
+                              ?? Type.GetType("Serilog.AspNetCore.DiagnosticContext, Serilog.AspNetCore");
+        if (diagTypeToResolve != null)
+        {
+            // Register the DiagnosticContext under its concrete type so middleware can resolve it by type.
+            builder.Services.AddSingleton(diagTypeToResolve, sp =>
+            {
+                var logger = sp.GetRequiredService<Serilog.ILogger>();
+                try
+                {
+                    // Try to find a constructor that accepts Serilog.ILogger or Serilog.Core.Logger
+                    var ctor = diagTypeToResolve.GetConstructors()
+                        .OrderByDescending(c => c.GetParameters().Length)
+                        .FirstOrDefault();
+                    if (ctor != null)
+                    {
+                        var args = ctor.GetParameters().Select(p =>
+                        {
+                            if (p.ParameterType == typeof(Serilog.ILogger)) return (object)logger;
+                            if (p.ParameterType.FullName == "Serilog.Core.Logger") return (object)logger;
+                            if (p.HasDefaultValue) return p.DefaultValue;
+                            return null;
+                        }).ToArray();
+                        return ctor.Invoke(args);
+                    }
+                    return Activator.CreateInstance(diagTypeToResolve)!;
+                }
+                catch
+                {
+                    // If instantiation fails, return null so DI doesn't have a registration for it.
+                    return null!;
+                }
+            });
+        }
+
         builder.Services.AddSerilog((services, lc) =>
         {
             var stepUpController = services.GetRequiredService<StepUpLoggingController>();
@@ -325,6 +362,194 @@ public static class StepUpLoggingExtensions
     /// Additional header names can be marked as sensitive via StepUpLoggingOptions.AdditionalSensitiveHeaders
     /// for automatic redaction in the logs.
     /// </remarks>
+    public static IApplicationBuilder UseStepUpRequestLogging(this IApplicationBuilder app)
+    {
+        var services = app.ApplicationServices;
+        var opts = services.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
+        var stepUpController = services.GetRequiredService<StepUpLoggingController>();
+        var compiledPatterns = services.GetRequiredService<CompiledRedactionPatterns>();
+        var env = services.GetRequiredService<IHostEnvironment>();
+
+        var exclude = new HashSet<string>(opts.ExcludePaths ?? Array.Empty<string>(), StringComparer.OrdinalIgnoreCase);
+        var excludePrefixes = (opts.ExcludePaths ?? Array.Empty<string>())
+            .Where(p => p.EndsWith("*", StringComparison.Ordinal))
+            .Select(p => p.TrimEnd('*').TrimEnd('/'))
+            .ToArray();
+
+        var sensitiveHeaders = new HashSet<string>(BuiltInSensitiveHeaders);
+        if (opts.AdditionalSensitiveHeaders?.Length > 0)
+        {
+            foreach (var header in opts.AdditionalSensitiveHeaders)
+            {
+                sensitiveHeaders.Add(header);
+            }
+        }
+        if (opts.AlwaysLogRequestSummary)
+        {
+            app.Use(async (httpContext, next) =>
+            {
+                var sw = Stopwatch.StartNew();
+                await next();
+                sw.Stop();
+
+                var rawPath = httpContext.Request.Path.Value ?? string.Empty;
+                var path = rawPath.Length > 1 ? rawPath.TrimEnd('/') : rawPath;
+
+                if (exclude.Contains(path) || excludePrefixes.Any(prefix => path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
+                {
+                    return;
+                }
+
+                var level = ParseLogEventLevel(opts.RequestSummaryLevel, LogEventLevel.Information);
+
+                stepUpController.EmitRequestSummary(
+                    httpContext.Request.Method,
+                    path,
+                    httpContext.Response?.StatusCode ?? 0,
+                    sw.Elapsed.TotalMilliseconds,
+                    Activity.Current?.TraceId.ToString());
+            });
+        }
+
+        app.UseSerilogRequestLogging(options =>
+        {
+            options.EnrichDiagnosticContext = (diagnosticContext, httpContext) =>
+            {
+                using var activity = opts.EnableActivityInstrumentation 
+                    ? RequestLoggingActivitySource.StartActivity("LogRequest", ActivityKind.Server) 
+                    : null;
+
+                activity?.SetTag("http.method", httpContext.Request.Method);
+                activity?.SetTag("http.target", httpContext.Request.Path.Value);
+                activity?.SetTag("http.scheme", httpContext.Request.Scheme);
+                activity?.SetTag("http.host", httpContext.Request.Host.Value);
+
+                var rawPath = httpContext.Request.Path.Value ?? string.Empty;
+                var path = rawPath.Length > 1 ? rawPath.TrimEnd('/') : rawPath;
+                diagnosticContext.Set("RequestPath", path);
+
+                var qs = httpContext.Request.QueryString.HasValue ? httpContext.Request.QueryString.Value! : string.Empty;
+                var redactedQs = compiledPatterns.Redact(qs);
+                if (!string.Equals(redactedQs, qs, StringComparison.Ordinal))
+                {
+                    if (opts.EnableActivityInstrumentation)
+                    {
+                        using (var redactionActivity = RequestLoggingActivitySource.StartActivity("ApplyRedaction", ActivityKind.Internal))
+                        {
+                            redactionActivity?.SetTag("security.redaction_type", "query_string");
+                            redactionActivity?.SetTag("security.redaction_target", "query_string");
+                        }
+                    }
+                    RedactionCounter.Add(1);
+                    activity?.SetTag("security.redaction_applied", true);
+                }
+                diagnosticContext.Set("QueryString", redactedQs);
+
+                if (httpContext.Request.RouteValues?.Count > 0)
+                {
+                    var routeParams = new Dictionary<string, object?>();
+                    foreach (var kvp in httpContext.Request.RouteValues)
+                    {
+                        var value = kvp.Value?.ToString() ?? string.Empty;
+                        var redactedValue = compiledPatterns.Redact(value);
+                        if (!string.Equals(redactedValue, value, StringComparison.Ordinal))
+                        {
+                            if (opts.EnableActivityInstrumentation)
+                            {
+                                using (var redactionActivity = RequestLoggingActivitySource.StartActivity("ApplyRedaction", ActivityKind.Internal))
+                                {
+                                    redactionActivity?.SetTag("security.redaction_type", "route_parameter");
+                                    redactionActivity?.SetTag("security.redaction_target", kvp.Key);
+                                }
+                            }
+                            RedactionCounter.Add(1);
+                        }
+                        routeParams[kvp.Key] = redactedValue;
+                    }
+                    diagnosticContext.Set("RouteParameters", routeParams);
+                }
+
+                var headers = new Dictionary<string, object?>();
+
+                foreach (var header in httpContext.Request.Headers)
+                {
+                    if (sensitiveHeaders.Contains(header.Key))
+                    {
+                        headers[header.Key] = "[REDACTED]";
+                        if (opts.EnableActivityInstrumentation)
+                        {
+                            using (var redactionActivity = RequestLoggingActivitySource.StartActivity("ApplyRedaction", ActivityKind.Internal))
+                            {
+                                redactionActivity?.SetTag("security.redaction_type", "sensitive_header");
+                                redactionActivity?.SetTag("security.redaction_target", header.Key);
+                            }
+                        }
+                        RedactionCounter.Add(1);
+                    }
+                    else
+                    {
+                        var value = string.Join(", ", header.Value.Where(v => v != null) ?? Array.Empty<string>());
+                        var redactedValue = compiledPatterns.Redact(value);
+                        if (!string.Equals(redactedValue, value, StringComparison.Ordinal))
+                        {
+                            if (opts.EnableActivityInstrumentation)
+                            {
+                                using (var redactionActivity = RequestLoggingActivitySource.StartActivity("ApplyRedaction", ActivityKind.Internal))
+                                {
+                                    redactionActivity?.SetTag("security.redaction_type", "pattern");
+                                    redactionActivity?.SetTag("security.redaction_target", header.Key);
+                                }
+                            }
+                            RedactionCounter.Add(1);
+                        }
+                        headers[header.Key] = redactedValue;
+                    }
+                }
+                diagnosticContext.Set("Headers", headers);
+
+                if (opts.CaptureRequestBody && stepUpController.IsSteppedUp)
+                {
+                    var method = httpContext.Request.Method;
+                    if (method == "POST" || method == "PUT" || method == "PATCH")
+                    {
+                        try
+                        {
+                            httpContext.Request.EnableBuffering();
+                            var contentLength = httpContext.Request.ContentLength ?? 0;
+                            var maxBytes = Math.Min(opts.MaxBodyCaptureBytes, (int)contentLength);
+
+                            if (maxBytes > 0)
+                            {
+                                using (opts.EnableActivityInstrumentation 
+                                    ? RequestLoggingActivitySource.StartActivity("CaptureRequestBody", ActivityKind.Internal) 
+                                    : null)
+                                {
+                                    var buffer = new char[maxBytes];
+                                    using var sr = new StreamReader(httpContext.Request.Body, Encoding.UTF8, true, maxBytes, leaveOpen: true);
+                                    var read = sr.Read(buffer, 0, maxBytes);
+                                    httpContext.Request.Body.Position = 0;
+                                    var body = new string(buffer, 0, read);
+                                    diagnosticContext.Set("RequestBody", compiledPatterns.Redact(body));
+                                    BodyCaptureCounter.Add(1);
+                                }
+                            }
+                            else
+                            {
+                                diagnosticContext.Set("RequestBody", "[EMPTY]");
+                            }
+                        }
+                        catch
+                        {
+                            // Swallow any failures during best-effort capture
+                        }
+                    }
+                }
+            };
+        });
+
+        return app;
+    }
+
     public static WebApplication UseStepUpRequestLogging(this WebApplication app)
     {
         var opts = app.Services.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;

@@ -34,7 +34,7 @@ namespace Lukdrasil.StepUpLogging.Tests
             // Check some properties
             Assert.Equal("GET", ((ScalarValue)sink.LastEvent.Properties["Method"]).Value);
             Assert.Equal("/api/values", ((ScalarValue)sink.LastEvent.Properties["Path"]).Value);
-            Assert.Equal(200L, ((ScalarValue)sink.LastEvent.Properties["StatusCode"]).Value);
+            Assert.Equal(200, Convert.ToInt32(((ScalarValue)sink.LastEvent.Properties["StatusCode"]).Value));
         }
     }
 }
