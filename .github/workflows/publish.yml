@@ -34,18 +34,18 @@ jobs:
     
     - name: Restore dependencies
       run: dotnet restore "${{ env.PROJECT_PATH }}" && dotnet restore "${{ env.TEST_PROJECT_PATH }}"
-    
+
     - name: Build main library
-      run: dotnet build "${{ env.PROJECT_PATH }}" --configuration Release --no-restore /p:TreatWarningsAsErrors=true
-    
+      run: dotnet build "${{ env.PROJECT_PATH }}" --configuration Release /p:TreatWarningsAsErrors=true
+
     - name: Build tests
-      run: dotnet build "${{ env.TEST_PROJECT_PATH }}" --configuration Release --no-restore
-    
+      run: dotnet build "${{ env.TEST_PROJECT_PATH }}" --configuration Release
+
     - name: Run tests
-      run: dotnet test "${{ env.TEST_PROJECT_PATH }}" --configuration Release --no-build
-    
+      run: dotnet test --project "${{ env.TEST_PROJECT_PATH }}" --configuration Release
+
     - name: Create NuGet package
-      run: dotnet pack "${{ env.PROJECT_PATH }}" --configuration Release --no-build --output ./nuget-packages
+      run: dotnet pack "${{ env.PROJECT_PATH }}" --configuration Release --output ./nuget-packages
     
     - name: Check NuGet API Key
       env:
