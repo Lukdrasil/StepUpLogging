@@ -119,4 +119,16 @@ public sealed class StepUpLoggingOptions
     /// least-recently used contexts will be evicted to bound memory usage.
     /// </summary>
     public int PreErrorMaxContexts { get; set; } = 1024;
+
+    /// <summary>
+    /// When true, emit a single request summary log for every HTTP request regardless of the BaseLevel.
+    /// The summary is emitted via a bypass Serilog logger that is configured to always accept verbose events.
+    /// Default: false (opt-in).
+    /// </summary>
+    public bool AlwaysLogRequestSummary { get; set; } = false;
+
+    /// <summary>
+    /// The level to use for request summary logs (e.g., "Information").
+    /// </summary>
+    public string RequestSummaryLevel { get; set; } = "Information";
 }

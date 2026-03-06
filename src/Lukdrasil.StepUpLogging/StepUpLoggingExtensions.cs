@@ -153,16 +153,68 @@ public static class StepUpLoggingExtensions
             return new CompiledRedactionPatterns(patterns);
         });
 
+        // Register a dedicated summary logger (DI-managed) that will be used for request summaries.
+        builder.Services.AddSingleton<Serilog.ILogger>(sp =>
+        {
+            var opts = sp.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
+            var cfg = new LoggerConfiguration()
+                .MinimumLevel.Verbose()
+                .Enrich.FromLogContext()
+                .Enrich.WithOpenTelemetryTraceId()
+                .Enrich.WithOpenTelemetrySpanId()
+                .Enrich.With<ActivityContextEnricher>()
+                .Enrich.WithProperty("Application", builder.Environment.ApplicationName);
+
+            if (opts.EnrichWithExceptionDetails && opts.StructuredExceptionDetails)
+            {
+                cfg.Enrich.WithExceptionDetails();
+            }
+
+            if (opts.EnrichWithEnvironment)
+            {
+                cfg.Enrich.WithProperty("Environment", builder.Environment.EnvironmentName);
+            }
+
+            if (opts.EnrichWithThreadId)
+            {
+                cfg.Enrich.WithThreadId();
+            }
+
+            if (opts.EnrichWithProcessId)
+            {
+                cfg.Enrich.WithProcessId();
+            }
+
+            if (opts.EnrichWithMachineName)
+            {
+                cfg.Enrich.WithMachineName();
+            }
+
+            if (!string.IsNullOrWhiteSpace(opts.ServiceVersion))
+            {
+                cfg.Enrich.WithProperty("ServiceVersion", opts.ServiceVersion);
+            }
+
+            if (!string.IsNullOrWhiteSpace(opts.ServiceInstanceId))
+            {
+                cfg.Enrich.WithProperty("ServiceInstanceId", opts.ServiceInstanceId);
+            }
+
+            ConfigureStepUpSinks(cfg, builder, enableConsoleLogging, logFilePath, opts);
+            return cfg.CreateLogger();
+        });
+
         builder.Services.AddSingleton<StepUpLoggingController>(sp =>
         {
             var opts = sp.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
-            return new StepUpLoggingController(opts);
+            var summaryLogger = sp.GetRequiredService<Serilog.ILogger>();
+            return new StepUpLoggingController(opts, summaryLogger);
         });
 
         builder.Services.AddSerilog((services, lc) =>
-{
-    var stepUpController = services.GetRequiredService<StepUpLoggingController>();
-    var opts = services.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
+        {
+            var stepUpController = services.GetRequiredService<StepUpLoggingController>();
+            var opts = services.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
 
     lc.ReadFrom.Configuration(builder.Configuration)
                 // Root stays verbose; we gate actual outputs via sub-loggers so that buffering can see all events
@@ -219,25 +271,33 @@ public static class StepUpLoggingExtensions
     // Buffered pre-error branch (always receives all events); flushes to bypass logger
     if (opts.EnablePreErrorBuffering)
     {
-        var bypassLoggerConfig = new LoggerConfiguration()
-            .MinimumLevel.Verbose(); // Always write buffered events regardless of level
-        ConfigureStepUpSinks(bypassLoggerConfig, builder, enableConsoleLogging, logFilePath, opts);
-        var bypassLogger = bypassLoggerConfig.CreateLogger();
+        // Use the DI-registered summary logger for buffered flushes to ensure a single managed instance
+        var summaryLogger = services.GetRequiredService<Serilog.ILogger>();
 
         lc.WriteTo.Logger(l =>
         {
             l.MinimumLevel.Verbose();
-            l.WriteTo.Sink(new PreErrorBufferSink(bypassLogger, opts.PreErrorBufferSize, opts.PreErrorMaxContexts));
+            l.WriteTo.Sink(new PreErrorBufferSink(summaryLogger, opts.PreErrorBufferSize, opts.PreErrorMaxContexts));
         });
     }
 
     // Trigger sink observes error-level events (after enrichment) and triggers step-up
     lc.WriteTo.Sink(new StepUpTriggerSink(stepUpController));
 
+    // SummarySink: forwards IsRequestSummary events to the DI-registered summary logger so summaries are exported independent of LevelSwitch
+    var registeredSummaryLogger = services.GetRequiredService<Serilog.ILogger>();
+    lc.WriteTo.Sink(new SummarySink(registeredSummaryLogger));
+
     configure?.Invoke(new HostBuilderContext(new Dictionary<object, object>()), services, lc);
 }, writeToProviders: false);
 
         return builder;
+    }
+
+    private static LogEventLevel ParseLogEventLevel(string? value, LogEventLevel fallback)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return fallback;
+        return Enum.TryParse<LogEventLevel>(value, true, out var lvl) ? lvl : fallback;
     }
 
     public static MeterProviderBuilder AddStepUpLoggingMeters(this MeterProviderBuilder builder)
@@ -286,6 +346,35 @@ public static class StepUpLoggingExtensions
             {
                 sensitiveHeaders.Add(header);
             }
+        }
+
+        // If configured, add a lightweight middleware that always emits a single request summary via the bypass logger
+        if (opts.AlwaysLogRequestSummary)
+        {
+            app.Use(async (httpContext, next) =>
+            {
+                var sw = Stopwatch.StartNew();
+                await next();
+                sw.Stop();
+
+                var rawPath = httpContext.Request.Path.Value ?? string.Empty;
+                var path = rawPath.Length > 1 ? rawPath.TrimEnd('/') : rawPath;
+
+                if (exclude.Contains(path) || excludePrefixes.Any(prefix => path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
+                {
+                    return;
+                }
+
+                var level = ParseLogEventLevel(opts.RequestSummaryLevel, LogEventLevel.Information);
+
+                // Call controller to emit structured summary centrally (controller will route to summary logger)
+                stepUpController.EmitRequestSummary(
+                    httpContext.Request.Method,
+                    path,
+                    httpContext.Response?.StatusCode ?? 0,
+                    sw.Elapsed.TotalMilliseconds,
+                    Activity.Current?.TraceId.ToString());
+            });
         }
 
         app.UseSerilogRequestLogging(options =>

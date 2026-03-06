@@ -130,7 +130,10 @@ app.Run();
     "BaseLevel": "Warning",
     "StepUpLevel": "Information",
     "DurationSeconds": 180,
-    
+
+    "AlwaysLogRequestSummary": true,
+    "RequestSummaryLevel": "Information",
+
     "EnableOtlpExporter": true,
     "EnableConsoleLogging": false,
     "CaptureRequestBody": true,
@@ -140,11 +143,11 @@ app.Run();
       "password=[^&]*",
       "authorization:.*"
     ],
-    
+
     "EnablePreErrorBuffering": true,
     "PreErrorBufferSize": 100,
     "PreErrorMaxContexts": 1024,
-    
+
     "EnrichWithExceptionDetails": true,
     "EnrichWithThreadId": true,
     "EnrichWithProcessId": true,
@@ -152,6 +155,13 @@ app.Run();
   }
 }
 ```
+
+### Request Summary behaviour
+
+When "AlwaysLogRequestSummary" is enabled, the middleware emits a single structured summary event at the configured "RequestSummaryLevel" for every completed HTTP request. The summary contains: HTTP method, request path, response status code, elapsed milliseconds and an optional trace/correlation id. Summary events are marked with the "IsRequestSummary" property and are processed by the library's SummarySink so they are exported independently of the StepUp level switch (base Warning) and the normal step-up flow.
+
+To customise where summaries are written, provide a dedicated summary logger in DI when calling AddStepUpLogging, or configure the default sinks; the library enforces a single DI-managed summary logger to avoid unmanaged CreateLogger instances.
+
 
 ### OpenTelemetry Configuration
 

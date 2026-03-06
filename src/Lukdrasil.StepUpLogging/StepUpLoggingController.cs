@@ -36,7 +36,15 @@ public sealed class StepUpLoggingController : IDisposable
 
     public LoggingLevelSwitch LevelSwitch { get; }
 
+    private readonly LogEventLevel _requestSummaryLevel;
+    private readonly Serilog.ILogger? _summaryLogger;
+
     public StepUpLoggingController(StepUpLoggingOptions options)
+        : this(options, null)
+    {
+    }
+
+    public StepUpLoggingController(StepUpLoggingOptions options, Serilog.ILogger? summaryLogger)
     {
         ArgumentNullException.ThrowIfNull(options);
         _mode = options.Mode;
@@ -44,6 +52,8 @@ public sealed class StepUpLoggingController : IDisposable
         _stepUpLevel = Parse(options.StepUpLevel, LogEventLevel.Information);
         _duration = TimeSpan.FromSeconds(options.DurationSeconds <= 0 ? 300 : options.DurationSeconds);
         _enableActivityInstrumentation = options.EnableActivityInstrumentation;
+        _summaryLogger = summaryLogger;
+        _requestSummaryLevel = Parse(options.RequestSummaryLevel, LogEventLevel.Information);
 
         // Initialize level based on mode
         var initialLevel = _mode switch
@@ -53,6 +63,32 @@ public sealed class StepUpLoggingController : IDisposable
             _ => _baseLevel
         };
         LevelSwitch = new LoggingLevelSwitch(initialLevel);
+    }
+
+    /// <summary>
+    /// Emit a structured request summary using the configured summary logger (bypass) if available.
+    /// </summary>
+    public void EmitRequestSummary(string method, string path, int statusCode, double elapsedMs, string? traceId = null)
+    {
+        try
+        {
+            var lvl = _requestSummaryLevel;
+            if (_summaryLogger is not null)
+            {
+                _summaryLogger.ForContext("IsRequestSummary", true)
+                    .Write(lvl, "RequestSummary {Method} {Path} {StatusCode} {ElapsedMs}", method, path, statusCode, elapsedMs);
+            }
+            else
+            {
+                // Fallback to global Log if no summary logger available
+                Log.ForContext("IsRequestSummary", true)
+                    .Write(lvl, "RequestSummary {Method} {Path} {StatusCode} {ElapsedMs}", method, path, statusCode, elapsedMs);
+            }
+        }
+        catch
+        {
+            // Swallow to avoid affecting request pipeline
+        }
     }
 
     public bool IsSteppedUp => _mode switch
