@@ -263,6 +263,17 @@ public static class StepUpLoggingExtensions
     // Build a sub-logger for main outputs gated by the step-up level switch
     lc.WriteTo.Logger(l =>
     {
+        // Exclude events marked as request summaries from the main step-up outputs to avoid duplicate export.
+        // Use Serilog.Filters.Expressions to apply an expression-based filter.
+        try
+        {
+            l.Filter.ByExcluding("IsRequestSummary = true");
+        }
+        catch
+        {
+            // If filter extension is not available for any reason, fall back to no-op to avoid startup failure.
+        }
+
         l.MinimumLevel.ControlledBy(stepUpController.LevelSwitch);
         ConfigureStepUpSinks(l, builder, enableConsoleLogging, logFilePath, opts);
     });
@@ -272,6 +283,9 @@ public static class StepUpLoggingExtensions
     // depends on ILoggerFactory, which in turn depends on this very callback — resolving
     // Serilog.ILogger via GetRequiredService inside this callback causes a deadlock.
     var bypassLogger = CreateBypassLogger(builder, enableConsoleLogging, logFilePath, opts);
+
+    // Wire the bypass logger into the StepUpLoggingController so EmitRequestSummary uses the bypass logger
+    try { stepUpController.SetSummaryLogger(bypassLogger); } catch { }
 
     // Buffered pre-error branch (always receives all events); flushes to bypass logger
     if (opts.EnablePreErrorBuffering)

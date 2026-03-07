@@ -38,7 +38,7 @@ public sealed class StepUpLoggingController : IDisposable
     public LoggingLevelSwitch LevelSwitch { get; }
 
     private readonly LogEventLevel _requestSummaryLevel;
-    private readonly Serilog.ILogger? _summaryLogger;
+    private Serilog.ILogger? _summaryLogger;
 
     public StepUpLoggingController(StepUpLoggingOptions options)
         : this(options, null)
@@ -64,6 +64,15 @@ public sealed class StepUpLoggingController : IDisposable
             _ => _baseLevel
         };
         LevelSwitch = new LoggingLevelSwitch(initialLevel);
+    }
+
+    /// <summary>
+    /// Attach or replace the summary/bypass logger. Useful for wiring the bypass logger after AddSerilog has
+    /// created it to avoid circular DI during startup.
+    /// </summary>
+    public void SetSummaryLogger(Serilog.ILogger? summaryLogger)
+    {
+        _summaryLogger = summaryLogger;
     }
 
     /// <summary>
