@@ -207,8 +207,9 @@ public static class StepUpLoggingExtensions
         builder.Services.AddSingleton<StepUpLoggingController>(sp =>
         {
             var opts = sp.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
-            var summaryLogger = sp.GetRequiredService<Serilog.ILogger>();
-            return new StepUpLoggingController(opts, summaryLogger);
+            // Construct controller without resolving the summary logger to avoid circular DI during startup.
+            // The controller will fall back to the global Log if no summary logger is available.
+            return new StepUpLoggingController(opts);
         });
 
         // Ensure Serilog DiagnosticContext is registered so Serilog.AspNetCore's RequestLoggingMiddleware can be activated.
