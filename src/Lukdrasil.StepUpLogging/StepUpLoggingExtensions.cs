@@ -782,9 +782,12 @@ public static class StepUpLoggingExtensions
 
     private static bool IsOpenTelemetryRegistered(IServiceCollection services)
     {
+        // OTel SDK renamed OpenTelemetrySdkHostedService to TelemetryHostedService in v1.15.0;
+        // check both names to support older and newer package versions.
         return services.Any(sd =>
             sd.ServiceType == typeof(IHostedService) &&
-            sd.ImplementationType?.FullName == "OpenTelemetry.Extensions.Hosting.OpenTelemetrySdkHostedService");
+            (sd.ImplementationType?.FullName == "OpenTelemetry.Extensions.Hosting.OpenTelemetrySdkHostedService"
+             || sd.ImplementationType?.FullName == "OpenTelemetry.Extensions.Hosting.TelemetryHostedService"));
     }
 
     /// <summary>
