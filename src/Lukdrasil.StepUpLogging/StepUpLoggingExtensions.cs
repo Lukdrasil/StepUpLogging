@@ -153,57 +153,6 @@ public static class StepUpLoggingExtensions
             return new CompiledRedactionPatterns(patterns);
         });
 
-        // Register a dedicated summary logger (DI-managed) that will be used for request summaries.
-        builder.Services.AddSingleton<Serilog.ILogger>(sp =>
-        {
-            var opts = sp.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
-            var cfg = new LoggerConfiguration()
-                .MinimumLevel.Verbose()
-                .Enrich.FromLogContext()
-                .Enrich.WithOpenTelemetryTraceId()
-                .Enrich.WithOpenTelemetrySpanId()
-                .Enrich.With<ActivityContextEnricher>()
-                .Enrich.WithProperty("Application", builder.Environment.ApplicationName);
-
-            if (opts.EnrichWithExceptionDetails && opts.StructuredExceptionDetails)
-            {
-                cfg.Enrich.WithExceptionDetails();
-            }
-
-            if (opts.EnrichWithEnvironment)
-            {
-                cfg.Enrich.WithProperty("Environment", builder.Environment.EnvironmentName);
-            }
-
-            if (opts.EnrichWithThreadId)
-            {
-                cfg.Enrich.WithThreadId();
-            }
-
-            if (opts.EnrichWithProcessId)
-            {
-                cfg.Enrich.WithProcessId();
-            }
-
-            if (opts.EnrichWithMachineName)
-            {
-                cfg.Enrich.WithMachineName();
-            }
-
-            if (!string.IsNullOrWhiteSpace(opts.ServiceVersion))
-            {
-                cfg.Enrich.WithProperty("ServiceVersion", opts.ServiceVersion);
-            }
-
-            if (!string.IsNullOrWhiteSpace(opts.ServiceInstanceId))
-            {
-                cfg.Enrich.WithProperty("ServiceInstanceId", opts.ServiceInstanceId);
-            }
-
-            ConfigureStepUpSinks(cfg, builder, enableConsoleLogging, logFilePath, opts);
-            return cfg.CreateLogger();
-        });
-
         builder.Services.AddSingleton<StepUpLoggingController>(sp =>
         {
             var opts = sp.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
@@ -306,25 +255,27 @@ public static class StepUpLoggingExtensions
         ConfigureStepUpSinks(l, builder, enableConsoleLogging, logFilePath, opts);
     });
 
+    // Create bypass logger directly to avoid circular DI dependency.
+    // Serilog.AspNetCore's AddSerilog internally registers Serilog.ILogger as a factory that
+    // depends on ILoggerFactory, which in turn depends on this very callback — resolving
+    // Serilog.ILogger via GetRequiredService inside this callback causes a deadlock.
+    var bypassLogger = CreateBypassLogger(builder, enableConsoleLogging, logFilePath, opts);
+
     // Buffered pre-error branch (always receives all events); flushes to bypass logger
     if (opts.EnablePreErrorBuffering)
     {
-        // Use the DI-registered summary logger for buffered flushes to ensure a single managed instance
-        var summaryLogger = services.GetRequiredService<Serilog.ILogger>();
-
         lc.WriteTo.Logger(l =>
         {
             l.MinimumLevel.Verbose();
-            l.WriteTo.Sink(new PreErrorBufferSink(summaryLogger, opts.PreErrorBufferSize, opts.PreErrorMaxContexts));
+            l.WriteTo.Sink(new PreErrorBufferSink(bypassLogger, opts.PreErrorBufferSize, opts.PreErrorMaxContexts));
         });
     }
 
     // Trigger sink observes error-level events (after enrichment) and triggers step-up
     lc.WriteTo.Sink(new StepUpTriggerSink(stepUpController));
 
-    // SummarySink: forwards IsRequestSummary events to the DI-registered summary logger so summaries are exported independent of LevelSwitch
-    var registeredSummaryLogger = services.GetRequiredService<Serilog.ILogger>();
-    lc.WriteTo.Sink(new SummarySink(registeredSummaryLogger));
+    // SummarySink: forwards IsRequestSummary events to the bypass logger so summaries are exported independent of LevelSwitch
+    lc.WriteTo.Sink(new SummarySink(bypassLogger));
 
     configure?.Invoke(new HostBuilderContext(new Dictionary<object, object>()), services, lc);
 }, writeToProviders: false);
@@ -336,6 +287,65 @@ public static class StepUpLoggingExtensions
     {
         if (string.IsNullOrWhiteSpace(value)) return fallback;
         return Enum.TryParse<LogEventLevel>(value, true, out var lvl) ? lvl : fallback;
+    }
+
+    /// <summary>
+    /// Creates the bypass/summary logger that exports events independently of the main LevelSwitch.
+    /// This logger is created directly (not via DI) to avoid a circular dependency: AddSerilog internally
+    /// registers Serilog.ILogger as a factory that depends on ILoggerFactory, so resolving
+    /// Serilog.ILogger via GetRequiredService inside the AddSerilog callback causes a deadlock.
+    /// </summary>
+    private static Serilog.ILogger CreateBypassLogger(
+        IHostApplicationBuilder builder,
+        bool enableConsoleLogging,
+        string? logFilePath,
+        StepUpLoggingOptions opts)
+    {
+        var cfg = new LoggerConfiguration()
+            .MinimumLevel.Verbose()
+            .Enrich.FromLogContext()
+            .Enrich.WithOpenTelemetryTraceId()
+            .Enrich.WithOpenTelemetrySpanId()
+            .Enrich.With<ActivityContextEnricher>()
+            .Enrich.WithProperty("Application", builder.Environment.ApplicationName);
+
+        if (opts.EnrichWithExceptionDetails && opts.StructuredExceptionDetails)
+        {
+            cfg.Enrich.WithExceptionDetails();
+        }
+
+        if (opts.EnrichWithEnvironment)
+        {
+            cfg.Enrich.WithProperty("Environment", builder.Environment.EnvironmentName);
+        }
+
+        if (opts.EnrichWithThreadId)
+        {
+            cfg.Enrich.WithThreadId();
+        }
+
+        if (opts.EnrichWithProcessId)
+        {
+            cfg.Enrich.WithProcessId();
+        }
+
+        if (opts.EnrichWithMachineName)
+        {
+            cfg.Enrich.WithMachineName();
+        }
+
+        if (!string.IsNullOrWhiteSpace(opts.ServiceVersion))
+        {
+            cfg.Enrich.WithProperty("ServiceVersion", opts.ServiceVersion);
+        }
+
+        if (!string.IsNullOrWhiteSpace(opts.ServiceInstanceId))
+        {
+            cfg.Enrich.WithProperty("ServiceInstanceId", opts.ServiceInstanceId);
+        }
+
+        ConfigureStepUpSinks(cfg, builder, enableConsoleLogging, logFilePath, opts);
+        return cfg.CreateLogger();
     }
 
     public static MeterProviderBuilder AddStepUpLoggingMeters(this MeterProviderBuilder builder)
