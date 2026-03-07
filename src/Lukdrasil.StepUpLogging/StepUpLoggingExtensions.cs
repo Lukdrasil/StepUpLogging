@@ -170,9 +170,11 @@ public static class StepUpLoggingExtensions
             // Register the DiagnosticContext under its concrete type so middleware can resolve it by type.
             builder.Services.AddSingleton(diagTypeToResolve, sp =>
             {
-                var logger = sp.GetRequiredService<Serilog.ILogger>();
                 try
                 {
+                    // Prefer not to force-resolution of Serilog.ILogger here to avoid circular DI during startup.
+                    var logger = sp.GetService<Serilog.ILogger>();
+
                     // Try to find a constructor that accepts Serilog.ILogger or Serilog.Core.Logger
                     var ctor = diagTypeToResolve.GetConstructors()
                         .OrderByDescending(c => c.GetParameters().Length)
@@ -181,13 +183,22 @@ public static class StepUpLoggingExtensions
                     {
                         var args = ctor.GetParameters().Select(p =>
                         {
-                            if (p.ParameterType == typeof(Serilog.ILogger)) return (object)logger;
-                            if (p.ParameterType.FullName == "Serilog.Core.Logger") return (object)logger;
+                            if ((p.ParameterType == typeof(Serilog.ILogger) || p.ParameterType.FullName == "Serilog.Core.Logger") && logger != null)
+                                return (object)logger;
                             if (p.HasDefaultValue) return p.DefaultValue;
+                            // Unable to supply this parameter — fall back to parameterless construction
                             return null;
                         }).ToArray();
+
+                        if (args.Any(a => a == null))
+                        {
+                            // Fall back to parameterless constructor if available
+                            return Activator.CreateInstance(diagTypeToResolve)!;
+                        }
+
                         return ctor.Invoke(args);
                     }
+
                     return Activator.CreateInstance(diagTypeToResolve)!;
                 }
                 catch
@@ -197,6 +208,7 @@ public static class StepUpLoggingExtensions
                 }
             });
         }
+
 
         builder.Services.AddSerilog((services, lc) =>
         {
@@ -413,12 +425,31 @@ public static class StepUpLoggingExtensions
 
                 var level = ParseLogEventLevel(opts.RequestSummaryLevel, LogEventLevel.Information);
 
+                // Compute redacted query string
+                var qs = httpContext.Request.QueryString.HasValue ? httpContext.Request.QueryString.Value! : string.Empty;
+                var redactedQs = compiledPatterns.Redact(qs);
+
+                // Build redacted route parameters
+                IReadOnlyDictionary<string, object?>? routeParams = null;
+                if (httpContext.Request.RouteValues?.Count > 0)
+                {
+                    var rp = new Dictionary<string, object?>();
+                    foreach (var kvp in httpContext.Request.RouteValues)
+                    {
+                        var value = kvp.Value?.ToString() ?? string.Empty;
+                        rp[kvp.Key] = compiledPatterns.Redact(value);
+                    }
+                    routeParams = rp;
+                }
+
                 stepUpController.EmitRequestSummary(
                     httpContext.Request.Method,
                     path,
                     httpContext.Response?.StatusCode ?? 0,
                     sw.Elapsed.TotalMilliseconds,
-                    Activity.Current?.TraceId.ToString());
+                    Activity.Current?.TraceId.ToString(),
+                    redactedQs,
+                    routeParams);
             });
         }
 
@@ -603,13 +634,32 @@ public static class StepUpLoggingExtensions
 
                 var level = ParseLogEventLevel(opts.RequestSummaryLevel, LogEventLevel.Information);
 
+                // Compute redacted query string
+                var qs = httpContext.Request.QueryString.HasValue ? httpContext.Request.QueryString.Value! : string.Empty;
+                var redactedQs = compiledPatterns.Redact(qs);
+
+                // Build redacted route parameters
+                IReadOnlyDictionary<string, object?>? routeParams = null;
+                if (httpContext.Request.RouteValues?.Count > 0)
+                {
+                    var rp = new Dictionary<string, object?>();
+                    foreach (var kvp in httpContext.Request.RouteValues)
+                    {
+                        var value = kvp.Value?.ToString() ?? string.Empty;
+                        rp[kvp.Key] = compiledPatterns.Redact(value);
+                    }
+                    routeParams = rp;
+                }
+
                 // Call controller to emit structured summary centrally (controller will route to summary logger)
                 stepUpController.EmitRequestSummary(
                     httpContext.Request.Method,
                     path,
                     httpContext.Response?.StatusCode ?? 0,
                     sw.Elapsed.TotalMilliseconds,
-                    Activity.Current?.TraceId.ToString());
+                    Activity.Current?.TraceId.ToString(),
+                    redactedQs,
+                    routeParams);
             });
         }
 

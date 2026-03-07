@@ -20,6 +20,10 @@ builder.Host.UseSerilog((ctx, services, lc) =>
       .WriteTo.Async(a => a.Console(new CompactJsonFormatter()));
 }, writeToProviders: true);
 
+// Configure OpenTelemetry before building the app so services and logging
+// providers can be registered while the service collection is still mutable.
+builder.ConfigureOpenTelemetry();
+
 var app = builder.Build();
 
 app.MapDefaultEndpoints();

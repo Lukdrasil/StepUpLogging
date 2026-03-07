@@ -25,7 +25,7 @@ namespace Lukdrasil.StepUpLogging.Tests
             var registered = new LoggerConfiguration().WriteTo.Sink(capture).CreateLogger();
             using var sink = new SummarySink(registered);
 
-            var mt = new MessageTemplateParser().Parse("RequestSummary {Method} {Path} {StatusCode} {ElapsedMs}");
+            var mt = new MessageTemplateParser().Parse("Request finished {Method} {Path} {StatusCode} {ElapsedMs}");
             var props = new[] {
                 new LogEventProperty("IsRequestSummary", new ScalarValue(true)),
                 new LogEventProperty("Method", new ScalarValue("GET")),

@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using System.Threading;
+using System.Collections.Generic;
 using Serilog;
 using Serilog.Core;
 using Serilog.Events;
@@ -68,22 +69,26 @@ public sealed class StepUpLoggingController : IDisposable
     /// <summary>
     /// Emit a structured request summary using the configured summary logger (bypass) if available.
     /// </summary>
-    public void EmitRequestSummary(string method, string path, int statusCode, double elapsedMs, string? traceId = null)
+    public void EmitRequestSummary(string method, string path, int statusCode, double elapsedMs, string? traceId = null, string? queryString = null, IReadOnlyDictionary<string, object?>? routeParameters = null)
     {
         try
         {
             var lvl = _requestSummaryLevel;
-            if (_summaryLogger is not null)
+            var logger = _summaryLogger is not null
+                ? _summaryLogger.ForContext("IsRequestSummary", true)
+                : Log.ForContext("IsRequestSummary", true);
+
+            if (!string.IsNullOrEmpty(queryString))
             {
-                _summaryLogger.ForContext("IsRequestSummary", true)
-                    .Write(lvl, "RequestSummary {Method} {Path} {StatusCode} {ElapsedMs}", method, path, statusCode, elapsedMs);
+                logger = logger.ForContext("QueryString", queryString);
             }
-            else
+
+            if (routeParameters != null && routeParameters.Count > 0)
             {
-                // Fallback to global Log if no summary logger available
-                Log.ForContext("IsRequestSummary", true)
-                    .Write(lvl, "RequestSummary {Method} {Path} {StatusCode} {ElapsedMs}", method, path, statusCode, elapsedMs);
+                logger = logger.ForContext("RouteParameters", routeParameters);
             }
+
+            logger.Write(lvl, "Request finished {Method} {Path} {StatusCode} {ElapsedMs}", method, path, statusCode, elapsedMs);
         }
         catch
         {

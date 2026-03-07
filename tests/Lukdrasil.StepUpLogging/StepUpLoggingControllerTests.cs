@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Serilog;
 using Serilog.Events;
 using Serilog.Core;
@@ -26,15 +27,18 @@ namespace Lukdrasil.StepUpLogging.Tests
 
             var controller = new StepUpLoggingController(opts, logger);
 
-            controller.EmitRequestSummary("GET", "/api/values", 200, 123.45, "abcdef");
+            var routeParams = new Dictionary<string, object?> { ["id"] = "1", ["order"] = "abc" };
+            controller.EmitRequestSummary("GET", "/api/values", 200, 123.45, "abcdef", "id=1&order=abc", routeParams);
 
             Assert.NotNull(sink.LastEvent);
-            Assert.Equal("RequestSummary {Method} {Path} {StatusCode} {ElapsedMs}", sink.LastEvent!.MessageTemplate.Text);
+            Assert.Equal("Request finished {Method} {Path} {StatusCode} {ElapsedMs}", sink.LastEvent!.MessageTemplate.Text);
             Assert.True(sink.LastEvent.Properties.ContainsKey("IsRequestSummary"));
             // Check some properties
             Assert.Equal("GET", ((ScalarValue)sink.LastEvent.Properties["Method"]).Value);
             Assert.Equal("/api/values", ((ScalarValue)sink.LastEvent.Properties["Path"]).Value);
             Assert.Equal(200, Convert.ToInt32(((ScalarValue)sink.LastEvent.Properties["StatusCode"]).Value));
+            Assert.Equal("id=1&order=abc", ((ScalarValue)sink.LastEvent.Properties["QueryString"]).Value);
+            Assert.True(sink.LastEvent.Properties.ContainsKey("RouteParameters"));
         }
     }
 }
