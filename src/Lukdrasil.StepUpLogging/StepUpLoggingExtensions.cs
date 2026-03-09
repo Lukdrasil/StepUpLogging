@@ -253,12 +253,7 @@ public static class StepUpLoggingExtensions
 
     if (opts.EnrichWithCallStack)
     {
-                lc.Enrich.WithCallStack(config => config
-                        .WithCallStackFormat()
-                        .WithMethodParameters(includeParameters: true)
-                        .WithFullNames(fullTypeName: false)
-                        .SkipNamespace("System")
-                        .SkipNamespace("Microsoft"));
+        lc.Enrich.WithCallStack();
     }
 
     if (!string.IsNullOrWhiteSpace(opts.ServiceVersion))

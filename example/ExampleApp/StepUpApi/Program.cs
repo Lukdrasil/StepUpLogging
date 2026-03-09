@@ -1,5 +1,11 @@
-using Scalar.AspNetCore;
 using Lukdrasil.StepUpLogging;
+
+using Microsoft.AspNetCore.Mvc;
+
+using Scalar.AspNetCore;
+
+using StepUpApi;
+// Use built-in exception handling and ProblemDetails services instead of custom middleware
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -9,14 +15,20 @@ builder.AddServiceDefaults();
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
 
+// Register ProblemDetails to produce RFC7807 responses for errors
+builder.Services.AddProblemDetails();
+builder.Services.AddExceptionHandler<ExceptionHandler>();
+
 // Enable StepUp logging (Serilog + request logging)
 // Logs are exported to OpenTelemetry OTLP endpoint (default: localhost:4317)
 // Console logging can be enabled via configuration for dev scenarios
 builder.AddStepUpLogging(opt =>
 {
     opt.AlwaysLogRequestSummary = true;
+    opt.EnrichWithCallStack = true;
 });
 
+builder.Services.AddScoped<TEstService>();
 var app = builder.Build();
 
 app.MapDefaultEndpoints();
@@ -30,6 +42,10 @@ if (app.Environment.IsDevelopment())
 
 // StepUp request logging middleware (captures enriched request data when stepped up)
 app.UseStepUpRequestLogging();
+
+// Convert empty client/server responses to ProblemDetails when appropriate
+app.UseStatusCodePages();
+
 app.UseHttpsRedirection();
 
 var summaries = new[]
@@ -37,7 +53,7 @@ var summaries = new[]
     "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
 };
 
-app.MapGet("/weatherforecast", () =>
+app.MapGet("/weatherforecast", ([FromServices] TEstService testService) =>
 {
     var forecast =  Enumerable.Range(1, 5).Select(index =>
         new WeatherForecast
@@ -47,6 +63,7 @@ app.MapGet("/weatherforecast", () =>
             summaries[Random.Shared.Next(summaries.Length)]
         ))
         .ToArray();
+    testService.SimulateException();
     return forecast;
 })
 .WithName("GetWeatherForecast");
