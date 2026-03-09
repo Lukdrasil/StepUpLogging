@@ -22,6 +22,7 @@ using Serilog.Formatting.Compact;
 using Serilog.Events;
 using Serilog.Sinks.File;
 using Serilog.Sinks.OpenTelemetry;
+using Serilog.Enrichers.CallStack;
 
 namespace Lukdrasil.StepUpLogging;
 
@@ -248,6 +249,16 @@ public static class StepUpLoggingExtensions
     if (opts.EnrichWithMachineName)
     {
         lc.Enrich.WithMachineName();
+    }
+
+    if (opts.EnrichWithCallStack)
+    {
+                lc.Enrich.WithCallStack(config => config
+                        .WithCallStackFormat()
+                        .WithMethodParameters(includeParameters: true)
+                        .WithFullNames(fullTypeName: false)
+                        .SkipNamespace("System")
+                        .SkipNamespace("Microsoft"));
     }
 
     if (!string.IsNullOrWhiteSpace(opts.ServiceVersion))
@@ -947,8 +958,9 @@ public static class StepUpLoggingExtensions
                 rollingInterval: RollingInterval.Day,
                 retainedFileCountLimit: 30));
         }
+    
+        }
     }
-}
 
 internal sealed record CompiledRedactionPatterns(Regex[] Patterns)
 {

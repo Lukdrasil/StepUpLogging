@@ -583,6 +583,7 @@ See full [performance test results](tests/k6/performance_test_results.md).
 | `EnrichWithThreadId` | `false` | - | Include thread ID in log events |
 | `EnrichWithProcessId` | `false` | - | Include process ID in log events |
 | `EnrichWithMachineName` | `true` | - | Include machine name in log events |
+| `EnrichWithCallStack` | `false` | - | Include call-stack information using Serilog.Enrichers.CallStack (https://github.com/hokagedami/serilog-stacktrace-enricher) |
 | `EnrichWithEnvironment` | `true` | - | Include environment name (Development/Production) |
 | **Request Logging** |
 | `CaptureRequestBody` | `false` | - | Capture POST/PUT/PATCH bodies during step-up |
