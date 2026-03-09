@@ -250,6 +250,15 @@ public static class StepUpLoggingExtensions
         lc.Enrich.WithMachineName();
     }
 
+    if (opts.EnrichWithCallStack)
+    {
+        var enricher = CallStackHelper.CreateCallStackEnricher();
+        if (enricher != null)
+        {
+            lc.Enrich.With(enricher);
+        }
+    }
+
     if (!string.IsNullOrWhiteSpace(opts.ServiceVersion))
     {
         lc.Enrich.WithProperty("ServiceVersion", opts.ServiceVersion);
@@ -358,6 +367,15 @@ public static class StepUpLoggingExtensions
         if (opts.EnrichWithMachineName)
         {
             cfg.Enrich.WithMachineName();
+        }
+
+        if (opts.EnrichWithCallStack)
+        {
+            var enricher = CallStackHelper.CreateCallStackEnricher();
+            if (enricher != null)
+            {
+                cfg.Enrich.With(enricher);
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(opts.ServiceVersion))
@@ -947,8 +965,9 @@ public static class StepUpLoggingExtensions
                 rollingInterval: RollingInterval.Day,
                 retainedFileCountLimit: 30));
         }
+    
+        }
     }
-}
 
 internal sealed record CompiledRedactionPatterns(Regex[] Patterns)
 {

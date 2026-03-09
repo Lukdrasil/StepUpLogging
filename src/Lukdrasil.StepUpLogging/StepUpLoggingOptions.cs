@@ -42,6 +42,7 @@ public sealed class StepUpLoggingOptions
     public bool EnrichWithThreadId { get; set; }
     public bool EnrichWithProcessId { get; set; }
     public bool EnrichWithMachineName { get; set; } = true;
+    public bool EnrichWithCallStack { get; set; } = false;
 
     /// <summary>
     /// Regular expression patterns for redacting sensitive data in logs.
