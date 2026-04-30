@@ -78,7 +78,7 @@ public sealed class StepUpLoggingController : IDisposable
     /// <summary>
     /// Emit a structured request summary using the configured summary logger (bypass) if available.
     /// </summary>
-    public void EmitRequestSummary(string method, string path, int statusCode, double elapsedMs, string? traceId = null, string? queryString = null, IReadOnlyDictionary<string, object?>? routeParameters = null)
+    public void EmitRequestSummary(string method, string path, int statusCode, double elapsedMs, string? traceId = null, string? queryString = null, IReadOnlyDictionary<string, object?>? routeParameters = null, string? userAgent = null, string? clientIp = null)
     {
         try
         {
@@ -95,6 +95,16 @@ public sealed class StepUpLoggingController : IDisposable
             if (routeParameters != null && routeParameters.Count > 0)
             {
                 logger = logger.ForContext("RouteParameters", routeParameters);
+            }
+
+            if (!string.IsNullOrEmpty(userAgent))
+            {
+                logger = logger.ForContext("UserAgent", userAgent);
+            }
+
+            if (!string.IsNullOrEmpty(clientIp))
+            {
+                logger = logger.ForContext("ClientIp", clientIp);
             }
 
             logger.Write(lvl, "Request finished {Method} {Path} {StatusCode} {ElapsedMs}", method, path, statusCode, elapsedMs);

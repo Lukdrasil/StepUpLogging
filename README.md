@@ -158,7 +158,48 @@ app.Run();
 
 ### Request Summary behaviour
 
-When "AlwaysLogRequestSummary" is enabled, the middleware emits a single structured summary event at the configured "RequestSummaryLevel" for every completed HTTP request. The summary contains: HTTP method, request path, response status code, elapsed milliseconds and an optional trace/correlation id. Summary events are marked with the "IsRequestSummary" property and are processed by the library's SummarySink so they are exported independently of the StepUp level switch (base Warning) and the normal step-up flow.
+When "AlwaysLogRequestSummary" is enabled, the middleware emits a single structured summary event at the configured "RequestSummaryLevel" for every completed HTTP request. The summary contains:
+
+- **HTTP method** - GET, POST, etc.
+- **Request path** - URL path (trailing slashes normalized)
+- **Response status code** - 200, 404, 500, etc.
+- **Elapsed milliseconds** - Request duration
+- **Trace ID** - Optional trace/correlation id
+- **UserAgent** - Client User-Agent header (for client identification)
+- **ClientIp** - Client IP address with proxy support (X-Forwarded-For header, fallback to direct connection IP)
+
+Summary events are marked with the "IsRequestSummary" property and are processed by the library's SummarySink so they are exported independently of the StepUp level switch (base Warning) and the normal step-up flow.
+
+#### Example Request Summary Log
+
+```json
+{
+  "Timestamp": "2025-01-08T12:34:56.789Z",
+  "Level": "Information",
+  "MessageTemplate": "Request finished {Method} {Path} {StatusCode} {ElapsedMs}",
+  "Method": "POST",
+  "Path": "/api/users",
+  "StatusCode": 201,
+  "ElapsedMs": 45.23,
+  "UserAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+  "ClientIp": "203.0.113.42",
+  "IsRequestSummary": true
+}
+```
+
+#### IP Address Detection
+
+The library automatically detects the client IP address:
+
+1. **Proxy scenarios** - Checks `X-Forwarded-For` header and extracts the first IP (original client's IP)
+2. **Direct connection** - Falls back to `HttpContext.Connection.RemoteIpAddress` if no proxy header
+3. **Graceful degradation** - Omits IP field if detection fails
+
+Example with proxy:
+```
+X-Forwarded-For: 203.0.113.42, 198.51.100.100
+                 ^^^^^^^^^^^ extracted (original client)
+```
 
 To customise where summaries are written, provide a dedicated summary logger in DI when calling AddStepUpLogging, or configure the default sinks; the library enforces a single DI-managed summary logger to avoid unmanaged CreateLogger instances.
 

@@ -612,6 +612,70 @@ public static class StepUpLoggingExtensions
         return app;
     }
 
+    /// <summary>
+    /// Extract the client's IP address, checking for X-Forwarded-For header (proxy-aware),
+    /// with fallback to direct connection IP.
+    /// </summary>
+    private static string? ExtractClientIp(HttpContext httpContext)
+    {
+        try
+        {
+            // Check for X-Forwarded-For header (proxy scenarios - take first IP as it's the original client)
+            if (httpContext.Request.Headers.TryGetValue("X-Forwarded-For", out var forwardedFor))
+            {
+                var forwardedForValue = forwardedFor.FirstOrDefault();
+                if (!string.IsNullOrWhiteSpace(forwardedForValue))
+                {
+                    // X-Forwarded-For can contain multiple comma-separated IPs; take the first one
+                    var ips = forwardedForValue.Split(',');
+                    if (ips.Length > 0)
+                    {
+                        var clientIp = ips[0].Trim();
+                        if (!string.IsNullOrWhiteSpace(clientIp))
+                        {
+                            return clientIp;
+                        }
+                    }
+                }
+            }
+
+            // Fall back to direct connection IP
+            var remoteIp = httpContext.Connection.RemoteIpAddress?.ToString();
+            if (!string.IsNullOrWhiteSpace(remoteIp))
+            {
+                return remoteIp;
+            }
+
+            return null;
+        }
+        catch
+        {
+            // Swallow any errors during IP extraction
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Extract the User-Agent header from the request.
+    /// </summary>
+    private static string? ExtractUserAgent(HttpRequest request)
+    {
+        try
+        {
+            if (request.Headers.TryGetValue("User-Agent", out var userAgentValue))
+            {
+                var userAgent = userAgentValue.FirstOrDefault();
+                return !string.IsNullOrWhiteSpace(userAgent) ? userAgent : null;
+            }
+            return null;
+        }
+        catch
+        {
+            // Swallow any errors during User-Agent extraction
+            return null;
+        }
+    }
+
     public static WebApplication UseStepUpRequestLogging(this WebApplication app)
     {
         var opts = app.Services.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
@@ -672,6 +736,8 @@ public static class StepUpLoggingExtensions
                 }
 
                 // Call controller to emit structured summary centrally (controller will route to summary logger)
+                var userAgent = ExtractUserAgent(httpContext.Request);
+                var clientIp = ExtractClientIp(httpContext);
                 stepUpController.EmitRequestSummary(
                     httpContext.Request.Method,
                     path,
@@ -679,7 +745,9 @@ public static class StepUpLoggingExtensions
                     sw.Elapsed.TotalMilliseconds,
                     Activity.Current?.TraceId.ToString(),
                     redactedQs,
-                    routeParams);
+                    routeParams,
+                    userAgent,
+                    clientIp);
             });
         }
 
