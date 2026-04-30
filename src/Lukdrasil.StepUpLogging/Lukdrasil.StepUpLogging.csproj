@@ -8,8 +8,8 @@
     <!-- Package Metadata -->
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <PackageId>Lukdrasil.StepUpLogging</PackageId>
-    <Version>1.10.0</Version>
-    <PackageReleaseNotes>Added AlwaysLogRequestSummary option and SummarySink to emit per-request structured summaries independently of the step-up level; added EmitRequestSummary API and tests.</PackageReleaseNotes>
+    <Version>1.11.0</Version>
+    <PackageReleaseNotes>Added UserAgent and ClientIp fields to request summaries when AlwaysLogRequestSummary is enabled; includes proxy-aware IP detection via X-Forwarded-For header with graceful fallback to direct connection IP.</PackageReleaseNotes>
     <Authors>Lukdrasil</Authors>
     <Description>Dynamic step-up logging for ASP.NET Core with Serilog - automatically increase log verbosity when errors occur, with minimal performance overhead. Includes request body capture, sensitive data redaction, and OpenTelemetry metrics.</Description>
     <PackageTags>serilog;logging;aspnetcore;observability;otel;stepup;dynamic-logging;error-logging</PackageTags>
