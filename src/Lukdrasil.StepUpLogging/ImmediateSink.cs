@@ -28,8 +28,7 @@ internal sealed class ImmediateSink : ILogEventSink, IDisposable
 
         try
         {
-            if (logEvent.Properties.TryGetValue(LogProperties.IsImmediate, out var val)
-                && val is ScalarValue sv && sv.Value is bool b && b)
+            if (LogProperties.HasFlag(logEvent, LogProperties.IsImmediate))
             {
                 _target.Write(logEvent);
                 _processed.Add(1);

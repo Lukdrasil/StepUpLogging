@@ -1,4 +1,3 @@
-using Serilog;
 using Serilog.Core;
 using Serilog.Events;
 using System.Diagnostics.Metrics;
@@ -20,18 +19,14 @@ internal sealed class SummarySink : ILogEventSink, IDisposable
 
     public void Emit(LogEvent logEvent)
     {
-        if (_disposed || logEvent == null) return;
+        if (_disposed || logEvent is null) return;
 
         try
         {
-            if (logEvent.Properties.TryGetValue(LogProperties.IsRequestSummary, out var val))
+            if (LogProperties.HasFlag(logEvent, LogProperties.IsRequestSummary))
             {
-                if (val is ScalarValue sv && sv.Value is bool b && b)
-                {
-                    // Forward to configured summary logger which is responsible for exporting independently of LevelSwitch
-                    _target.Write(logEvent);
-                    _processed.Add(1);
-                }
+                _target.Write(logEvent);
+                _processed.Add(1);
             }
         }
         catch

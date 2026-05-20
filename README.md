@@ -483,6 +483,55 @@ With buffering:
 
 All `Debug`/`Information` events are buffered internally; when the error occurs, they are flushed to provide diagnostic context.
 
+## Immediate Logging
+
+Sometimes you need a log event to **always export** regardless of the current step-up level — for example, a security audit entry, a billing event, or a key lifecycle marker. Use the `LogImmediate*` extension methods or `BeginImmediateScope` for this.
+
+Immediate events bypass the step-up `LoggingLevelSwitch` and go directly to the configured sinks. They are also excluded from the pre-error ring buffer, so they are never duplicated when a buffer flush occurs.
+
+### Extension Methods
+
+```csharp
+using Lukdrasil.StepUpLogging;
+
+// Single-event helpers
+logger.LogImmediateInformation("Payment processed: {OrderId}", orderId);
+logger.LogImmediateWarning("Rate limit approaching for {ClientId}", clientId);
+logger.LogImmediateError("Checkout failed: {Reason}", reason);
+logger.LogImmediateError(ex, "Unhandled exception during {Operation}", op);
+
+// Generic level variant
+logger.LogImmediate(LogLevel.Information, "Audit: {Action} by {User}", action, user);
+logger.LogImmediate(LogLevel.Warning, ex, "Retrying {Operation}", op);
+```
+
+### Scope Variant
+
+Use `BeginImmediateScope` when multiple log events inside a block should all export immediately:
+
+```csharp
+using (logger.BeginImmediateScope())
+{
+    logger.LogInformation("Step 1 complete");
+    logger.LogInformation("Step 2 complete");
+    logger.LogWarning("Step 3 skipped");
+}
+```
+
+### When to Use
+
+| Scenario | Recommended approach |
+|---|---|
+| Single critical event | `LogImmediateError` / `LogImmediateWarning` |
+| Block of related events that must all export | `BeginImmediateScope` |
+| Normal diagnostic logs (visible only when stepped up) | Standard `logger.Log*` |
+
+### Metrics
+
+Immediate-routed events are tracked by the `StepUpLogging.Immediate` meter:
+
+- `immediate_processed_total` — number of events forwarded via `ImmediateSink`
+
 ## Common Scenarios
 
 ### Production with Auto Step-Up
