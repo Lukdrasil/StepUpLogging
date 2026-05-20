@@ -217,6 +217,33 @@ public class PreErrorBufferSinkTests
     }
 
     [Fact]
+    public void Buffer_ImmediateEvents_NotBuffered_NoDoubleEmitOnFlush()
+    {
+        var collector = new CollectingSink();
+        var bypass = new LoggerConfiguration()
+            .MinimumLevel.Verbose()
+            .WriteTo.Sink(collector)
+            .CreateLogger();
+
+        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 10, maxContexts: 16);
+        var parser = new MessageTemplateParser();
+
+        var immediateProps = new[] { new LogEventProperty(LogProperties.IsImmediate, new ScalarValue(true)) };
+        var normalProps = Array.Empty<LogEventProperty>();
+
+        // One normal event and one immediate event before the error
+        sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Information, null, parser.Parse("normal"), normalProps));
+        sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Information, null, parser.Parse("immediate"), immediateProps));
+
+        // Trigger flush via error
+        sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Error, null, parser.Parse("err"), normalProps));
+
+        // Only the normal event should be flushed; the immediate one must not appear
+        Assert.Single(collector.Events);
+        Assert.Equal("normal", collector.Events[0].MessageTemplate.Text);
+    }
+
+    [Fact]
     public void Buffer_WhitespaceTraceIdProperty_FallsBackToGlobalKey()
     {
         Activity.Current = null;

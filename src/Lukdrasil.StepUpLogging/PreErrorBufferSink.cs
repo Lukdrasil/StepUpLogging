@@ -115,6 +115,10 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
             return;
         }
 
+        // ImmediateSink already forwarded this event — buffering it would cause a double-emit on flush
+        if (LogProperties.HasFlag(logEvent, LogProperties.IsImmediate))
+            return;
+
         buffer.Enqueue(logEvent);
         BufferedEventsCounter.Add(1);
     }
