@@ -40,5 +40,35 @@ namespace Lukdrasil.StepUpLogging.Tests
             Assert.Equal("id=1&order=abc", ((ScalarValue)sink.LastEvent.Properties["QueryString"]).Value);
             Assert.True(sink.LastEvent.Properties.ContainsKey("RouteParameters"));
         }
+
+        [Fact(DisplayName = "EmitRequestSummary_WithUserAgentAndClientIp_AddsProperties")]
+        public void EmitRequestSummary_WithUserAgentAndClientIp_AddsProperties()
+        {
+            var opts = new StepUpLoggingOptions();
+            var sink = new CaptureSink();
+            var logger = new LoggerConfiguration().WriteTo.Sink(sink).CreateLogger();
+            var controller = new StepUpLoggingController(opts, logger);
+
+            controller.EmitRequestSummary("GET", "/api/test", 200, 50.0, userAgent: "Mozilla/5.0", clientIp: "127.0.0.1");
+
+            Assert.NotNull(sink.LastEvent);
+            Assert.Equal("Mozilla/5.0", ((ScalarValue)sink.LastEvent!.Properties["UserAgent"]).Value);
+            Assert.Equal("127.0.0.1", ((ScalarValue)sink.LastEvent.Properties["ClientIp"]).Value);
+        }
+
+        [Fact(DisplayName = "EmitRequestSummary_WithNullUserAgentAndClientIp_OmitsProperties")]
+        public void EmitRequestSummary_WithNullUserAgentAndClientIp_OmitsProperties()
+        {
+            var opts = new StepUpLoggingOptions();
+            var sink = new CaptureSink();
+            var logger = new LoggerConfiguration().WriteTo.Sink(sink).CreateLogger();
+            var controller = new StepUpLoggingController(opts, logger);
+
+            controller.EmitRequestSummary("GET", "/api/test", 200, 50.0, userAgent: null, clientIp: null);
+
+            Assert.NotNull(sink.LastEvent);
+            Assert.False(sink.LastEvent!.Properties.ContainsKey("UserAgent"));
+            Assert.False(sink.LastEvent.Properties.ContainsKey("ClientIp"));
+        }
     }
 }

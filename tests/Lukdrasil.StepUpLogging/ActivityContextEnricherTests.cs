@@ -122,6 +122,113 @@ public class ActivityContextEnricherTests
         childActivity.Dispose();
         parentActivity.Dispose();
     }
+
+    [Fact]
+    public void Enrich_RootW3CActivity_DoesNotAddParentSpanId()
+    {
+        Activity.Current = null;
+        var activity = new Activity("Root");
+        activity.Start();
+
+        Assert.Equal(ActivityIdFormat.W3C, activity.IdFormat);
+
+        var parser = new MessageTemplateParser();
+        var logEvent = new LogEvent(
+            DateTimeOffset.UtcNow,
+            LogEventLevel.Information,
+            exception: null,
+            messageTemplate: parser.Parse("test"),
+            properties: Array.Empty<LogEventProperty>());
+
+        new ActivityContextEnricher().Enrich(logEvent, new SimpleLogEventPropertyFactory());
+
+        Assert.DoesNotContain("ParentSpanId", logEvent.Properties.Keys);
+        Assert.True(logEvent.Properties.ContainsKey("TraceFlags"));
+
+        activity.Dispose();
+    }
+
+    [Fact]
+    public void Enrich_WithNonEmptyTraceState_AddsTraceState()
+    {
+        Activity.Current = null;
+        var activity = new Activity("TraceStateActivity");
+        activity.TraceStateString = "vendor=value";
+        activity.Start();
+
+        var parser = new MessageTemplateParser();
+        var logEvent = new LogEvent(
+            DateTimeOffset.UtcNow,
+            LogEventLevel.Information,
+            exception: null,
+            messageTemplate: parser.Parse("test"),
+            properties: Array.Empty<LogEventProperty>());
+
+        new ActivityContextEnricher().Enrich(logEvent, new SimpleLogEventPropertyFactory());
+
+        Assert.True(logEvent.Properties.ContainsKey("TraceState"));
+        Assert.Equal("vendor=value", ((ScalarValue)logEvent.Properties["TraceState"]).Value);
+
+        activity.Dispose();
+    }
+
+    [Fact]
+    public void Enrich_WithEmptyTraceState_DoesNotAddTraceState()
+    {
+        Activity.Current = null;
+        var activity = new Activity("NoTraceStateActivity");
+        activity.Start();
+
+        var parser = new MessageTemplateParser();
+        var logEvent = new LogEvent(
+            DateTimeOffset.UtcNow,
+            LogEventLevel.Information,
+            exception: null,
+            messageTemplate: parser.Parse("test"),
+            properties: Array.Empty<LogEventProperty>());
+
+        new ActivityContextEnricher().Enrich(logEvent, new SimpleLogEventPropertyFactory());
+
+        Assert.DoesNotContain("TraceState", logEvent.Properties.Keys);
+
+        activity.Dispose();
+    }
+
+    [Fact]
+    public void Enrich_NonW3CActivity_DoesNotAddProperties()
+    {
+        Activity.Current = null;
+        var savedFormat = Activity.DefaultIdFormat;
+        var savedForce = Activity.ForceDefaultIdFormat;
+        Activity.DefaultIdFormat = ActivityIdFormat.Hierarchical;
+        Activity.ForceDefaultIdFormat = true;
+
+        var activity = new Activity("HierarchicalActivity");
+        activity.Start();
+
+        try
+        {
+            Assert.Equal(ActivityIdFormat.Hierarchical, activity.IdFormat);
+
+            var parser = new MessageTemplateParser();
+            var logEvent = new LogEvent(
+                DateTimeOffset.UtcNow,
+                LogEventLevel.Information,
+                exception: null,
+                messageTemplate: parser.Parse("test"),
+                properties: Array.Empty<LogEventProperty>());
+
+            new ActivityContextEnricher().Enrich(logEvent, new SimpleLogEventPropertyFactory());
+
+            Assert.Empty(logEvent.Properties);
+        }
+        finally
+        {
+            activity.Dispose();
+            Activity.DefaultIdFormat = savedFormat;
+            Activity.ForceDefaultIdFormat = savedForce;
+        }
+    }
 }
 
 internal sealed class SimpleLogEventPropertyFactory : ILogEventPropertyFactory

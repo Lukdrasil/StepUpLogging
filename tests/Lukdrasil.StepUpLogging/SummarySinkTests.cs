@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Serilog;
 using Serilog.Events;
 using Serilog.Parsing;
@@ -50,6 +51,36 @@ namespace Lukdrasil.StepUpLogging.Tests
             sink2.Emit(le2);
 
             Assert.Null(capture2.LastEvent);
+        }
+
+        [Fact]
+        public void SummarySink_IsRequestSummary_NonBoolScalar_NotForwarded()
+        {
+            var capture = new CaptureSink();
+            var target = new LoggerConfiguration().WriteTo.Sink(capture).CreateLogger();
+            using var sink = new SummarySink(target);
+
+            var mt = new MessageTemplateParser().Parse("test");
+            var prop = new LogEventProperty("IsRequestSummary", new ScalarValue("yes"));
+            var le = new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Information, null, mt, new[] { prop });
+            sink.Emit(le);
+
+            Assert.Null(capture.LastEvent);
+        }
+
+        [Fact]
+        public void SummarySink_IsRequestSummary_NonScalarValue_NotForwarded()
+        {
+            var capture = new CaptureSink();
+            var target = new LoggerConfiguration().WriteTo.Sink(capture).CreateLogger();
+            using var sink = new SummarySink(target);
+
+            var mt = new MessageTemplateParser().Parse("test");
+            var prop = new LogEventProperty("IsRequestSummary", new SequenceValue(Enumerable.Empty<LogEventPropertyValue>()));
+            var le = new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Information, null, mt, new[] { prop });
+            sink.Emit(le);
+
+            Assert.Null(capture.LastEvent);
         }
     }
 }

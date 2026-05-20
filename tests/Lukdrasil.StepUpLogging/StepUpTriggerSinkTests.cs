@@ -114,4 +114,28 @@ public class StepUpTriggerSinkTests
 
         Assert.False(controller.IsSteppedUp);
     }
+
+    [Fact]
+    public async Task Emit_AfterDispose_DoesNotTrigger()
+    {
+        var opts = new StepUpLoggingOptions
+        {
+            BaseLevel = "Warning",
+            StepUpLevel = "Information",
+            DurationSeconds = 2
+        };
+        using var controller = new StepUpLoggingController(opts);
+        var sink = new StepUpTriggerSink(controller);
+        sink.Dispose();
+
+        var parser = new MessageTemplateParser();
+        var logEvent = new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Error, exception: null,
+            messageTemplate: parser.Parse("err"),
+            properties: Array.Empty<LogEventProperty>());
+
+        sink.Emit(logEvent);
+        await Task.Delay(100);
+
+        Assert.False(controller.IsSteppedUp);
+    }
 }

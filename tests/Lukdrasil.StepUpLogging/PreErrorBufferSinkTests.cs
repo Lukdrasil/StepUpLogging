@@ -175,4 +175,65 @@ public class PreErrorBufferSinkTests
         Assert.Collection(collector.Events,
             e => Assert.Equal("c2-1", e.MessageTemplate.Text));
     }
+
+    [Fact]
+    public void Buffer_NonW3CActivity_WithTraceIdProperty_UsesPropertyKey()
+    {
+        Activity.Current = null;
+        var savedFormat = Activity.DefaultIdFormat;
+        var savedForce = Activity.ForceDefaultIdFormat;
+        Activity.DefaultIdFormat = ActivityIdFormat.Hierarchical;
+        Activity.ForceDefaultIdFormat = true;
+
+        var collector = new CollectingSink();
+        var bypass = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
+        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 5, maxContexts: 16);
+        var parser = new MessageTemplateParser();
+
+        // Two separate TraceId values so we can confirm key isolation
+        var traceAProps = new[] { new LogEventProperty("TraceId", new ScalarValue("trace-a")) };
+        var traceBProps = new[] { new LogEventProperty("TraceId", new ScalarValue("trace-b")) };
+
+        var activity = new Activity("Hierarchical").Start();
+        try
+        {
+            Assert.Equal(ActivityIdFormat.Hierarchical, activity.IdFormat);
+
+            sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Debug, null, parser.Parse("a-1"), traceAProps));
+            sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Debug, null, parser.Parse("b-1"), traceBProps));
+
+            // Error only on trace-a; only a-1 should flush
+            sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Error, null, parser.Parse("err-a"), traceAProps));
+        }
+        finally
+        {
+            activity.Dispose();
+            Activity.DefaultIdFormat = savedFormat;
+            Activity.ForceDefaultIdFormat = savedForce;
+        }
+
+        Assert.Single(collector.Events);
+        Assert.Equal("a-1", collector.Events[0].MessageTemplate.Text);
+    }
+
+    [Fact]
+    public void Buffer_WhitespaceTraceIdProperty_FallsBackToGlobalKey()
+    {
+        Activity.Current = null;
+        var collector = new CollectingSink();
+        var bypass = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
+        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 5, maxContexts: 16);
+        var parser = new MessageTemplateParser();
+
+        // Whitespace TraceId → falls back to "__global__"
+        var whitespaceProp = new[] { new LogEventProperty("TraceId", new ScalarValue("   ")) };
+        var noProp = Array.Empty<LogEventProperty>();
+
+        // Both events share the global key — error on one flushes the other
+        sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Debug, null, parser.Parse("global-1"), whitespaceProp));
+        sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Error, null, parser.Parse("err"), noProp));
+
+        Assert.Single(collector.Events);
+        Assert.Equal("global-1", collector.Events[0].MessageTemplate.Text);
+    }
 }

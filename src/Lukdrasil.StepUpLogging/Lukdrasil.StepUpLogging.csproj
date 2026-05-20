@@ -8,8 +8,8 @@
     <!-- Package Metadata -->
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <PackageId>Lukdrasil.StepUpLogging</PackageId>
-    <Version>1.11.0</Version>
-    <PackageReleaseNotes>Added UserAgent and ClientIp fields to request summaries when AlwaysLogRequestSummary is enabled; includes proxy-aware IP detection via X-Forwarded-For header with graceful fallback to direct connection IP.</PackageReleaseNotes>
+    <Version>1.12.0</Version>
+    <PackageReleaseNotes>Added ImmediateLoggerExtensions with LogImmediateInformation, LogImmediateWarning, LogImmediateError, and BeginImmediateScope — extension methods on ILogger that bypass the step-up LevelSwitch and always export. Internally refactored the step-up branch into a dedicated StepUpSink and added ImmediateSink; both guarantee exactly-once delivery. New OpenTelemetry meter StepUpLogging.Immediate tracks immediate-routed events.</PackageReleaseNotes>
     <Authors>Lukdrasil</Authors>
     <Description>Dynamic step-up logging for ASP.NET Core with Serilog - automatically increase log verbosity when errors occur, with minimal performance overhead. Includes request body capture, sensitive data redaction, and OpenTelemetry metrics.</Description>
     <PackageTags>serilog;logging;aspnetcore;observability;otel;stepup;dynamic-logging;error-logging</PackageTags>

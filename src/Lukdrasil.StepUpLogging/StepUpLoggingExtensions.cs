@@ -53,19 +53,13 @@ public static class StepUpLoggingExtensions
     /// </summary>
     public static readonly ActivitySource BufferActivitySource = new("Lukdrasil.StepUpLogging.Buffer", "1.0.0");
 
-    /// <summary>
-    /// ActivitySource name for request logging (for explicit registration).
-    /// </summary>
+    /// <summary>ActivitySource name for request logging (for explicit registration).</summary>
     public const string RequestLoggingActivitySourceName = "Lukdrasil.StepUpLogging.RequestLogging";
 
-    /// <summary>
-    /// ActivitySource name for controller operations (for explicit registration).
-    /// </summary>
+    /// <summary>ActivitySource name for controller operations (for explicit registration).</summary>
     public const string ControllerActivitySourceName = "Lukdrasil.StepUpLogging.Controller";
 
-    /// <summary>
-    /// ActivitySource name for buffer operations (for explicit registration).
-    /// </summary>
+    /// <summary>ActivitySource name for buffer operations (for explicit registration).</summary>
     public const string BufferActivitySourceName = "Lukdrasil.StepUpLogging.Buffer";
 
     private static readonly Meter RequestMeter = new("StepUpLogging.RequestLogging", "1.0.0");
@@ -135,9 +129,9 @@ public static class StepUpLoggingExtensions
         // Ensure default values are preserved when configuration section doesn't exist
         builder.Services.AddSingleton<IOptions<StepUpLoggingOptions>>(sp =>
         {
-            var options = new StepUpLoggingOptions(); // Initialize with default values from properties
-            builder.Configuration.GetSection(configSectionName).Bind(options); // Override with config if exists
-            configureOptions?.Invoke(options); // Allow programmatic override
+            var options = new StepUpLoggingOptions();
+            builder.Configuration.GetSection(configSectionName).Bind(options);
+            configureOptions?.Invoke(options);
             return Options.Create(options);
         });
 
@@ -157,26 +151,19 @@ public static class StepUpLoggingExtensions
         builder.Services.AddSingleton<StepUpLoggingController>(sp =>
         {
             var opts = sp.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
-            // Construct controller without resolving the summary logger to avoid circular DI during startup.
-            // The controller will fall back to the global Log if no summary logger is available.
             return new StepUpLoggingController(opts);
         });
 
         // Ensure Serilog DiagnosticContext is registered so Serilog.AspNetCore's RequestLoggingMiddleware can be activated.
-        // Use reflection to be robust across Serilog package versions/assembly names.
         var diagTypeToResolve = Type.GetType("Serilog.Extensions.Hosting.DiagnosticContext, Serilog.Extensions.Hosting")
                               ?? Type.GetType("Serilog.AspNetCore.DiagnosticContext, Serilog.AspNetCore");
         if (diagTypeToResolve != null)
         {
-            // Register the DiagnosticContext under its concrete type so middleware can resolve it by type.
             builder.Services.AddSingleton(diagTypeToResolve, sp =>
             {
                 try
                 {
-                    // Prefer not to force-resolution of Serilog.ILogger here to avoid circular DI during startup.
                     var logger = sp.GetService<Serilog.ILogger>();
-
-                    // Try to find a constructor that accepts Serilog.ILogger or Serilog.Core.Logger
                     var ctor = diagTypeToResolve.GetConstructors()
                         .OrderByDescending(c => c.GetParameters().Length)
                         .FirstOrDefault();
@@ -187,13 +174,11 @@ public static class StepUpLoggingExtensions
                             if ((p.ParameterType == typeof(Serilog.ILogger) || p.ParameterType.FullName == "Serilog.Core.Logger") && logger != null)
                                 return (object)logger;
                             if (p.HasDefaultValue) return p.DefaultValue;
-                            // Unable to supply this parameter — fall back to parameterless construction
                             return null;
                         }).ToArray();
 
                         if (args.Any(a => a == null))
                         {
-                            // Fall back to parameterless constructor if available
                             return Activator.CreateInstance(diagTypeToResolve)!;
                         }
 
@@ -204,113 +189,50 @@ public static class StepUpLoggingExtensions
                 }
                 catch
                 {
-                    // If instantiation fails, return null so DI doesn't have a registration for it.
                     return null!;
                 }
             });
         }
-
 
         builder.Services.AddSerilog((services, lc) =>
         {
             var stepUpController = services.GetRequiredService<StepUpLoggingController>();
             var opts = services.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
 
-    lc.ReadFrom.Configuration(builder.Configuration)
-                // Root stays verbose; we gate actual outputs via sub-loggers so that buffering can see all events
-                .MinimumLevel.Verbose()
-  .Enrich.FromLogContext()
-  .Enrich.WithOpenTelemetryTraceId()
-  .Enrich.WithOpenTelemetrySpanId()
-  .Enrich.With<ActivityContextEnricher>()
-  .Enrich.WithProperty("Application", builder.Environment.ApplicationName);
+            lc.ReadFrom.Configuration(builder.Configuration)
+              .MinimumLevel.Verbose();
 
-    // Add exception details enrichment when enabled
-    if (opts.EnrichWithExceptionDetails && opts.StructuredExceptionDetails)
-    {
-        lc.Enrich.WithExceptionDetails();
-    }
+            ApplyCommonEnrichers(lc, builder, opts);
 
-    if (opts.EnrichWithEnvironment)
-    {
-        lc.Enrich.WithProperty("Environment", builder.Environment.EnvironmentName);
-    }
+            // Bypass logger: exports at full verbosity independent of LevelSwitch.
+            // Built directly here (not via DI) to avoid a circular deadlock:
+            // AddSerilog registers Serilog.ILogger as a factory that depends on ILoggerFactory,
+            // which in turn depends on this very callback — resolving it inside the callback deadlocks.
+            var bypassLogger = CreateBypassLogger(builder, enableConsoleLogging, logFilePath, opts);
+            try { stepUpController.SetSummaryLogger(bypassLogger); } catch { }
 
-    if (opts.EnrichWithThreadId)
-    {
-        lc.Enrich.WithThreadId();
-    }
+            // Step-up sink: gated by LevelSwitch, drops bypass-marked events to prevent duplication.
+            var stepUpInnerCfg = new LoggerConfiguration().MinimumLevel.Verbose();
+            ConfigureOutputSinks(stepUpInnerCfg, builder, enableConsoleLogging, logFilePath, opts);
+            lc.WriteTo.Sink(new StepUpSink(stepUpInnerCfg.CreateLogger(), stepUpController.LevelSwitch));
 
-    if (opts.EnrichWithProcessId)
-    {
-        lc.Enrich.WithProcessId();
-    }
+            // Pre-error buffer: captures all events per trace; flushes to bypass logger on Error/Fatal.
+            if (opts.EnablePreErrorBuffering)
+            {
+                lc.WriteTo.Sink(new PreErrorBufferSink(bypassLogger, opts.PreErrorBufferSize, opts.PreErrorMaxContexts));
+            }
 
-    if (opts.EnrichWithMachineName)
-    {
-        lc.Enrich.WithMachineName();
-    }
+            // Trigger sink: observes Error/Fatal events and calls controller.Trigger() asynchronously.
+            lc.WriteTo.Sink(new StepUpTriggerSink(stepUpController));
 
-    if (opts.EnrichWithCallStack)
-    {
-        lc.Enrich.WithCallStack();
-    }
+            // Summary sink: routes IsRequestSummary=true events to bypass logger.
+            lc.WriteTo.Sink(new SummarySink(bypassLogger));
 
-    if (!string.IsNullOrWhiteSpace(opts.ServiceVersion))
-    {
-        lc.Enrich.WithProperty("ServiceVersion", opts.ServiceVersion);
-    }
+            // Immediate sink: routes IsImmediate=true events to bypass logger.
+            lc.WriteTo.Sink(new ImmediateSink(bypassLogger));
 
-    if (!string.IsNullOrWhiteSpace(opts.ServiceInstanceId))
-    {
-        lc.Enrich.WithProperty("ServiceInstanceId", opts.ServiceInstanceId);
-    }
-
-    // Build a sub-logger for main outputs gated by the step-up level switch
-    lc.WriteTo.Logger(l =>
-    {
-        // Exclude events marked as request summaries from the main step-up outputs to avoid duplicate export.
-        // Use Serilog.Filters.Expressions to apply an expression-based filter.
-        try
-        {
-            l.Filter.ByExcluding("IsRequestSummary = true");
-        }
-        catch
-        {
-            // If filter extension is not available for any reason, fall back to no-op to avoid startup failure.
-        }
-
-        l.MinimumLevel.ControlledBy(stepUpController.LevelSwitch);
-        ConfigureStepUpSinks(l, builder, enableConsoleLogging, logFilePath, opts);
-    });
-
-    // Create bypass logger directly to avoid circular DI dependency.
-    // Serilog.AspNetCore's AddSerilog internally registers Serilog.ILogger as a factory that
-    // depends on ILoggerFactory, which in turn depends on this very callback — resolving
-    // Serilog.ILogger via GetRequiredService inside this callback causes a deadlock.
-    var bypassLogger = CreateBypassLogger(builder, enableConsoleLogging, logFilePath, opts);
-
-    // Wire the bypass logger into the StepUpLoggingController so EmitRequestSummary uses the bypass logger
-    try { stepUpController.SetSummaryLogger(bypassLogger); } catch { }
-
-    // Buffered pre-error branch (always receives all events); flushes to bypass logger
-    if (opts.EnablePreErrorBuffering)
-    {
-        lc.WriteTo.Logger(l =>
-        {
-            l.MinimumLevel.Verbose();
-            l.WriteTo.Sink(new PreErrorBufferSink(bypassLogger, opts.PreErrorBufferSize, opts.PreErrorMaxContexts));
-        });
-    }
-
-    // Trigger sink observes error-level events (after enrichment) and triggers step-up
-    lc.WriteTo.Sink(new StepUpTriggerSink(stepUpController));
-
-    // SummarySink: forwards IsRequestSummary events to the bypass logger so summaries are exported independent of LevelSwitch
-    lc.WriteTo.Sink(new SummarySink(bypassLogger));
-
-    configure?.Invoke(new HostBuilderContext(new Dictionary<object, object>()), services, lc);
-}, writeToProviders: false);
+            configure?.Invoke(new HostBuilderContext(new Dictionary<object, object>()), services, lc);
+        }, writeToProviders: false);
 
         return builder;
     }
@@ -322,10 +244,60 @@ public static class StepUpLoggingExtensions
     }
 
     /// <summary>
+    /// Applies all configured enrichers to <paramref name="lc"/>. Called on both the root
+    /// pipeline and the bypass logger to keep enrichment consistent.
+    /// </summary>
+    private static void ApplyCommonEnrichers(LoggerConfiguration lc, IHostApplicationBuilder builder, StepUpLoggingOptions opts)
+    {
+        lc.Enrich.FromLogContext()
+          .Enrich.WithOpenTelemetryTraceId()
+          .Enrich.WithOpenTelemetrySpanId()
+          .Enrich.With<ActivityContextEnricher>()
+          .Enrich.WithProperty("Application", builder.Environment.ApplicationName);
+
+        if (opts.EnrichWithExceptionDetails && opts.StructuredExceptionDetails)
+        {
+            lc.Enrich.WithExceptionDetails();
+        }
+
+        if (opts.EnrichWithEnvironment)
+        {
+            lc.Enrich.WithProperty("Environment", builder.Environment.EnvironmentName);
+        }
+
+        if (opts.EnrichWithThreadId)
+        {
+            lc.Enrich.WithThreadId();
+        }
+
+        if (opts.EnrichWithProcessId)
+        {
+            lc.Enrich.WithProcessId();
+        }
+
+        if (opts.EnrichWithMachineName)
+        {
+            lc.Enrich.WithMachineName();
+        }
+
+        if (opts.EnrichWithCallStack)
+        {
+            lc.Enrich.WithCallStack();
+        }
+
+        if (!string.IsNullOrWhiteSpace(opts.ServiceVersion))
+        {
+            lc.Enrich.WithProperty("ServiceVersion", opts.ServiceVersion);
+        }
+
+        if (!string.IsNullOrWhiteSpace(opts.ServiceInstanceId))
+        {
+            lc.Enrich.WithProperty("ServiceInstanceId", opts.ServiceInstanceId);
+        }
+    }
+
+    /// <summary>
     /// Creates the bypass/summary logger that exports events independently of the main LevelSwitch.
-    /// This logger is created directly (not via DI) to avoid a circular dependency: AddSerilog internally
-    /// registers Serilog.ILogger as a factory that depends on ILoggerFactory, so resolving
-    /// Serilog.ILogger via GetRequiredService inside the AddSerilog callback causes a deadlock.
     /// </summary>
     private static Serilog.ILogger CreateBypassLogger(
         IHostApplicationBuilder builder,
@@ -333,50 +305,9 @@ public static class StepUpLoggingExtensions
         string? logFilePath,
         StepUpLoggingOptions opts)
     {
-        var cfg = new LoggerConfiguration()
-            .MinimumLevel.Verbose()
-            .Enrich.FromLogContext()
-            .Enrich.WithOpenTelemetryTraceId()
-            .Enrich.WithOpenTelemetrySpanId()
-            .Enrich.With<ActivityContextEnricher>()
-            .Enrich.WithProperty("Application", builder.Environment.ApplicationName);
-
-        if (opts.EnrichWithExceptionDetails && opts.StructuredExceptionDetails)
-        {
-            cfg.Enrich.WithExceptionDetails();
-        }
-
-        if (opts.EnrichWithEnvironment)
-        {
-            cfg.Enrich.WithProperty("Environment", builder.Environment.EnvironmentName);
-        }
-
-        if (opts.EnrichWithThreadId)
-        {
-            cfg.Enrich.WithThreadId();
-        }
-
-        if (opts.EnrichWithProcessId)
-        {
-            cfg.Enrich.WithProcessId();
-        }
-
-        if (opts.EnrichWithMachineName)
-        {
-            cfg.Enrich.WithMachineName();
-        }
-
-        if (!string.IsNullOrWhiteSpace(opts.ServiceVersion))
-        {
-            cfg.Enrich.WithProperty("ServiceVersion", opts.ServiceVersion);
-        }
-
-        if (!string.IsNullOrWhiteSpace(opts.ServiceInstanceId))
-        {
-            cfg.Enrich.WithProperty("ServiceInstanceId", opts.ServiceInstanceId);
-        }
-
-        ConfigureStepUpSinks(cfg, builder, enableConsoleLogging, logFilePath, opts);
+        var cfg = new LoggerConfiguration().MinimumLevel.Verbose();
+        ApplyCommonEnrichers(cfg, builder, opts);
+        ConfigureOutputSinks(cfg, builder, enableConsoleLogging, logFilePath, opts);
         return cfg.CreateLogger();
     }
 
@@ -386,25 +317,14 @@ public static class StepUpLoggingExtensions
             .AddMeter("StepUpLogging")
             .AddMeter("StepUpLogging.Sink")
             .AddMeter("StepUpLogging.RequestLogging")
-            .AddMeter("StepUpLogging.Buffer");
+            .AddMeter("StepUpLogging.Buffer")
+            .AddMeter("StepUpLogging.Immediate");
     }
 
     /// <summary>
     /// Adds Serilog request logging middleware with enriched context (route parameters, headers, body capture).
     /// Integrates with StepUp logging to capture detailed request information when logging is stepped-up (on errors).
     /// </summary>
-    /// <param name="app">The web application</param>
-    /// <returns>The web application for method chaining</returns>
-    /// <remarks>
-    /// This middleware logs the following request context:
-    /// - Request path and query string (with sensitive data redaction)
-    /// - Route parameters (e.g., {id}, {role})
-    /// - HTTP headers (with automatic redaction of Authorization, Cookie, X-API-Key, etc.)
-    /// - Request body (when CaptureRequestBody is enabled and logging is stepped-up)
-    /// 
-    /// Additional header names can be marked as sensitive via StepUpLoggingOptions.AdditionalSensitiveHeaders
-    /// for automatic redaction in the logs.
-    /// </remarks>
     public static IApplicationBuilder UseStepUpRequestLogging(this IApplicationBuilder app)
     {
         var services = app.ApplicationServices;
@@ -427,279 +347,7 @@ public static class StepUpLoggingExtensions
                 sensitiveHeaders.Add(header);
             }
         }
-        if (opts.AlwaysLogRequestSummary)
-        {
-            app.Use(async (httpContext, next) =>
-            {
-                var sw = Stopwatch.StartNew();
-                await next();
-                sw.Stop();
 
-                var rawPath = httpContext.Request.Path.Value ?? string.Empty;
-                var path = rawPath.Length > 1 ? rawPath.TrimEnd('/') : rawPath;
-
-                if (exclude.Contains(path) || excludePrefixes.Any(prefix => path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
-                {
-                    return;
-                }
-
-                var level = ParseLogEventLevel(opts.RequestSummaryLevel, LogEventLevel.Information);
-
-                // Compute redacted query string
-                var qs = httpContext.Request.QueryString.HasValue ? httpContext.Request.QueryString.Value! : string.Empty;
-                var redactedQs = compiledPatterns.Redact(qs);
-
-                // Build redacted route parameters
-                IReadOnlyDictionary<string, object?>? routeParams = null;
-                if (httpContext.Request.RouteValues?.Count > 0)
-                {
-                    var rp = new Dictionary<string, object?>();
-                    foreach (var kvp in httpContext.Request.RouteValues)
-                    {
-                        var value = kvp.Value?.ToString() ?? string.Empty;
-                        rp[kvp.Key] = compiledPatterns.Redact(value);
-                    }
-                    routeParams = rp;
-                }
-
-                stepUpController.EmitRequestSummary(
-                    httpContext.Request.Method,
-                    path,
-                    httpContext.Response?.StatusCode ?? 0,
-                    sw.Elapsed.TotalMilliseconds,
-                    Activity.Current?.TraceId.ToString(),
-                    redactedQs,
-                    routeParams);
-            });
-        }
-
-        app.UseSerilogRequestLogging(options =>
-        {
-            options.EnrichDiagnosticContext = (diagnosticContext, httpContext) =>
-            {
-                using var activity = opts.EnableActivityInstrumentation 
-                    ? RequestLoggingActivitySource.StartActivity("LogRequest", ActivityKind.Server) 
-                    : null;
-
-                activity?.SetTag("http.method", httpContext.Request.Method);
-                activity?.SetTag("http.target", httpContext.Request.Path.Value);
-                activity?.SetTag("http.scheme", httpContext.Request.Scheme);
-                activity?.SetTag("http.host", httpContext.Request.Host.Value);
-
-                var rawPath = httpContext.Request.Path.Value ?? string.Empty;
-                var path = rawPath.Length > 1 ? rawPath.TrimEnd('/') : rawPath;
-                diagnosticContext.Set("RequestPath", path);
-
-                var qs = httpContext.Request.QueryString.HasValue ? httpContext.Request.QueryString.Value! : string.Empty;
-                var redactedQs = compiledPatterns.Redact(qs);
-                if (!string.Equals(redactedQs, qs, StringComparison.Ordinal))
-                {
-                    if (opts.EnableActivityInstrumentation)
-                    {
-                        using (var redactionActivity = RequestLoggingActivitySource.StartActivity("ApplyRedaction", ActivityKind.Internal))
-                        {
-                            redactionActivity?.SetTag("security.redaction_type", "query_string");
-                            redactionActivity?.SetTag("security.redaction_target", "query_string");
-                        }
-                    }
-                    RedactionCounter.Add(1);
-                    activity?.SetTag("security.redaction_applied", true);
-                }
-                diagnosticContext.Set("QueryString", redactedQs);
-
-                if (httpContext.Request.RouteValues?.Count > 0)
-                {
-                    var routeParams = new Dictionary<string, object?>();
-                    foreach (var kvp in httpContext.Request.RouteValues)
-                    {
-                        var value = kvp.Value?.ToString() ?? string.Empty;
-                        var redactedValue = compiledPatterns.Redact(value);
-                        if (!string.Equals(redactedValue, value, StringComparison.Ordinal))
-                        {
-                            if (opts.EnableActivityInstrumentation)
-                            {
-                                using (var redactionActivity = RequestLoggingActivitySource.StartActivity("ApplyRedaction", ActivityKind.Internal))
-                                {
-                                    redactionActivity?.SetTag("security.redaction_type", "route_parameter");
-                                    redactionActivity?.SetTag("security.redaction_target", kvp.Key);
-                                }
-                            }
-                            RedactionCounter.Add(1);
-                        }
-                        routeParams[kvp.Key] = redactedValue;
-                    }
-                    diagnosticContext.Set("RouteParameters", routeParams);
-                }
-
-                var headers = new Dictionary<string, object?>();
-
-                foreach (var header in httpContext.Request.Headers)
-                {
-                    if (sensitiveHeaders.Contains(header.Key))
-                    {
-                        headers[header.Key] = "[REDACTED]";
-                        if (opts.EnableActivityInstrumentation)
-                        {
-                            using (var redactionActivity = RequestLoggingActivitySource.StartActivity("ApplyRedaction", ActivityKind.Internal))
-                            {
-                                redactionActivity?.SetTag("security.redaction_type", "sensitive_header");
-                                redactionActivity?.SetTag("security.redaction_target", header.Key);
-                            }
-                        }
-                        RedactionCounter.Add(1);
-                    }
-                    else
-                    {
-                        var value = string.Join(", ", header.Value.Where(v => v != null) ?? Array.Empty<string>());
-                        var redactedValue = compiledPatterns.Redact(value);
-                        if (!string.Equals(redactedValue, value, StringComparison.Ordinal))
-                        {
-                            if (opts.EnableActivityInstrumentation)
-                            {
-                                using (var redactionActivity = RequestLoggingActivitySource.StartActivity("ApplyRedaction", ActivityKind.Internal))
-                                {
-                                    redactionActivity?.SetTag("security.redaction_type", "pattern");
-                                    redactionActivity?.SetTag("security.redaction_target", header.Key);
-                                }
-                            }
-                            RedactionCounter.Add(1);
-                        }
-                        headers[header.Key] = redactedValue;
-                    }
-                }
-                diagnosticContext.Set("Headers", headers);
-
-                if (opts.CaptureRequestBody && stepUpController.IsSteppedUp)
-                {
-                    var method = httpContext.Request.Method;
-                    if (method == "POST" || method == "PUT" || method == "PATCH")
-                    {
-                        try
-                        {
-                            httpContext.Request.EnableBuffering();
-                            var contentLength = httpContext.Request.ContentLength ?? 0;
-                            var maxBytes = Math.Min(opts.MaxBodyCaptureBytes, (int)contentLength);
-
-                            if (maxBytes > 0)
-                            {
-                                using (opts.EnableActivityInstrumentation 
-                                    ? RequestLoggingActivitySource.StartActivity("CaptureRequestBody", ActivityKind.Internal) 
-                                    : null)
-                                {
-                                    var buffer = new char[maxBytes];
-                                    using var sr = new StreamReader(httpContext.Request.Body, Encoding.UTF8, true, maxBytes, leaveOpen: true);
-                                    var read = sr.Read(buffer, 0, maxBytes);
-                                    httpContext.Request.Body.Position = 0;
-                                    var body = new string(buffer, 0, read);
-                                    diagnosticContext.Set("RequestBody", compiledPatterns.Redact(body));
-                                    BodyCaptureCounter.Add(1);
-                                }
-                            }
-                            else
-                            {
-                                diagnosticContext.Set("RequestBody", "[EMPTY]");
-                            }
-                        }
-                        catch
-                        {
-                            // Swallow any failures during best-effort capture
-                        }
-                    }
-                }
-            };
-        });
-
-        return app;
-    }
-
-    /// <summary>
-    /// Extract the client's IP address, checking for X-Forwarded-For header (proxy-aware),
-    /// with fallback to direct connection IP.
-    /// </summary>
-    private static string? ExtractClientIp(HttpContext httpContext)
-    {
-        try
-        {
-            // Check for X-Forwarded-For header (proxy scenarios - take first IP as it's the original client)
-            if (httpContext.Request.Headers.TryGetValue("X-Forwarded-For", out var forwardedFor))
-            {
-                var forwardedForValue = forwardedFor.FirstOrDefault();
-                if (!string.IsNullOrWhiteSpace(forwardedForValue))
-                {
-                    // X-Forwarded-For can contain multiple comma-separated IPs; take the first one
-                    var ips = forwardedForValue.Split(',');
-                    if (ips.Length > 0)
-                    {
-                        var clientIp = ips[0].Trim();
-                        if (!string.IsNullOrWhiteSpace(clientIp))
-                        {
-                            return clientIp;
-                        }
-                    }
-                }
-            }
-
-            // Fall back to direct connection IP
-            var remoteIp = httpContext.Connection.RemoteIpAddress?.ToString();
-            if (!string.IsNullOrWhiteSpace(remoteIp))
-            {
-                return remoteIp;
-            }
-
-            return null;
-        }
-        catch
-        {
-            // Swallow any errors during IP extraction
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// Extract the User-Agent header from the request.
-    /// </summary>
-    private static string? ExtractUserAgent(HttpRequest request)
-    {
-        try
-        {
-            if (request.Headers.TryGetValue("User-Agent", out var userAgentValue))
-            {
-                var userAgent = userAgentValue.FirstOrDefault();
-                return !string.IsNullOrWhiteSpace(userAgent) ? userAgent : null;
-            }
-            return null;
-        }
-        catch
-        {
-            // Swallow any errors during User-Agent extraction
-            return null;
-        }
-    }
-
-    public static WebApplication UseStepUpRequestLogging(this WebApplication app)
-    {
-        var opts = app.Services.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
-        var stepUpController = app.Services.GetRequiredService<StepUpLoggingController>();
-        var compiledPatterns = app.Services.GetRequiredService<CompiledRedactionPatterns>();
-        
-        // Cache exclude paths computation (done once, not per request)
-        var exclude = new HashSet<string>(opts.ExcludePaths ?? Array.Empty<string>(), StringComparer.OrdinalIgnoreCase);
-        var excludePrefixes = (opts.ExcludePaths ?? Array.Empty<string>())
-            .Where(p => p.EndsWith("*", StringComparison.Ordinal))
-            .Select(p => p.TrimEnd('*').TrimEnd('/'))
-            .ToArray();
-        
-        // Build combined sensitive headers set (built-in + configured)
-        var sensitiveHeaders = new HashSet<string>(BuiltInSensitiveHeaders);
-        if (opts.AdditionalSensitiveHeaders?.Length > 0)
-        {
-            foreach (var header in opts.AdditionalSensitiveHeaders)
-            {
-                sensitiveHeaders.Add(header);
-            }
-        }
-
-        // If configured, add a lightweight middleware that always emits a single request summary via the bypass logger
         if (opts.AlwaysLogRequestSummary)
         {
             app.Use(async (httpContext, next) =>
@@ -716,13 +364,9 @@ public static class StepUpLoggingExtensions
                     return;
                 }
 
-                var level = ParseLogEventLevel(opts.RequestSummaryLevel, LogEventLevel.Information);
-
-                // Compute redacted query string
                 var qs = httpContext.Request.QueryString.HasValue ? httpContext.Request.QueryString.Value! : string.Empty;
                 var redactedQs = compiledPatterns.Redact(qs);
 
-                // Build redacted route parameters
                 IReadOnlyDictionary<string, object?>? routeParams = null;
                 if (httpContext.Request.RouteValues?.Count > 0)
                 {
@@ -735,7 +379,6 @@ public static class StepUpLoggingExtensions
                     routeParams = rp;
                 }
 
-                // Call controller to emit structured summary centrally (controller will route to summary logger)
                 var userAgent = ExtractUserAgent(httpContext.Request);
                 var clientIp = ExtractClientIp(httpContext);
                 stepUpController.EmitRequestSummary(
@@ -755,18 +398,17 @@ public static class StepUpLoggingExtensions
         {
             options.EnrichDiagnosticContext = (diagnosticContext, httpContext) =>
             {
-                // Use ActivitySource for body capture and redaction operations when enabled
-                using var activity = opts.EnableActivityInstrumentation 
-                    ? RequestLoggingActivitySource.StartActivity("LogRequest", ActivityKind.Server) 
+                using var activity = opts.EnableActivityInstrumentation
+                    ? RequestLoggingActivitySource.StartActivity("LogRequest", ActivityKind.Server)
                     : null;
-                
+
                 activity?.SetTag("http.method", httpContext.Request.Method);
                 activity?.SetTag("http.target", httpContext.Request.Path.Value);
                 activity?.SetTag("http.scheme", httpContext.Request.Scheme);
                 activity?.SetTag("http.host", httpContext.Request.Host.Value);
 
                 var rawPath = httpContext.Request.Path.Value ?? string.Empty;
-                var path = rawPath.Length > 1 ? rawPath.TrimEnd('/') : rawPath; // normalize trailing slash
+                var path = rawPath.Length > 1 ? rawPath.TrimEnd('/') : rawPath;
                 diagnosticContext.Set("RequestPath", path);
 
                 var qs = httpContext.Request.QueryString.HasValue ? httpContext.Request.QueryString.Value! : string.Empty;
@@ -786,16 +428,13 @@ public static class StepUpLoggingExtensions
                 }
                 diagnosticContext.Set("QueryString", redactedQs);
 
-                // Log route parameters
                 if (httpContext.Request.RouteValues?.Count > 0)
                 {
                     var routeParams = new Dictionary<string, object?>();
                     foreach (var kvp in httpContext.Request.RouteValues)
                     {
-                        // Redact sensitive route parameter values
                         var value = kvp.Value?.ToString() ?? string.Empty;
                         var redactedValue = compiledPatterns.Redact(value);
-                        
                         if (!string.Equals(redactedValue, value, StringComparison.Ordinal))
                         {
                             if (opts.EnableActivityInstrumentation)
@@ -808,22 +447,17 @@ public static class StepUpLoggingExtensions
                             }
                             RedactionCounter.Add(1);
                         }
-                        
                         routeParams[kvp.Key] = redactedValue;
                     }
                     diagnosticContext.Set("RouteParameters", routeParams);
                 }
 
-                // Log headers (with redaction of sensitive headers)
                 var headers = new Dictionary<string, object?>();
-
                 foreach (var header in httpContext.Request.Headers)
                 {
                     if (sensitiveHeaders.Contains(header.Key))
                     {
                         headers[header.Key] = "[REDACTED]";
-                        
-                        // Create activity only if redaction actually occurred
                         if (opts.EnableActivityInstrumentation)
                         {
                             using (var redactionActivity = RequestLoggingActivitySource.StartActivity("ApplyRedaction", ActivityKind.Internal))
@@ -838,8 +472,6 @@ public static class StepUpLoggingExtensions
                     {
                         var value = string.Join(", ", header.Value.Where(v => v != null) ?? Array.Empty<string>());
                         var redactedValue = compiledPatterns.Redact(value);
-                        
-                        // Create activity only if pattern-based redaction actually occurred
                         if (!string.Equals(redactedValue, value, StringComparison.Ordinal))
                         {
                             if (opts.EnableActivityInstrumentation)
@@ -852,7 +484,6 @@ public static class StepUpLoggingExtensions
                             }
                             RedactionCounter.Add(1);
                         }
-                        
                         headers[header.Key] = redactedValue;
                     }
                 }
@@ -869,11 +500,10 @@ public static class StepUpLoggingExtensions
                             var contentLength = httpContext.Request.ContentLength ?? 0;
                             var maxBytes = Math.Min(opts.MaxBodyCaptureBytes, (int)contentLength);
 
-                            // Create activity span only if there's actual content to capture
                             if (maxBytes > 0)
                             {
-                                using (opts.EnableActivityInstrumentation 
-                                    ? RequestLoggingActivitySource.StartActivity("CaptureRequestBody", ActivityKind.Internal) 
+                                using (opts.EnableActivityInstrumentation
+                                    ? RequestLoggingActivitySource.StartActivity("CaptureRequestBody", ActivityKind.Internal)
                                     : null)
                                 {
                                     var buffer = new char[maxBytes];
@@ -918,6 +548,72 @@ public static class StepUpLoggingExtensions
         return app;
     }
 
+    /// <summary>
+    /// Adds Serilog request logging middleware. Convenience overload for <see cref="WebApplication"/>.
+    /// </summary>
+    public static WebApplication UseStepUpRequestLogging(this WebApplication app)
+    {
+        ((IApplicationBuilder)app).UseStepUpRequestLogging();
+        return app;
+    }
+
+    /// <summary>
+    /// Extract the client's IP address, checking for X-Forwarded-For header (proxy-aware),
+    /// with fallback to direct connection IP.
+    /// </summary>
+    private static string? ExtractClientIp(HttpContext httpContext)
+    {
+        try
+        {
+            if (httpContext.Request.Headers.TryGetValue("X-Forwarded-For", out var forwardedFor))
+            {
+                var forwardedForValue = forwardedFor.FirstOrDefault();
+                if (!string.IsNullOrWhiteSpace(forwardedForValue))
+                {
+                    var ips = forwardedForValue.Split(',');
+                    if (ips.Length > 0)
+                    {
+                        var clientIp = ips[0].Trim();
+                        if (!string.IsNullOrWhiteSpace(clientIp))
+                        {
+                            return clientIp;
+                        }
+                    }
+                }
+            }
+
+            var remoteIp = httpContext.Connection.RemoteIpAddress?.ToString();
+            if (!string.IsNullOrWhiteSpace(remoteIp))
+            {
+                return remoteIp;
+            }
+
+            return null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Extract the User-Agent header from the request.</summary>
+    private static string? ExtractUserAgent(HttpRequest request)
+    {
+        try
+        {
+            if (request.Headers.TryGetValue("User-Agent", out var userAgentValue))
+            {
+                var userAgent = userAgentValue.FirstOrDefault();
+                return !string.IsNullOrWhiteSpace(userAgent) ? userAgent : null;
+            }
+            return null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private static bool IsOpenTelemetryRegistered(IServiceCollection services)
     {
         // OTel SDK renamed OpenTelemetrySdkHostedService to TelemetryHostedService in v1.15.0;
@@ -928,9 +624,7 @@ public static class StepUpLoggingExtensions
              || sd.ImplementationType?.FullName == "OpenTelemetry.Extensions.Hosting.TelemetryHostedService"));
     }
 
-    /// <summary>
-    /// Parse OTEL_EXPORTER_OTLP_HEADERS environment variable (format: key1=value1,key2=value2)
-    /// </summary>
+    /// <summary>Parse OTEL_EXPORTER_OTLP_HEADERS environment variable (format: key1=value1,key2=value2)</summary>
     private static Dictionary<string, string> ParseOtlpHeaders(string? headerString)
     {
         var headers = new Dictionary<string, string>();
@@ -948,9 +642,7 @@ public static class StepUpLoggingExtensions
         return headers;
     }
 
-    /// <summary>
-    /// Parse OTEL_RESOURCE_ATTRIBUTES environment variable (format: key1=value1,key2=value2)
-    /// </summary>
+    /// <summary>Parse OTEL_RESOURCE_ATTRIBUTES environment variable (format: key1=value1,key2=value2)</summary>
     private static Dictionary<string, object> ParseResourceAttributes(string? attributeString)
     {
         var attributes = new Dictionary<string, object>();
@@ -968,13 +660,12 @@ public static class StepUpLoggingExtensions
         return attributes;
     }
 
-    private static void ConfigureStepUpSinks(LoggerConfiguration lc,
+    private static void ConfigureOutputSinks(LoggerConfiguration lc,
         IHostApplicationBuilder builder,
         bool enableConsoleLogging,
         string? logFilePath,
         StepUpLoggingOptions opts)
     {
-        // Primary sink: OpenTelemetry OTLP exporter (production-ready)
         if (opts.EnableOtlpExporter)
         {
             lc.WriteTo.Async(a => a.OpenTelemetry(otlpOptions =>
@@ -1001,14 +692,11 @@ public static class StepUpLoggingExtensions
             }));
         }
 
-        // Optional: Console sink (for dev scenarios or direct console log collection)
-        // Priority: opts.EnableConsoleLogging (from options) > enableConsoleLogging (from method parameter)
         if (opts.EnableConsoleLogging || enableConsoleLogging)
         {
             lc.WriteTo.Async(a => a.Console(new CompactJsonFormatter()));
         }
 
-        // Conditionally add File sink
         if (!string.IsNullOrWhiteSpace(logFilePath))
         {
             var absolutePath = Path.IsPathRooted(logFilePath)
@@ -1021,9 +709,8 @@ public static class StepUpLoggingExtensions
                 rollingInterval: RollingInterval.Day,
                 retainedFileCountLimit: 30));
         }
-    
-        }
     }
+}
 
 internal sealed record CompiledRedactionPatterns(Regex[] Patterns)
 {
@@ -1044,4 +731,3 @@ internal sealed record CompiledRedactionPatterns(Regex[] Patterns)
         return input;
     }
 }
-

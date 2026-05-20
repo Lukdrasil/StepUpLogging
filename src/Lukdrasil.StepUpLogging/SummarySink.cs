@@ -24,7 +24,7 @@ internal sealed class SummarySink : ILogEventSink, IDisposable
 
         try
         {
-            if (logEvent.Properties.TryGetValue("IsRequestSummary", out var val))
+            if (logEvent.Properties.TryGetValue(LogProperties.IsRequestSummary, out var val))
             {
                 if (val is ScalarValue sv && sv.Value is bool b && b)
                 {

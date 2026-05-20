@@ -84,8 +84,8 @@ public sealed class StepUpLoggingController : IDisposable
         {
             var lvl = _requestSummaryLevel;
             var logger = _summaryLogger is not null
-                ? _summaryLogger.ForContext("IsRequestSummary", true)
-                : Log.ForContext("IsRequestSummary", true);
+                ? _summaryLogger.ForContext(LogProperties.IsRequestSummary, true)
+                : Log.ForContext(LogProperties.IsRequestSummary, true);
 
             if (!string.IsNullOrEmpty(queryString))
             {
