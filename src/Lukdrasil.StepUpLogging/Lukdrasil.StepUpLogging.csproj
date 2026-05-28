@@ -8,8 +8,8 @@
     <!-- Package Metadata -->
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <PackageId>Lukdrasil.StepUpLogging</PackageId>
-    <Version>1.12.1</Version>
-    <PackageReleaseNotes>Bug fix: immediate log events (LogImmediate* / BeginImmediateScope) were written twice when an error triggered a pre-error buffer flush. PreErrorBufferSink now skips buffering events tagged IsImmediate=true, since ImmediateSink already forwarded them.</PackageReleaseNotes>
+    <Version>1.13.0</Version>
+    <PackageReleaseNotes>Request log entries now include the Jti property when the authenticated identity carries a jti claim. The property is added to both the AlwaysLogRequestSummary bypass path and the Serilog request logging enrichment path. EmitRequestSummary gains an optional jti parameter for callers that pass identity context directly.</PackageReleaseNotes>
     <Authors>Lukdrasil</Authors>
     <Description>Dynamic step-up logging for ASP.NET Core with Serilog - automatically increase log verbosity when errors occur, with minimal performance overhead. Includes request body capture, sensitive data redaction, and OpenTelemetry metrics.</Description>
     <PackageTags>serilog;logging;aspnetcore;observability;otel;stepup;dynamic-logging;error-logging</PackageTags>
