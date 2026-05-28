@@ -1,4 +1,5 @@
 using System.Net.Http;
+using System.Security.Claims;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -100,6 +101,124 @@ namespace Lukdrasil.StepUpLogging.Tests
 
             Assert.NotNull(capture.LastEvent);
             Assert.True(capture.LastEvent!.Properties.ContainsKey("IsRequestSummary"));
+        }
+
+        private static IWebHostBuilder BuildHostWithSummary(CaptureSink capture, Action<HttpContext>? configureContext = null)
+        {
+            var summaryLogger = new LoggerConfiguration().WriteTo.Sink(capture).CreateLogger();
+            var builder = new WebHostBuilder()
+                .ConfigureServices(services =>
+                {
+                    var opts = new StepUpLoggingOptions { AlwaysLogRequestSummary = true, RequestSummaryLevel = "Information" };
+                    services.AddSingleton(Options.Create(opts));
+                    services.AddSingleton<Serilog.ILogger>(summaryLogger);
+                    services.AddSingleton(sp => new StepUpLoggingController(opts, summaryLogger));
+                    var patterns = opts.RedactionRegexes
+                        .Where(p => !string.IsNullOrWhiteSpace(p))
+                        .Select(p => new Regex(p, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100)))
+                        .ToArray();
+                    services.AddSingleton(new CompiledRedactionPatterns(patterns));
+                    var diagType = Type.GetType("Serilog.Extensions.Hosting.DiagnosticContext, Serilog.Extensions.Hosting")
+                                   ?? Type.GetType("Serilog.AspNetCore.DiagnosticContext, Serilog.AspNetCore");
+                    if (diagType != null)
+                    {
+                        var ctor = diagType.GetConstructors().OrderByDescending(c => c.GetParameters().Length).FirstOrDefault();
+                        object instance;
+                        if (ctor != null)
+                        {
+                            var parms = ctor.GetParameters();
+                            var args = parms.Select(p =>
+                            {
+                                if (p.ParameterType == typeof(Serilog.ILogger) || p.ParameterType.FullName == "Serilog.Core.Logger") return (object)summaryLogger;
+                                if (p.HasDefaultValue) return p.DefaultValue;
+                                return null;
+                            }).ToArray();
+                            try { instance = ctor.Invoke(args); }
+                            catch { instance = Activator.CreateInstance(diagType)!; }
+                        }
+                        else
+                        {
+                            instance = Activator.CreateInstance(diagType)!;
+                        }
+                        services.AddSingleton(diagType, instance);
+                    }
+                    else
+                    {
+                        try { services.AddSingleton<DiagnosticContext>(sp => new DiagnosticContext(summaryLogger)); } catch { }
+                    }
+                })
+                .Configure(app =>
+                {
+                    if (configureContext != null)
+                    {
+                        app.Use(async (ctx, next) =>
+                        {
+                            configureContext(ctx);
+                            await next();
+                        });
+                    }
+                    app.UseStepUpRequestLogging();
+                    app.Run(async ctx =>
+                    {
+                        ctx.Response.StatusCode = 200;
+                        await ctx.Response.WriteAsync("ok");
+                    });
+                });
+            return builder;
+        }
+
+        [Fact(DisplayName = "AlwaysLogSummary_IncludesJti_WhenJtiClaimPresent")]
+        public async Task AlwaysLogSummary_IncludesJti_WhenJtiClaimPresent()
+        {
+            var capture = new CaptureSink();
+            var builder = BuildHostWithSummary(capture, ctx =>
+            {
+                ctx.User = new ClaimsPrincipal(new ClaimsIdentity(
+                    new[] { new Claim("jti", "test-jti-abc") }, "test"));
+            });
+
+            using var server = new TestServer(builder);
+            using var client = server.CreateClient();
+            await client.GetAsync("/api/test");
+            await Task.Delay(50);
+
+            Assert.NotNull(capture.LastEvent);
+            Assert.True(capture.LastEvent!.Properties.TryGetValue("Jti", out var jtiProp));
+            Assert.Equal("\"test-jti-abc\"", jtiProp.ToString());
+        }
+
+        [Fact(DisplayName = "AlwaysLogSummary_OmitsJti_WhenNoJtiClaim")]
+        public async Task AlwaysLogSummary_OmitsJti_WhenNoJtiClaim()
+        {
+            var capture = new CaptureSink();
+            var builder = BuildHostWithSummary(capture, ctx =>
+            {
+                ctx.User = new ClaimsPrincipal(new ClaimsIdentity(
+                    new[] { new Claim("sub", "user-123") }, "test"));
+            });
+
+            using var server = new TestServer(builder);
+            using var client = server.CreateClient();
+            await client.GetAsync("/api/test");
+            await Task.Delay(50);
+
+            Assert.NotNull(capture.LastEvent);
+            Assert.False(capture.LastEvent!.Properties.ContainsKey("Jti"));
+        }
+
+        [Fact(DisplayName = "AlwaysLogSummary_OmitsJti_WhenUnauthenticated")]
+        public async Task AlwaysLogSummary_OmitsJti_WhenUnauthenticated()
+        {
+            var capture = new CaptureSink();
+            var builder = BuildHostWithSummary(capture);
+
+            using var server = new TestServer(builder);
+            using var client = server.CreateClient();
+            await client.GetAsync("/api/test");
+            await Task.Delay(50);
+
+            Assert.NotNull(capture.LastEvent);
+            Assert.False(capture.LastEvent!.Properties.ContainsKey("Jti"));
         }
     }
 }

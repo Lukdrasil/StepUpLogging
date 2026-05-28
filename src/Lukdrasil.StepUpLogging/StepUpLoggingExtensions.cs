@@ -381,6 +381,7 @@ public static class StepUpLoggingExtensions
 
                 var userAgent = ExtractUserAgent(httpContext.Request);
                 var clientIp = ExtractClientIp(httpContext);
+                var jti = httpContext.User?.FindFirst("jti")?.Value;
                 stepUpController.EmitRequestSummary(
                     httpContext.Request.Method,
                     path,
@@ -390,7 +391,8 @@ public static class StepUpLoggingExtensions
                     redactedQs,
                     routeParams,
                     userAgent,
-                    clientIp);
+                    clientIp,
+                    jti);
             });
         }
 
@@ -488,6 +490,10 @@ public static class StepUpLoggingExtensions
                     }
                 }
                 diagnosticContext.Set("Headers", headers);
+
+                var jtiClaim = httpContext.User?.FindFirst("jti")?.Value;
+                if (!string.IsNullOrEmpty(jtiClaim))
+                    diagnosticContext.Set("Jti", jtiClaim);
 
                 if (opts.CaptureRequestBody && stepUpController.IsSteppedUp)
                 {
