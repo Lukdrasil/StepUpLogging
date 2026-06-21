@@ -13,6 +13,11 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 - Avoid duplicate unmanaged Serilog logger instances by centralizing the DI-managed summary logger.
 
+## [1.13.1] - 2026-06-21
+
+### Fixed
+- AdditionalSensitiveHeaders are now matched case-insensitively. Previously the comparer was lost when copying the built-in header set, so custom sensitive headers were only redacted when their casing exactly matched the incoming request header - leaking secret values otherwise.
+
 ## [1.8.0] - 2026-03-06
 
 ### Added

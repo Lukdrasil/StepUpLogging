@@ -339,7 +339,7 @@ public static class StepUpLoggingExtensions
             .Select(p => p.TrimEnd('*').TrimEnd('/'))
             .ToArray();
 
-        var sensitiveHeaders = new HashSet<string>(BuiltInSensitiveHeaders);
+        var sensitiveHeaders = new HashSet<string>(BuiltInSensitiveHeaders, StringComparer.OrdinalIgnoreCase);
         if (opts.AdditionalSensitiveHeaders?.Length > 0)
         {
             foreach (var header in opts.AdditionalSensitiveHeaders)
