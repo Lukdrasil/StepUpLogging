@@ -155,46 +155,6 @@ public static class StepUpLoggingExtensions
             return new StepUpLoggingController(opts);
         });
 
-        // Ensure Serilog DiagnosticContext is registered so Serilog.AspNetCore's RequestLoggingMiddleware can be activated.
-        var diagTypeToResolve = Type.GetType("Serilog.Extensions.Hosting.DiagnosticContext, Serilog.Extensions.Hosting")
-                              ?? Type.GetType("Serilog.AspNetCore.DiagnosticContext, Serilog.AspNetCore");
-        if (diagTypeToResolve != null)
-        {
-            builder.Services.AddSingleton(diagTypeToResolve, sp =>
-            {
-                try
-                {
-                    var logger = sp.GetService<Serilog.ILogger>();
-                    var ctor = diagTypeToResolve.GetConstructors()
-                        .OrderByDescending(c => c.GetParameters().Length)
-                        .FirstOrDefault();
-                    if (ctor != null)
-                    {
-                        var args = ctor.GetParameters().Select(p =>
-                        {
-                            if ((p.ParameterType == typeof(Serilog.ILogger) || p.ParameterType.FullName == "Serilog.Core.Logger") && logger != null)
-                                return (object)logger;
-                            if (p.HasDefaultValue) return p.DefaultValue;
-                            return null;
-                        }).ToArray();
-
-                        if (args.Any(a => a == null))
-                        {
-                            return Activator.CreateInstance(diagTypeToResolve)!;
-                        }
-
-                        return ctor.Invoke(args);
-                    }
-
-                    return Activator.CreateInstance(diagTypeToResolve)!;
-                }
-                catch
-                {
-                    return null!;
-                }
-            });
-        }
-
         builder.Services.AddSerilog((services, lc) =>
         {
             var stepUpController = services.GetRequiredService<StepUpLoggingController>();
