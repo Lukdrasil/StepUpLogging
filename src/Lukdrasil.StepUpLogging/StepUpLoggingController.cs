@@ -47,6 +47,10 @@ public sealed class StepUpLoggingController : IDisposable
     {
     }
 
+    /// <summary>
+    /// Creates a controller with an attached summary/bypass logger. Ownership of <paramref name="summaryLogger"/>
+    /// transfers to the controller — <see cref="Dispose"/> disposes it. See <see cref="SetSummaryLogger"/>.
+    /// </summary>
     public StepUpLoggingController(StepUpLoggingOptions options, Serilog.ILogger? summaryLogger)
         : this(options, summaryLogger, Stopwatch.GetTimestamp)
     {
@@ -85,6 +89,11 @@ public sealed class StepUpLoggingController : IDisposable
     /// Attach or replace the summary/bypass logger. Useful for wiring the bypass logger after AddSerilog has
     /// created it to avoid circular DI during startup.
     /// </summary>
+    /// <remarks>
+    /// Ownership transfers to this controller: <see cref="Dispose"/> disposes the attached logger to flush its
+    /// async buffers on shutdown. Pass a logger dedicated to this controller — not a shared logger you keep using
+    /// elsewhere (e.g. <c>Log.Logger</c>), which would be disposed out from under you.
+    /// </remarks>
     public void SetSummaryLogger(Serilog.ILogger? summaryLogger)
     {
         _summaryLogger = summaryLogger;
