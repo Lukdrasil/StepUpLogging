@@ -64,7 +64,9 @@ public sealed class StepUpLoggingController : IDisposable
         _mode = options.Mode;
         _baseLevel = Parse(options.BaseLevel, LogEventLevel.Warning);
         _stepUpLevel = Parse(options.StepUpLevel, LogEventLevel.Information);
-        _duration = TimeSpan.FromSeconds(options.DurationSeconds <= 0 ? 300 : options.DurationSeconds);
+        // Single canonical default (180) matching StepUpLoggingOptions; startup validation rejects <= 0,
+        // so this guard only defends direct construction in tests (ADR 0007).
+        _duration = TimeSpan.FromSeconds(options.DurationSeconds <= 0 ? 180 : options.DurationSeconds);
         _enableActivityInstrumentation = options.EnableActivityInstrumentation;
         _summaryLogger = summaryLogger;
         _requestSummaryLevel = Parse(options.RequestSummaryLevel, LogEventLevel.Information);
