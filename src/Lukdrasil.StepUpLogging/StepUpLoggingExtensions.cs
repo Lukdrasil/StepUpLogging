@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 using Serilog.Exceptions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -410,6 +411,22 @@ public static class StepUpLoggingExtensions
             });
         }
 
+        if (opts.CaptureRequestBody)
+        {
+            // Enable request buffering BEFORE the endpoint reads the body, so the enricher can rewind
+            // and re-read it at request completion. Doing this inside the enricher (after the pipeline)
+            // was too late: the body had already been consumed from a non-buffered stream (ADR 0004).
+            app.Use(async (httpContext, next) =>
+            {
+                var method = httpContext.Request.Method;
+                if (method is "POST" or "PUT" or "PATCH")
+                {
+                    httpContext.Request.EnableBuffering();
+                }
+                await next();
+            });
+        }
+
         app.UseSerilogRequestLogging(options =>
         {
             options.EnrichDiagnosticContext = (diagnosticContext, httpContext) =>
@@ -512,32 +529,36 @@ public static class StepUpLoggingExtensions
                 if (opts.CaptureRequestBody && stepUpController.IsSteppedUp)
                 {
                     var method = httpContext.Request.Method;
-                    if (method == "POST" || method == "PUT" || method == "PATCH")
+                    // Body.CanSeek is true only when the early buffering middleware ran for this request.
+                    if ((method is "POST" or "PUT" or "PATCH") && httpContext.Request.Body.CanSeek)
                     {
                         try
                         {
-                            httpContext.Request.EnableBuffering();
-                            var contentLength = httpContext.Request.ContentLength ?? 0;
-                            var maxBytes = Math.Min(opts.MaxBodyCaptureBytes, (int)contentLength);
-
-                            if (maxBytes > 0)
+                            using (opts.EnableActivityInstrumentation
+                                ? RequestLoggingActivitySource.StartActivity("CaptureRequestBody", ActivityKind.Internal)
+                                : null)
                             {
-                                using (opts.EnableActivityInstrumentation
-                                    ? RequestLoggingActivitySource.StartActivity("CaptureRequestBody", ActivityKind.Internal)
-                                    : null)
+                                // The enricher is synchronous; Kestrel forbids sync reads by default, so opt
+                                // this request in. The body is a rewindable buffered stream at this point.
+                                var bodyControl = httpContext.Features.Get<IHttpBodyControlFeature>();
+                                if (bodyControl is not null) bodyControl.AllowSynchronousIO = true;
+
+                                httpContext.Request.Body.Position = 0;
+                                var maxBytes = opts.MaxBodyCaptureBytes;
+                                var buffer = new char[maxBytes];
+                                using var sr = new StreamReader(httpContext.Request.Body, Encoding.UTF8, true, 1024, leaveOpen: true);
+                                var read = sr.Read(buffer, 0, maxBytes);
+                                httpContext.Request.Body.Position = 0;
+
+                                if (read > 0)
                                 {
-                                    var buffer = new char[maxBytes];
-                                    using var sr = new StreamReader(httpContext.Request.Body, Encoding.UTF8, true, maxBytes, leaveOpen: true);
-                                    var read = sr.Read(buffer, 0, maxBytes);
-                                    httpContext.Request.Body.Position = 0;
-                                    var body = new string(buffer, 0, read);
-                                    diagnosticContext.Set("RequestBody", compiledPatterns.Redact(body));
+                                    diagnosticContext.Set("RequestBody", compiledPatterns.Redact(new string(buffer, 0, read)));
                                     BodyCaptureCounter.Add(1);
                                 }
-                            }
-                            else
-                            {
-                                diagnosticContext.Set("RequestBody", "[EMPTY]");
+                                else
+                                {
+                                    diagnosticContext.Set("RequestBody", "[EMPTY]");
+                                }
                             }
                         }
                         catch
