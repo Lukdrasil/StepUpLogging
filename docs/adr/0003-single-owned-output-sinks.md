@@ -26,3 +26,31 @@ create.
 - Bypass buffers flush on graceful shutdown; error/summary logs are not lost.
 - Disposal order matters: the bypass logger must outlive the sinks that write to it and be
   disposed after them. Tests assert a single exporter/handle and that dispose flushes.
+
+## Addendum (2026-07-07) — chosen implementation: minimal, low-risk
+
+The "share physical sink instances / one shared logger" option was weighed against the
+developer's overriding priority: **no unexpected change to log content**. Collapsing to one
+shared logger risks the enrichment double-apply trap (inner logger has no enrichers; bypass
+does). We therefore implement the **minimal** fix, which resolves the two concrete defects
+without touching enrichment or logger structure:
+
+1. **Dispose the bypass logger via its existing owner, the controller.** `StepUpLoggingController`
+   already holds the bypass logger (`_summaryLogger`, set by `SetSummaryLogger`), is already
+   `sealed IDisposable` (it owns the step-down `Timer`), and is already disposed by the DI
+   container at shutdown. Its `Dispose` gains one line: `(_summaryLogger as IDisposable)?.Dispose()`.
+   Because the controller singleton is registered *before* `AddSerilog`, the container disposes it
+   *after* the root Serilog logger — so the buffer/summary/immediate sinks (and
+   `PreErrorBufferSink.Dispose`'s best-effort flush *to* the bypass logger) all run first, then the
+   bypass logger is disposed, flushing its async OTLP/File buffers. This ordering is exactly what
+   the "disposal order matters" consequence requires, achieved with no new types and no
+   `IHostApplicationLifetime` wiring. (Preferred over an `ApplicationStopped` hook, which would
+   dispose the bypass logger *before* the buffer sink's dispose-time flush and lose those events.)
+2. **File sink `shared: true`.** The bypass and step-up-inner loggers may both open the same
+   file path; `shared: true` prevents the exclusive-lock self-log drop. (OTLP's two exporters are
+   left as-is — harmless duplication, and deduping them would require the risky shared-logger
+   restructure this addendum rejects.)
+
+Not done here (rejected as behavior-risky): collapsing to a single shared output logger, or
+deduping the OTLP exporter. Tests assert the bypass logger is disposed on host shutdown and that
+a File path shared by both loggers does not throw / drop.
