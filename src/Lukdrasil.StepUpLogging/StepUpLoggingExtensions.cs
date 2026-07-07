@@ -227,8 +227,10 @@ public static class StepUpLoggingExtensions
     /// </summary>
     internal static (IConfiguration Root, IConfiguration Gated) SplitSerilogConfiguration(IConfiguration appConfig)
     {
-        const string writeToPrefix = "Serilog:WriteTo";
-        const string usingPrefix = "Serilog:Using";
+        // Trailing colon so the prefix matches only the WriteTo/Using arrays themselves, never a
+        // hypothetical sibling like "Serilog:WriteToFoo".
+        const string writeToPrefix = "Serilog:WriteTo:";
+        const string usingPrefix = "Serilog:Using:";
 
         var rootPairs = new List<KeyValuePair<string, string?>>();
         var gatedPairs = new List<KeyValuePair<string, string?>>();
