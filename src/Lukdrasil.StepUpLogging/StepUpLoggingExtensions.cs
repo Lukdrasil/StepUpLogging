@@ -79,17 +79,15 @@ public static class StepUpLoggingExtensions
     /// Configuration is loaded from appsettings.json section (default: "SerilogStepUp").
     /// </summary>
     /// <param name="builder">The host application builder</param>
-    /// <param name="configureOptions">Action to configure StepUpLoggingOptions</param>
+    /// <param name="configureOptions">Action to configure StepUpLoggingOptions (enable console output via <see cref="StepUpLoggingOptions.EnableConsoleLogging"/>)</param>
     /// <param name="configSectionName">Configuration section name (default: SerilogStepUp)</param>
-    /// <param name="enableConsoleLogging">Enable console logging</param>
     /// <param name="logFilePath">Optional file path for additional file sink</param>
     public static IHostApplicationBuilder AddStepUpLogging(this IHostApplicationBuilder builder,
         Action<StepUpLoggingOptions>? configureOptions = null,
         string configSectionName = "SerilogStepUp",
-        bool enableConsoleLogging = false,
         string? logFilePath = null)
     {
-        return AddStepUpLoggingInternal(builder, configureOptions, null, configSectionName, enableConsoleLogging, logFilePath);
+        return AddStepUpLoggingInternal(builder, configureOptions, null, configSectionName, logFilePath);
     }
 
     /// <summary>
@@ -97,25 +95,22 @@ public static class StepUpLoggingExtensions
     /// Configuration is loaded from appsettings.json section (default: "SerilogStepUp").
     /// </summary>
     /// <param name="builder">The host application builder</param>
-    /// <param name="configure">Optional additional Serilog configuration</param>
+    /// <param name="configure">Optional additional Serilog configuration; receives the resolved <see cref="IServiceProvider"/> (use it to resolve <see cref="IConfiguration"/>/<see cref="IHostEnvironment"/> if needed) and the root <see cref="LoggerConfiguration"/></param>
     /// <param name="configSectionName">Configuration section name (default: SerilogStepUp)</param>
-    /// <param name="enableConsoleLogging">Enable console logging</param>
     /// <param name="logFilePath">Optional file path for additional file sink</param>
     public static IHostApplicationBuilder AddStepUpLogging(this IHostApplicationBuilder builder,
-        Action<HostBuilderContext, IServiceProvider, LoggerConfiguration>? configure,
+        Action<IServiceProvider, LoggerConfiguration>? configure,
         string configSectionName = "SerilogStepUp",
-        bool enableConsoleLogging = false,
         string? logFilePath = null)
     {
-        return AddStepUpLoggingInternal(builder, null, configure, configSectionName, enableConsoleLogging, logFilePath);
+        return AddStepUpLoggingInternal(builder, null, configure, configSectionName, logFilePath);
     }
 
     private static IHostApplicationBuilder AddStepUpLoggingInternal(
         IHostApplicationBuilder builder,
         Action<StepUpLoggingOptions>? configureOptions,
-        Action<HostBuilderContext, IServiceProvider, LoggerConfiguration>? configure,
+        Action<IServiceProvider, LoggerConfiguration>? configure,
         string configSectionName,
-        bool enableConsoleLogging,
         string? logFilePath)
     {
         var configSnapshot = new StepUpLoggingOptions();
@@ -176,7 +171,7 @@ public static class StepUpLoggingExtensions
             // Built directly here (not via DI) to avoid a circular deadlock:
             // AddSerilog registers Serilog.ILogger as a factory that depends on ILoggerFactory,
             // which in turn depends on this very callback — resolving it inside the callback deadlocks.
-            var bypassLogger = CreateBypassLogger(builder, enableConsoleLogging, logFilePath, opts);
+            var bypassLogger = CreateBypassLogger(builder, logFilePath, opts);
             try { stepUpController.SetSummaryLogger(bypassLogger); } catch { }
 
             // Step-up sink: gated by LevelSwitch, drops bypass-marked events to prevent duplication.
@@ -185,7 +180,7 @@ public static class StepUpLoggingExtensions
             // gatedConfig carries only WriteTo + Using (no MinimumLevel/Enrich), so the inner logger
             // stays Verbose and does not double-enrich (events arrive already enriched from the root).
             stepUpInnerCfg.ReadFrom.Configuration(gatedConfig);
-            ConfigureOutputSinks(stepUpInnerCfg, builder, enableConsoleLogging, logFilePath, opts);
+            ConfigureOutputSinks(stepUpInnerCfg, builder, logFilePath, opts);
             stepUpInnerCfg.MinimumLevel.Verbose();
             lc.WriteTo.Sink(new StepUpSink(stepUpInnerCfg.CreateLogger(), stepUpController.LevelSwitch));
 
@@ -204,7 +199,7 @@ public static class StepUpLoggingExtensions
             // Immediate sink: routes IsImmediate=true events to bypass logger.
             lc.WriteTo.Sink(new ImmediateSink(bypassLogger));
 
-            configure?.Invoke(new HostBuilderContext(new Dictionary<object, object>()), services, lc);
+            configure?.Invoke(services, lc);
         }, writeToProviders: false);
 
         return builder;
@@ -337,13 +332,12 @@ public static class StepUpLoggingExtensions
     /// </summary>
     private static Serilog.ILogger CreateBypassLogger(
         IHostApplicationBuilder builder,
-        bool enableConsoleLogging,
         string? logFilePath,
         StepUpLoggingOptions opts)
     {
         var cfg = new LoggerConfiguration().MinimumLevel.Verbose();
         ApplyCommonEnrichers(cfg, builder, opts);
-        ConfigureOutputSinks(cfg, builder, enableConsoleLogging, logFilePath, opts);
+        ConfigureOutputSinks(cfg, builder, logFilePath, opts);
         return cfg.CreateLogger();
     }
 
@@ -750,7 +744,6 @@ public static class StepUpLoggingExtensions
 
     private static void ConfigureOutputSinks(LoggerConfiguration lc,
         IHostApplicationBuilder builder,
-        bool enableConsoleLogging,
         string? logFilePath,
         StepUpLoggingOptions opts)
     {
@@ -780,7 +773,7 @@ public static class StepUpLoggingExtensions
             }));
         }
 
-        if (opts.EnableConsoleLogging || enableConsoleLogging)
+        if (opts.EnableConsoleLogging)
         {
             lc.WriteTo.Async(a => a.Console(new CompactJsonFormatter()));
         }
