@@ -8,8 +8,8 @@
     <!-- Package Metadata -->
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <PackageId>Lukdrasil.StepUpLogging</PackageId>
-    <Version>1.13.1</Version>
-    <PackageReleaseNotes>Fixes case-sensitive matching of AdditionalSensitiveHeaders: custom sensitive header names are now redacted regardless of the casing the client sends, matching the documented case-insensitive behavior of the built-in headers. Previously a configured header was only redacted when its casing matched the incoming request header exactly, which could leak secret header values into logs.</PackageReleaseNotes>
+    <Version>1.14.0</Version>
+    <PackageReleaseNotes>Audit fixes. Security: redaction now fails closed — a regex timeout yields [REDACTION-ERROR] instead of leaking the raw value. Correctness: step-down timer uses a generation counter + monotonic clock so a stale callback can no longer step down after a window extension; request body capture now works with endpoints that read the body (buffering is enabled before the pipeline); the request summary is emitted even when the handler throws (status 500). Reliability: PreErrorBuffer LRU is now O(1). Startup validation: invalid level strings or a non-positive DurationSeconds now fail fast (ValidateOnStart) instead of silently falling back; the DurationSeconds default is a single canonical 180. Cleanup: removed dead CallStackHelper, made per-sink meters static, dropped the unused Serilog.Expressions dependency. No public API breaking changes.</PackageReleaseNotes>
     <Authors>Lukdrasil</Authors>
     <Description>Dynamic step-up logging for ASP.NET Core with Serilog - automatically increase log verbosity when errors occur, with minimal performance overhead. Includes request body capture, sensitive data redaction, and OpenTelemetry metrics.</Description>
     <PackageTags>serilog;logging;aspnetcore;observability;otel;stepup;dynamic-logging;error-logging</PackageTags>
