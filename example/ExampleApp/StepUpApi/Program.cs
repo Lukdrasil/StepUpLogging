@@ -28,7 +28,7 @@ builder.AddStepUpLogging(opt =>
     opt.EnrichWithCallStack = true;
 });
 
-builder.Services.AddScoped<TEstService>();
+builder.Services.AddScoped<TestService>();
 var app = builder.Build();
 
 app.MapDefaultEndpoints();
@@ -53,7 +53,7 @@ var summaries = new[]
     "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
 };
 
-app.MapGet("/weatherforecast", ([FromServices] TEstService testService) =>
+app.MapGet("/weatherforecast", ([FromServices] TestService testService) =>
 {
     var forecast =  Enumerable.Range(1, 5).Select(index =>
         new WeatherForecast
