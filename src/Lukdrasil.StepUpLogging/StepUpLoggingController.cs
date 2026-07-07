@@ -277,6 +277,11 @@ public sealed class StepUpLoggingController : IDisposable
             // Dispose and null timer - prevents further scheduling
             _timer?.Dispose();
             _timer = null;
+
+            // Dispose the bypass/summary logger this controller owns, flushing its async OTLP/File
+            // buffers on shutdown. Serilog.ILogger is not itself IDisposable; the concrete Logger is.
+            (_summaryLogger as IDisposable)?.Dispose();
+            _summaryLogger = null;
         }
     }
 

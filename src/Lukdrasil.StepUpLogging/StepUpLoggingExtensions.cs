@@ -734,7 +734,8 @@ public static class StepUpLoggingExtensions
                 formatter: new CompactJsonFormatter(),
                 path: absolutePath!,
                 rollingInterval: RollingInterval.Day,
-                retainedFileCountLimit: 30));
+                retainedFileCountLimit: 30,
+                shared: true));
         }
     }
 }
