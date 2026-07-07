@@ -1,2 +1,0 @@
-cycle 1 RED: 3 disposal tests fail (controller does not dispose _summaryLogger); shared-file test green
-cycle 1 GREEN: StepUpLoggingController.Dispose disposes _summaryLogger; File sink shared:true -> 4/4 pass
