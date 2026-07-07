@@ -25,8 +25,10 @@ public sealed class StepUpLoggingController : IDisposable
     private readonly bool _enableActivityInstrumentation;
 
     private Timer? _timer;
-    private DateTime _lastTriggerTime = DateTime.MinValue;
-    private DateTime _stepUpStartTime;
+    private readonly Func<long> _clock;
+    private long _lastTriggerTimestamp;
+    private long _stepUpStartTimestamp;
+    private long _generation;
     private bool _disposed;
 
     private static readonly Meter Meter = new("StepUpLogging", "1.0.0");
@@ -46,8 +48,19 @@ public sealed class StepUpLoggingController : IDisposable
     }
 
     public StepUpLoggingController(StepUpLoggingOptions options, Serilog.ILogger? summaryLogger)
+        : this(options, summaryLogger, Stopwatch.GetTimestamp)
+    {
+    }
+
+    /// <summary>
+    /// Test-only constructor allowing a monotonic clock to be injected. The <paramref name="clock"/>
+    /// must return timestamps in <see cref="Stopwatch"/> tick units (as produced by <see cref="Stopwatch.GetTimestamp"/>).
+    /// </summary>
+    internal StepUpLoggingController(StepUpLoggingOptions options, Serilog.ILogger? summaryLogger, Func<long> clock)
     {
         ArgumentNullException.ThrowIfNull(options);
+        _clock = clock;
+        _lastTriggerTimestamp = clock();
         _mode = options.Mode;
         _baseLevel = Parse(options.BaseLevel, LogEventLevel.Warning);
         _stepUpLevel = Parse(options.StepUpLevel, LogEventLevel.Information);
@@ -145,15 +158,15 @@ public sealed class StepUpLoggingController : IDisposable
             // Fast-path: if already stepped up and recently triggered, just extend timer
             if (LevelSwitch.MinimumLevel == _stepUpLevel)
             {
-                var now = DateTime.UtcNow;
-                if (now - _lastTriggerTime < _minTriggerInterval)
+                var now = _clock();
+                if (Stopwatch.GetElapsedTime(_lastTriggerTimestamp, now) < _minTriggerInterval)
                 {
                     SkippedTriggerCounter.Add(1);
                     return;
                 }
 
-                _timer?.Change(_duration, Timeout.InfiniteTimeSpan);
-                _lastTriggerTime = now;
+                _lastTriggerTimestamp = now;
+                ArmTimer();
                 return;
             }
 
@@ -161,26 +174,31 @@ public sealed class StepUpLoggingController : IDisposable
             using (_enableActivityInstrumentation ? StepUpLoggingExtensions.ControllerActivitySource.StartActivity("TriggerStepUp", ActivityKind.Internal) : null)
             {
                 LevelSwitch.MinimumLevel = _stepUpLevel;
-                _lastTriggerTime = DateTime.UtcNow;
-                _stepUpStartTime = _lastTriggerTime;
+                _lastTriggerTimestamp = _clock();
+                _stepUpStartTimestamp = _lastTriggerTimestamp;
 
                 TriggerCounter.Add(1);
                 _activeStepUpCounter.Add(1);
 
-                Log.Warning("Logging step up: increased minimum level to {Level} for {DurationSeconds} seconds", 
+                Log.Warning("Logging step up: increased minimum level to {Level} for {DurationSeconds} seconds",
                     _stepUpLevel, (int)_duration.TotalSeconds);
 
-                // Ensure timer is created and started
-                if (_timer is null)
-                {
-                    _timer = new Timer(StepDownCallback, null, _duration, Timeout.InfiniteTimeSpan);
-                }
-                else
-                {
-                    _timer.Change(_duration, Timeout.InfiniteTimeSpan);
-                }
+                ArmTimer();
             }
         }
+    }
+
+    /// <summary>
+    /// Dispose the current step-down timer (if any) and arm a fresh one carrying the current generation
+    /// as its callback state. Must be called while holding <see cref="_gate"/>. Each arm/extend advances
+    /// <see cref="_generation"/> so that a step-down callback fired for a superseded window can be detected
+    /// and ignored, avoiding a premature or double step-down.
+    /// </summary>
+    private void ArmTimer()
+    {
+        _generation++;
+        _timer?.Dispose();
+        _timer = new Timer(StepDownCallback, _generation, _duration, Timeout.InfiniteTimeSpan);
     }
 
     /// <summary>
@@ -196,12 +214,25 @@ public sealed class StepUpLoggingController : IDisposable
                 return;
             }
 
+            // Ignore a stale callback whose window was superseded by a concurrent trigger/extend.
+            if (state is long capturedGeneration && capturedGeneration != _generation)
+            {
+                return;
+            }
+
+            // Only step down if currently stepped up; guards against a double step-down that would
+            // drive the active-state counter negative and record a bogus duration sample.
+            if (LevelSwitch.MinimumLevel != _stepUpLevel)
+            {
+                return;
+            }
+
             // Activity is only created if step down actually occurs (not when disposed)
             using (_enableActivityInstrumentation ? StepUpLoggingExtensions.ControllerActivitySource.StartActivity("PerformStepDown", ActivityKind.Internal) : null)
             {
                 LevelSwitch.MinimumLevel = _baseLevel;
 
-                var duration = (DateTime.UtcNow - _stepUpStartTime).TotalSeconds;
+                var duration = Stopwatch.GetElapsedTime(_stepUpStartTimestamp, _clock()).TotalSeconds;
                 StepUpDurationHistogram.Record(duration);
                 _activeStepUpCounter.Add(-1);
 
@@ -209,6 +240,26 @@ public sealed class StepUpLoggingController : IDisposable
             }
         }
     }
+
+    /// <summary>
+    /// Test-only accessor for the current timer generation. Reads under the lock.
+    /// </summary>
+    internal long CurrentGeneration
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _generation;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Test-only deterministic invocation of the step-down callback with a captured generation,
+    /// bypassing the real timer.
+    /// </summary>
+    internal void InvokeStepDownForTest(long capturedGeneration) => StepDownCallback(capturedGeneration);
 
     public void Dispose()
     {
