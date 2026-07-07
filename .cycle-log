@@ -1,3 +1,0 @@
-B03 cycle 1: RED - added ConfigWriteToGatingTests (split helper partition + File-sink gating end-to-end). Compile-fail (SplitSerilogConfiguration missing) = expected RED.
-B03 cycle 1: GREEN - added internal SplitSerilogConfiguration + rewired root (rootConfig) and gated inner logger (gatedConfig). 136/136 pass; Release+TWAE clean.
-B03 refactor: cleaned xUnit2012 warnings in test (Assert.DoesNotContain), dropped unused System.Linq using.
