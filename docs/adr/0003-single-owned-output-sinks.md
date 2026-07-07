@@ -39,8 +39,10 @@ without touching enrichment or logger structure:
    already holds the bypass logger (`_summaryLogger`, set by `SetSummaryLogger`), is already
    `sealed IDisposable` (it owns the step-down `Timer`), and is already disposed by the DI
    container at shutdown. Its `Dispose` gains one line: `(_summaryLogger as IDisposable)?.Dispose()`.
-   Because the controller singleton is registered *before* `AddSerilog`, the container disposes it
-   *after* the root Serilog logger — so the buffer/summary/immediate sinks (and
+   Because the controller singleton is *resolved inside the `AddSerilog` factory callback* (to set the
+   bypass logger on it), it is always created before the root Serilog logger; MS DI disposes singletons
+   in reverse *creation* order, so the container disposes the controller *after* the root logger — so the
+   buffer/summary/immediate sinks (and
    `PreErrorBufferSink.Dispose`'s best-effort flush *to* the bypass logger) all run first, then the
    bypass logger is disposed, flushing its async OTLP/File buffers. This ordering is exactly what
    the "disposal order matters" consequence requires, achieved with no new types and no
