@@ -160,7 +160,14 @@ public static class StepUpLoggingExtensions
             var stepUpController = services.GetRequiredService<StepUpLoggingController>();
             var opts = services.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
 
-            lc.ReadFrom.Configuration(builder.Configuration)
+            // Split configuration so user-declared Serilog:WriteTo sinks attach to the gated inner
+            // logger (behind the LevelSwitch) instead of the Verbose root — otherwise they would
+            // export everything at Verbose and bypass step-up entirely (ADR 0005). The root still
+            // reads MinimumLevel/Enrich/Using/etc. so the buffer/trigger sinks and enrichment are
+            // unchanged.
+            var (rootConfig, gatedConfig) = SplitSerilogConfiguration(builder.Configuration);
+
+            lc.ReadFrom.Configuration(rootConfig)
               .MinimumLevel.Verbose();
 
             ApplyCommonEnrichers(lc, builder, opts);
@@ -173,8 +180,13 @@ public static class StepUpLoggingExtensions
             try { stepUpController.SetSummaryLogger(bypassLogger); } catch { }
 
             // Step-up sink: gated by LevelSwitch, drops bypass-marked events to prevent duplication.
-            var stepUpInnerCfg = new LoggerConfiguration().MinimumLevel.Verbose();
+            var stepUpInnerCfg = new LoggerConfiguration();
+            // Config-declared WriteTo sinks join the library's own output sinks behind the LevelSwitch.
+            // gatedConfig carries only WriteTo + Using (no MinimumLevel/Enrich), so the inner logger
+            // stays Verbose and does not double-enrich (events arrive already enriched from the root).
+            stepUpInnerCfg.ReadFrom.Configuration(gatedConfig);
             ConfigureOutputSinks(stepUpInnerCfg, builder, enableConsoleLogging, logFilePath, opts);
+            stepUpInnerCfg.MinimumLevel.Verbose();
             lc.WriteTo.Sink(new StepUpSink(stepUpInnerCfg.CreateLogger(), stepUpController.LevelSwitch));
 
             // Pre-error buffer: captures all events per trace; flushes to bypass logger on Error/Fatal.
@@ -196,6 +208,55 @@ public static class StepUpLoggingExtensions
         }, writeToProviders: false);
 
         return builder;
+    }
+
+    /// <summary>
+    /// Partitions the application configuration into two Serilog views so that config-declared
+    /// <c>Serilog:WriteTo</c> sinks can be attached to the step-up-gated inner logger rather than the
+    /// Verbose root (ADR 0005).
+    /// <para>
+    /// <c>Root</c> is the app config with every <c>Serilog:WriteTo:*</c> leaf removed, so the root reader
+    /// attaches no output sinks but keeps <c>MinimumLevel</c> (incl. <c>Override</c>), <c>Enrich</c>,
+    /// <c>Using</c>, <c>Properties</c>, <c>Filter</c> and <c>Destructure</c> exactly as before.
+    /// </para>
+    /// <para>
+    /// <c>Gated</c> contains only <c>Serilog:WriteTo:*</c> and <c>Serilog:Using:*</c> leaves (Using lets
+    /// Serilog resolve the declared sink assemblies); it carries no <c>MinimumLevel</c>/<c>Enrich</c>, so
+    /// the inner logger stays Verbose and does not double-enrich.
+    /// </para>
+    /// </summary>
+    internal static (IConfiguration Root, IConfiguration Gated) SplitSerilogConfiguration(IConfiguration appConfig)
+    {
+        // Trailing colon so the prefix matches only the WriteTo/Using arrays themselves, never a
+        // hypothetical sibling like "Serilog:WriteToFoo".
+        const string writeToPrefix = "Serilog:WriteTo:";
+        const string usingPrefix = "Serilog:Using:";
+
+        var rootPairs = new List<KeyValuePair<string, string?>>();
+        var gatedPairs = new List<KeyValuePair<string, string?>>();
+
+        foreach (var kvp in appConfig.AsEnumerable())
+        {
+            // AsEnumerable() yields intermediate section nodes with null values; only leaves carry values.
+            if (kvp.Value is null) continue;
+
+            var isWriteTo = kvp.Key.StartsWith(writeToPrefix, StringComparison.OrdinalIgnoreCase);
+            var isUsing = kvp.Key.StartsWith(usingPrefix, StringComparison.OrdinalIgnoreCase);
+
+            if (!isWriteTo)
+            {
+                rootPairs.Add(kvp);
+            }
+
+            if (isWriteTo || isUsing)
+            {
+                gatedPairs.Add(kvp);
+            }
+        }
+
+        var root = new ConfigurationBuilder().AddInMemoryCollection(rootPairs).Build();
+        var gated = new ConfigurationBuilder().AddInMemoryCollection(gatedPairs).Build();
+        return (root, gated);
     }
 
     private static LogEventLevel ParseLogEventLevel(string? value, LogEventLevel fallback)
