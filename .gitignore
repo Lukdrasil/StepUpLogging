@@ -482,3 +482,9 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# Harness session working state
+.ai/
+.worktrees/
+.session-id
+.origin-branch
