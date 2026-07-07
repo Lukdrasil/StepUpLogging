@@ -79,17 +79,15 @@ public static class StepUpLoggingExtensions
     /// Configuration is loaded from appsettings.json section (default: "SerilogStepUp").
     /// </summary>
     /// <param name="builder">The host application builder</param>
-    /// <param name="configureOptions">Action to configure StepUpLoggingOptions</param>
+    /// <param name="configureOptions">Action to configure StepUpLoggingOptions (enable console output via <see cref="StepUpLoggingOptions.EnableConsoleLogging"/>)</param>
     /// <param name="configSectionName">Configuration section name (default: SerilogStepUp)</param>
-    /// <param name="enableConsoleLogging">Enable console logging</param>
     /// <param name="logFilePath">Optional file path for additional file sink</param>
     public static IHostApplicationBuilder AddStepUpLogging(this IHostApplicationBuilder builder,
         Action<StepUpLoggingOptions>? configureOptions = null,
         string configSectionName = "SerilogStepUp",
-        bool enableConsoleLogging = false,
         string? logFilePath = null)
     {
-        return AddStepUpLoggingInternal(builder, configureOptions, null, configSectionName, enableConsoleLogging, logFilePath);
+        return AddStepUpLoggingInternal(builder, configureOptions, null, configSectionName, logFilePath);
     }
 
     /// <summary>
@@ -97,25 +95,22 @@ public static class StepUpLoggingExtensions
     /// Configuration is loaded from appsettings.json section (default: "SerilogStepUp").
     /// </summary>
     /// <param name="builder">The host application builder</param>
-    /// <param name="configure">Optional additional Serilog configuration</param>
+    /// <param name="configure">Optional additional Serilog configuration; receives the resolved <see cref="IServiceProvider"/> (use it to resolve <see cref="IConfiguration"/>/<see cref="IHostEnvironment"/> if needed) and the root <see cref="LoggerConfiguration"/></param>
     /// <param name="configSectionName">Configuration section name (default: SerilogStepUp)</param>
-    /// <param name="enableConsoleLogging">Enable console logging</param>
     /// <param name="logFilePath">Optional file path for additional file sink</param>
     public static IHostApplicationBuilder AddStepUpLogging(this IHostApplicationBuilder builder,
-        Action<HostBuilderContext, IServiceProvider, LoggerConfiguration>? configure,
+        Action<IServiceProvider, LoggerConfiguration>? configure,
         string configSectionName = "SerilogStepUp",
-        bool enableConsoleLogging = false,
         string? logFilePath = null)
     {
-        return AddStepUpLoggingInternal(builder, null, configure, configSectionName, enableConsoleLogging, logFilePath);
+        return AddStepUpLoggingInternal(builder, null, configure, configSectionName, logFilePath);
     }
 
     private static IHostApplicationBuilder AddStepUpLoggingInternal(
         IHostApplicationBuilder builder,
         Action<StepUpLoggingOptions>? configureOptions,
-        Action<HostBuilderContext, IServiceProvider, LoggerConfiguration>? configure,
+        Action<IServiceProvider, LoggerConfiguration>? configure,
         string configSectionName,
-        bool enableConsoleLogging,
         string? logFilePath)
     {
         var configSnapshot = new StepUpLoggingOptions();
@@ -155,52 +150,19 @@ public static class StepUpLoggingExtensions
             return new StepUpLoggingController(opts);
         });
 
-        // Ensure Serilog DiagnosticContext is registered so Serilog.AspNetCore's RequestLoggingMiddleware can be activated.
-        var diagTypeToResolve = Type.GetType("Serilog.Extensions.Hosting.DiagnosticContext, Serilog.Extensions.Hosting")
-                              ?? Type.GetType("Serilog.AspNetCore.DiagnosticContext, Serilog.AspNetCore");
-        if (diagTypeToResolve != null)
-        {
-            builder.Services.AddSingleton(diagTypeToResolve, sp =>
-            {
-                try
-                {
-                    var logger = sp.GetService<Serilog.ILogger>();
-                    var ctor = diagTypeToResolve.GetConstructors()
-                        .OrderByDescending(c => c.GetParameters().Length)
-                        .FirstOrDefault();
-                    if (ctor != null)
-                    {
-                        var args = ctor.GetParameters().Select(p =>
-                        {
-                            if ((p.ParameterType == typeof(Serilog.ILogger) || p.ParameterType.FullName == "Serilog.Core.Logger") && logger != null)
-                                return (object)logger;
-                            if (p.HasDefaultValue) return p.DefaultValue;
-                            return null;
-                        }).ToArray();
-
-                        if (args.Any(a => a == null))
-                        {
-                            return Activator.CreateInstance(diagTypeToResolve)!;
-                        }
-
-                        return ctor.Invoke(args);
-                    }
-
-                    return Activator.CreateInstance(diagTypeToResolve)!;
-                }
-                catch
-                {
-                    return null!;
-                }
-            });
-        }
-
         builder.Services.AddSerilog((services, lc) =>
         {
             var stepUpController = services.GetRequiredService<StepUpLoggingController>();
             var opts = services.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
 
-            lc.ReadFrom.Configuration(builder.Configuration)
+            // Split configuration so user-declared Serilog:WriteTo sinks attach to the gated inner
+            // logger (behind the LevelSwitch) instead of the Verbose root — otherwise they would
+            // export everything at Verbose and bypass step-up entirely (ADR 0005). The root still
+            // reads MinimumLevel/Enrich/Using/etc. so the buffer/trigger sinks and enrichment are
+            // unchanged.
+            var (rootConfig, gatedConfig) = SplitSerilogConfiguration(builder.Configuration);
+
+            lc.ReadFrom.Configuration(rootConfig)
               .MinimumLevel.Verbose();
 
             ApplyCommonEnrichers(lc, builder, opts);
@@ -209,12 +171,17 @@ public static class StepUpLoggingExtensions
             // Built directly here (not via DI) to avoid a circular deadlock:
             // AddSerilog registers Serilog.ILogger as a factory that depends on ILoggerFactory,
             // which in turn depends on this very callback — resolving it inside the callback deadlocks.
-            var bypassLogger = CreateBypassLogger(builder, enableConsoleLogging, logFilePath, opts);
+            var bypassLogger = CreateBypassLogger(builder, logFilePath, opts);
             try { stepUpController.SetSummaryLogger(bypassLogger); } catch { }
 
             // Step-up sink: gated by LevelSwitch, drops bypass-marked events to prevent duplication.
-            var stepUpInnerCfg = new LoggerConfiguration().MinimumLevel.Verbose();
-            ConfigureOutputSinks(stepUpInnerCfg, builder, enableConsoleLogging, logFilePath, opts);
+            var stepUpInnerCfg = new LoggerConfiguration();
+            // Config-declared WriteTo sinks join the library's own output sinks behind the LevelSwitch.
+            // gatedConfig carries only WriteTo + Using (no MinimumLevel/Enrich), so the inner logger
+            // stays Verbose and does not double-enrich (events arrive already enriched from the root).
+            stepUpInnerCfg.ReadFrom.Configuration(gatedConfig);
+            ConfigureOutputSinks(stepUpInnerCfg, builder, logFilePath, opts);
+            stepUpInnerCfg.MinimumLevel.Verbose();
             lc.WriteTo.Sink(new StepUpSink(stepUpInnerCfg.CreateLogger(), stepUpController.LevelSwitch));
 
             // Pre-error buffer: captures all events per trace; flushes to bypass logger on Error/Fatal.
@@ -232,10 +199,59 @@ public static class StepUpLoggingExtensions
             // Immediate sink: routes IsImmediate=true events to bypass logger.
             lc.WriteTo.Sink(new ImmediateSink(bypassLogger));
 
-            configure?.Invoke(new HostBuilderContext(new Dictionary<object, object>()), services, lc);
+            configure?.Invoke(services, lc);
         }, writeToProviders: false);
 
         return builder;
+    }
+
+    /// <summary>
+    /// Partitions the application configuration into two Serilog views so that config-declared
+    /// <c>Serilog:WriteTo</c> sinks can be attached to the step-up-gated inner logger rather than the
+    /// Verbose root (ADR 0005).
+    /// <para>
+    /// <c>Root</c> is the app config with every <c>Serilog:WriteTo:*</c> leaf removed, so the root reader
+    /// attaches no output sinks but keeps <c>MinimumLevel</c> (incl. <c>Override</c>), <c>Enrich</c>,
+    /// <c>Using</c>, <c>Properties</c>, <c>Filter</c> and <c>Destructure</c> exactly as before.
+    /// </para>
+    /// <para>
+    /// <c>Gated</c> contains only <c>Serilog:WriteTo:*</c> and <c>Serilog:Using:*</c> leaves (Using lets
+    /// Serilog resolve the declared sink assemblies); it carries no <c>MinimumLevel</c>/<c>Enrich</c>, so
+    /// the inner logger stays Verbose and does not double-enrich.
+    /// </para>
+    /// </summary>
+    internal static (IConfiguration Root, IConfiguration Gated) SplitSerilogConfiguration(IConfiguration appConfig)
+    {
+        // Trailing colon so the prefix matches only the WriteTo/Using arrays themselves, never a
+        // hypothetical sibling like "Serilog:WriteToFoo".
+        const string writeToPrefix = "Serilog:WriteTo:";
+        const string usingPrefix = "Serilog:Using:";
+
+        var rootPairs = new List<KeyValuePair<string, string?>>();
+        var gatedPairs = new List<KeyValuePair<string, string?>>();
+
+        foreach (var kvp in appConfig.AsEnumerable())
+        {
+            // AsEnumerable() yields intermediate section nodes with null values; only leaves carry values.
+            if (kvp.Value is null) continue;
+
+            var isWriteTo = kvp.Key.StartsWith(writeToPrefix, StringComparison.OrdinalIgnoreCase);
+            var isUsing = kvp.Key.StartsWith(usingPrefix, StringComparison.OrdinalIgnoreCase);
+
+            if (!isWriteTo)
+            {
+                rootPairs.Add(kvp);
+            }
+
+            if (isWriteTo || isUsing)
+            {
+                gatedPairs.Add(kvp);
+            }
+        }
+
+        var root = new ConfigurationBuilder().AddInMemoryCollection(rootPairs).Build();
+        var gated = new ConfigurationBuilder().AddInMemoryCollection(gatedPairs).Build();
+        return (root, gated);
     }
 
     private static LogEventLevel ParseLogEventLevel(string? value, LogEventLevel fallback)
@@ -316,13 +332,12 @@ public static class StepUpLoggingExtensions
     /// </summary>
     private static Serilog.ILogger CreateBypassLogger(
         IHostApplicationBuilder builder,
-        bool enableConsoleLogging,
         string? logFilePath,
         StepUpLoggingOptions opts)
     {
         var cfg = new LoggerConfiguration().MinimumLevel.Verbose();
         ApplyCommonEnrichers(cfg, builder, opts);
-        ConfigureOutputSinks(cfg, builder, enableConsoleLogging, logFilePath, opts);
+        ConfigureOutputSinks(cfg, builder, logFilePath, opts);
         return cfg.CreateLogger();
     }
 
@@ -729,7 +744,6 @@ public static class StepUpLoggingExtensions
 
     private static void ConfigureOutputSinks(LoggerConfiguration lc,
         IHostApplicationBuilder builder,
-        bool enableConsoleLogging,
         string? logFilePath,
         StepUpLoggingOptions opts)
     {
@@ -759,7 +773,7 @@ public static class StepUpLoggingExtensions
             }));
         }
 
-        if (opts.EnableConsoleLogging || enableConsoleLogging)
+        if (opts.EnableConsoleLogging)
         {
             lc.WriteTo.Async(a => a.Console(new CompactJsonFormatter()));
         }
@@ -774,7 +788,8 @@ public static class StepUpLoggingExtensions
                 formatter: new CompactJsonFormatter(),
                 path: absolutePath!,
                 rollingInterval: RollingInterval.Day,
-                retainedFileCountLimit: 30));
+                retainedFileCountLimit: 30,
+                shared: true));
         }
     }
 }

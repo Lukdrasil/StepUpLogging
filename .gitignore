@@ -488,3 +488,6 @@ $RECYCLE.BIN/
 .worktrees/
 .session-id
 .origin-branch
+
+# block-implementer TDD scratch
+.cycle-log
