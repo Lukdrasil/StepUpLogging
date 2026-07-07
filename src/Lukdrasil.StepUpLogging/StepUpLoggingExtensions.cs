@@ -720,19 +720,24 @@ public static class StepUpLoggingExtensions
 
 internal sealed record CompiledRedactionPatterns(Regex[] Patterns)
 {
+    /// <summary>The sentinel returned in place of a value whose redaction failed, so a secret is never leaked.</summary>
+    internal const string RedactionError = "[REDACTION-ERROR]";
+
     public string Redact(string input)
     {
         if (string.IsNullOrEmpty(input) || Patterns.Length == 0) return input;
-        try
+        foreach (var pattern in Patterns)
         {
-            foreach (var pattern in Patterns)
+            try
             {
                 input = pattern.Replace(input, "[REDACTED]");
             }
-        }
-        catch
-        {
-            // fall back to original
+            catch
+            {
+                // Fail closed: a pattern that throws (e.g. RegexMatchTimeoutException) must never
+                // leak the original value. Continue with the remaining patterns on the sentinel.
+                input = RedactionError;
+            }
         }
         return input;
     }
