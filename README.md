@@ -156,6 +156,27 @@ app.Run();
 }
 ```
 
+### Production configuration via environment variables
+
+Every `SerilogStepUp` key auto-binds from an environment variable using .NET's default
+configuration provider, which maps configuration key-path segments to environment variable
+names by joining them with a double underscore (`__`). No code change is required — the
+`AddOptions<StepUpLoggingOptions>().Bind(...)` call inside `AddStepUpLogging` picks these up
+automatically, exactly like the `OTEL_*` variables documented below.
+
+This is the standard way to configure the library in Docker / Kubernetes, where you would
+otherwise not ship an `appsettings.json`:
+
+```bash
+SerilogStepUp__DurationSeconds=300
+SerilogStepUp__StepUpLevel=Debug
+SerilogStepUp__EnableConsoleLogging=true
+SerilogStepUp__CaptureRequestBody=true
+```
+
+Nested keys use the same convention (each path segment separated by `__`), e.g.
+`SerilogStepUp__ExcludePaths__0=/health`.
+
 ### Request Summary behaviour
 
 When "AlwaysLogRequestSummary" is enabled, the middleware emits a single structured summary event at the configured "RequestSummaryLevel" for every completed HTTP request. The summary contains:
