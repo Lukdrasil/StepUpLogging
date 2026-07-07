@@ -126,14 +126,14 @@ public static class StepUpLoggingExtensions
             builder.Services.AddOpenTelemetry().UseOtlpExporter();
         }
 
-        // Ensure default values are preserved when configuration section doesn't exist
-        builder.Services.AddSingleton<IOptions<StepUpLoggingOptions>>(sp =>
-        {
-            var options = new StepUpLoggingOptions();
-            builder.Configuration.GetSection(configSectionName).Bind(options);
-            configureOptions?.Invoke(options);
-            return Options.Create(options);
-        });
+        // Standard options pipeline: bind the section, apply the caller's overrides, then validate at
+        // startup so a misconfiguration (invalid level string, non-positive duration) fails fast rather
+        // than silently degrading to a fallback (ADR 0007).
+        builder.Services.AddOptions<StepUpLoggingOptions>()
+            .Bind(builder.Configuration.GetSection(configSectionName))
+            .Configure(options => configureOptions?.Invoke(options))
+            .Validate(ValidateOptions, "Invalid SerilogStepUp options: DurationSeconds must be > 0 and BaseLevel/StepUpLevel/RequestSummaryLevel must be valid Serilog levels.")
+            .ValidateOnStart();
 
         builder.Services.ConfigureOpenTelemetryMeterProvider(metrics =>
             metrics.AddStepUpLoggingMeters());
@@ -242,6 +242,20 @@ public static class StepUpLoggingExtensions
         if (string.IsNullOrWhiteSpace(value)) return fallback;
         return Enum.TryParse<LogEventLevel>(value, true, out var lvl) ? lvl : fallback;
     }
+
+    /// <summary>
+    /// Validates that <paramref name="o"/> is coherent: a positive step-up duration and level strings
+    /// that parse to a Serilog <see cref="LogEventLevel"/>. Used by the options pipeline at startup so a
+    /// typo'd level or a non-positive duration surfaces immediately instead of silently falling back.
+    /// </summary>
+    private static bool ValidateOptions(StepUpLoggingOptions o)
+        => o.DurationSeconds > 0
+           && IsValidLevel(o.BaseLevel)
+           && IsValidLevel(o.StepUpLevel)
+           && IsValidLevel(o.RequestSummaryLevel);
+
+    private static bool IsValidLevel(string? value)
+        => !string.IsNullOrWhiteSpace(value) && Enum.TryParse<LogEventLevel>(value, true, out _);
 
     /// <summary>
     /// Applies all configured enrichers to <paramref name="lc"/>. Called on both the root
