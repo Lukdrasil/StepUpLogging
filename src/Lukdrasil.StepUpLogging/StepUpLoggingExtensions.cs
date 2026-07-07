@@ -368,46 +368,66 @@ public static class StepUpLoggingExtensions
             app.Use(async (httpContext, next) =>
             {
                 var sw = Stopwatch.StartNew();
-                await next();
-                sw.Stop();
-
-                var rawPath = httpContext.Request.Path.Value ?? string.Empty;
-                var path = rawPath.Length > 1 ? rawPath.TrimEnd('/') : rawPath;
-
-                if (exclude.Contains(path) || excludePrefixes.Any(prefix => path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
+                var failed = false;
+                try
                 {
-                    return;
+                    await next();
                 }
-
-                var qs = httpContext.Request.QueryString.HasValue ? httpContext.Request.QueryString.Value! : string.Empty;
-                var redactedQs = compiledPatterns.Redact(qs);
-
-                IReadOnlyDictionary<string, object?>? routeParams = null;
-                if (httpContext.Request.RouteValues?.Count > 0)
+                catch
                 {
-                    var rp = new Dictionary<string, object?>();
-                    foreach (var kvp in httpContext.Request.RouteValues)
+                    // An unhandled exception must not swallow the request summary — the failing
+                    // requests are the ones worth summarizing. Emit with 500, then rethrow.
+                    failed = true;
+                    throw;
+                }
+                finally
+                {
+                    sw.Stop();
+
+                    var rawPath = httpContext.Request.Path.Value ?? string.Empty;
+                    var path = rawPath.Length > 1 ? rawPath.TrimEnd('/') : rawPath;
+
+                    if (!exclude.Contains(path) && !excludePrefixes.Any(prefix => path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
                     {
-                        var value = kvp.Value?.ToString() ?? string.Empty;
-                        rp[kvp.Key] = compiledPatterns.Redact(value);
-                    }
-                    routeParams = rp;
-                }
+                        try
+                        {
+                            var qs = httpContext.Request.QueryString.HasValue ? httpContext.Request.QueryString.Value! : string.Empty;
+                            var redactedQs = compiledPatterns.Redact(qs);
 
-                var userAgent = ExtractUserAgent(httpContext.Request);
-                var clientIp = ExtractClientIp(httpContext);
-                var jti = httpContext.User?.FindFirst("jti")?.Value;
-                stepUpController.EmitRequestSummary(
-                    httpContext.Request.Method,
-                    path,
-                    httpContext.Response?.StatusCode ?? 0,
-                    sw.Elapsed.TotalMilliseconds,
-                    Activity.Current?.TraceId.ToString(),
-                    redactedQs,
-                    routeParams,
-                    userAgent,
-                    clientIp,
-                    jti);
+                            IReadOnlyDictionary<string, object?>? routeParams = null;
+                            if (httpContext.Request.RouteValues?.Count > 0)
+                            {
+                                var rp = new Dictionary<string, object?>();
+                                foreach (var kvp in httpContext.Request.RouteValues)
+                                {
+                                    var value = kvp.Value?.ToString() ?? string.Empty;
+                                    rp[kvp.Key] = compiledPatterns.Redact(value);
+                                }
+                                routeParams = rp;
+                            }
+
+                            var userAgent = ExtractUserAgent(httpContext.Request);
+                            var clientIp = ExtractClientIp(httpContext);
+                            var jti = httpContext.User?.FindFirst("jti")?.Value;
+                            var statusCode = failed ? StatusCodes.Status500InternalServerError : (httpContext.Response?.StatusCode ?? 0);
+                            stepUpController.EmitRequestSummary(
+                                httpContext.Request.Method,
+                                path,
+                                statusCode,
+                                sw.Elapsed.TotalMilliseconds,
+                                Activity.Current?.TraceId.ToString(),
+                                redactedQs,
+                                routeParams,
+                                userAgent,
+                                clientIp,
+                                jti);
+                        }
+                        catch
+                        {
+                            // Never let summary emission mask the original request outcome.
+                        }
+                    }
+                }
             });
         }
 
@@ -602,6 +622,12 @@ public static class StepUpLoggingExtensions
     /// Extract the client's IP address, checking for X-Forwarded-For header (proxy-aware),
     /// with fallback to direct connection IP.
     /// </summary>
+    /// <remarks>
+    /// SECURITY: <c>X-Forwarded-For</c> is client-supplied and trivially spoofable. Only trust the logged
+    /// <c>ClientIp</c> if a trusted reverse proxy sets this header and you have configured
+    /// <c>ForwardedHeadersMiddleware</c> (which validates known proxies and populates
+    /// <c>Connection.RemoteIpAddress</c>). Without that, treat this value as untrusted.
+    /// </remarks>
     private static string? ExtractClientIp(HttpContext httpContext)
     {
         try

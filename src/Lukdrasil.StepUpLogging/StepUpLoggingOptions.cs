@@ -48,6 +48,12 @@ public sealed class StepUpLoggingOptions
     /// Regular expression patterns for redacting sensitive data in logs.
     /// Patterns are applied to query strings, headers, route parameters, and request bodies.
     /// </summary>
+    /// <remarks>
+    /// SCOPE: redaction covers request metadata (query string, headers, route values, request body) only.
+    /// It does NOT scan the rendered text of arbitrary log messages — e.g. a secret passed as a message
+    /// template argument (<c>logger.LogInformation("token={T}", secret)</c>) is not redacted. Do not log
+    /// secrets in message templates.
+    /// </remarks>
     public string[] RedactionRegexes { get; set; } = [];
 
     /// <summary>
