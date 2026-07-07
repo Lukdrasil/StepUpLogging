@@ -244,6 +244,77 @@ public class PreErrorBufferSinkTests
     }
 
     [Fact]
+    public void Error_ForUnseenContext_CreatesNoBufferAndConsumesNoLruSlot()
+    {
+        Activity.Current = null;
+        var collector = new CollectingSink();
+        var bypass = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
+        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 5, maxContexts: 16);
+        var parser = new MessageTemplateParser();
+
+        var newCtx = new[] { new LogEventProperty("TraceId", new ScalarValue("brand-new")) };
+
+        sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Error, null, parser.Parse("err"), newCtx));
+
+        Assert.Equal(0, sink.ContextCount);
+        Assert.Empty(collector.Events);
+    }
+
+    [Fact]
+    public void Buffer_LRU_EvictsLeastRecentlyTouched_KeepsRecent()
+    {
+        Activity.Current = null;
+        var collector = new CollectingSink();
+        var bypass = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
+        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 5, maxContexts: 2);
+        var parser = new MessageTemplateParser();
+
+        static LogEventProperty[] Ctx(string id) => new[] { new LogEventProperty("TraceId", new ScalarValue(id)) };
+
+        // a and b buffered
+        sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Information, null, parser.Parse("a1"), Ctx("a")));
+        sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Information, null, parser.Parse("b1"), Ctx("b")));
+
+        // Touch a again so b becomes least-recently-touched
+        sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Information, null, parser.Parse("a2"), Ctx("a")));
+
+        // Adding c exceeds maxContexts (2) → evict b (oldest touch)
+        sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Information, null, parser.Parse("c1"), Ctx("c")));
+
+        Assert.Equal(2, sink.ContextCount);
+
+        // Error on b: evicted, nothing flushes
+        sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Error, null, parser.Parse("err-b"), Ctx("b")));
+        Assert.Empty(collector.Events);
+
+        // Error on a: survived, both a1 and a2 flush
+        sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Error, null, parser.Parse("err-a"), Ctx("a")));
+        Assert.Collection(collector.Events,
+            e => Assert.Equal("a1", e.MessageTemplate.Text),
+            e => Assert.Equal("a2", e.MessageTemplate.Text));
+    }
+
+    [Fact]
+    public void Buffer_ThenErrorSameContext_StillFlushes()
+    {
+        Activity.Current = null;
+        var collector = new CollectingSink();
+        var bypass = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
+        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 10, maxContexts: 16);
+        var parser = new MessageTemplateParser();
+
+        var ctx = new[] { new LogEventProperty("TraceId", new ScalarValue("same")) };
+
+        sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Debug, null, parser.Parse("d1"), ctx));
+        sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Information, null, parser.Parse("i1"), ctx));
+        sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Error, null, parser.Parse("err"), ctx));
+
+        Assert.Collection(collector.Events,
+            e => Assert.Equal("d1", e.MessageTemplate.Text),
+            e => Assert.Equal("i1", e.MessageTemplate.Text));
+    }
+
+    [Fact]
     public void Buffer_WhitespaceTraceIdProperty_FallsBackToGlobalKey()
     {
         Activity.Current = null;

@@ -28,7 +28,11 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
     private readonly ConcurrentDictionary<string, Buffer> _buffers = new();
     private readonly object _lruGate = new();
     private readonly LinkedList<string> _lru = new();
+    private readonly Dictionary<string, LinkedListNode<string>> _lruNodes = new();
     private bool _disposed;
+
+    /// <summary>Number of live per-context buffers. Exposed for tests.</summary>
+    internal int ContextCount => _buffers.Count;
 
     private static readonly Meter Meter = new("StepUpLogging.Buffer", "1.0.0");
     private static readonly Counter<long> BufferedEventsCounter = Meter.CreateCounter<long>("buffer_events_total", unit: "count", description: "Total number of events buffered");
@@ -99,16 +103,19 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
         }
 
         var key = GetContextKey(logEvent);
-        var buffer = GetOrCreateBuffer(key);
 
         if (logEvent.Level >= LogEventLevel.Error)
         {
-            // Flush buffered events first (do not re-emit the triggering error to avoid duplication)
-            var flushed = buffer.FlushTo(_bypassLogger);
-            if (flushed > 0)
+            // Flush only an EXISTING buffer; never allocate a buffer (or an LRU slot) for
+            // an error in a context we have never buffered — there is nothing to flush.
+            if (_buffers.TryGetValue(key, out var existing))
             {
-                FlushCounter.Add(1);
-                FlushedEventsCounter.Add(flushed);
+                var flushed = existing.FlushTo(_bypassLogger);
+                if (flushed > 0)
+                {
+                    FlushCounter.Add(1);
+                    FlushedEventsCounter.Add(flushed);
+                }
             }
 
             // No buffering of the error event itself
@@ -119,19 +126,14 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
         if (LogProperties.HasFlag(logEvent, LogProperties.IsImmediate))
             return;
 
+        var buffer = GetOrCreateBuffer(key);
         buffer.Enqueue(logEvent);
         BufferedEventsCounter.Add(1);
     }
 
     private Buffer GetOrCreateBuffer(string key)
     {
-        var buffer = _buffers.GetOrAdd(key, _ =>
-        {
-            var b = new Buffer(_capacityPerContext);
-            TrackLruFor(key);
-            return b;
-        });
-
+        var buffer = _buffers.GetOrAdd(key, static (_, capacity) => new Buffer(capacity), _capacityPerContext);
         TrackLruFor(key);
         return buffer;
     }
@@ -140,21 +142,25 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
     {
         lock (_lruGate)
         {
-            // Move key to front
-            var node = _lru.Find(key);
-            if (node is not null)
+            // O(1) move-to-front via the node index.
+            if (_lruNodes.TryGetValue(key, out var node))
             {
                 _lru.Remove(node);
+                _lru.AddFirst(node);
             }
-            _lru.AddFirst(key);
+            else
+            {
+                _lruNodes[key] = _lru.AddFirst(key);
+            }
 
-            // Enforce max contexts, evicting oldest first
+            // Enforce max contexts, evicting least-recently-touched first.
             while (_lru.Count > _maxContexts)
             {
                 var last = _lru.Last;
                 if (last is not null)
                 {
                     _lru.RemoveLast();
+                    _lruNodes.Remove(last.Value);
                     if (_buffers.TryRemove(last.Value, out _))
                     {
                         EvictedContextsCounter.Add(1);
@@ -204,6 +210,7 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
             }
             _buffers.Clear();
             _lru.Clear();
+            _lruNodes.Clear();
         }
     }
 }

@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 using Serilog.Exceptions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -126,14 +127,14 @@ public static class StepUpLoggingExtensions
             builder.Services.AddOpenTelemetry().UseOtlpExporter();
         }
 
-        // Ensure default values are preserved when configuration section doesn't exist
-        builder.Services.AddSingleton<IOptions<StepUpLoggingOptions>>(sp =>
-        {
-            var options = new StepUpLoggingOptions();
-            builder.Configuration.GetSection(configSectionName).Bind(options);
-            configureOptions?.Invoke(options);
-            return Options.Create(options);
-        });
+        // Standard options pipeline: bind the section, apply the caller's overrides, then validate at
+        // startup so a misconfiguration (invalid level string, non-positive duration) fails fast rather
+        // than silently degrading to a fallback (ADR 0007).
+        builder.Services.AddOptions<StepUpLoggingOptions>()
+            .Bind(builder.Configuration.GetSection(configSectionName))
+            .Configure(options => configureOptions?.Invoke(options))
+            .Validate(ValidateOptions, "Invalid SerilogStepUp options: DurationSeconds must be > 0 and BaseLevel/StepUpLevel/RequestSummaryLevel must be valid Serilog levels.")
+            .ValidateOnStart();
 
         builder.Services.ConfigureOpenTelemetryMeterProvider(metrics =>
             metrics.AddStepUpLoggingMeters());
@@ -242,6 +243,20 @@ public static class StepUpLoggingExtensions
         if (string.IsNullOrWhiteSpace(value)) return fallback;
         return Enum.TryParse<LogEventLevel>(value, true, out var lvl) ? lvl : fallback;
     }
+
+    /// <summary>
+    /// Validates that <paramref name="o"/> is coherent: a positive step-up duration and level strings
+    /// that parse to a Serilog <see cref="LogEventLevel"/>. Used by the options pipeline at startup so a
+    /// typo'd level or a non-positive duration surfaces immediately instead of silently falling back.
+    /// </summary>
+    private static bool ValidateOptions(StepUpLoggingOptions o)
+        => o.DurationSeconds > 0
+           && IsValidLevel(o.BaseLevel)
+           && IsValidLevel(o.StepUpLevel)
+           && IsValidLevel(o.RequestSummaryLevel);
+
+    private static bool IsValidLevel(string? value)
+        => !string.IsNullOrWhiteSpace(value) && Enum.TryParse<LogEventLevel>(value, true, out _);
 
     /// <summary>
     /// Applies all configured enrichers to <paramref name="lc"/>. Called on both the root
@@ -353,46 +368,82 @@ public static class StepUpLoggingExtensions
             app.Use(async (httpContext, next) =>
             {
                 var sw = Stopwatch.StartNew();
-                await next();
-                sw.Stop();
-
-                var rawPath = httpContext.Request.Path.Value ?? string.Empty;
-                var path = rawPath.Length > 1 ? rawPath.TrimEnd('/') : rawPath;
-
-                if (exclude.Contains(path) || excludePrefixes.Any(prefix => path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
+                var failed = false;
+                try
                 {
-                    return;
+                    await next();
                 }
-
-                var qs = httpContext.Request.QueryString.HasValue ? httpContext.Request.QueryString.Value! : string.Empty;
-                var redactedQs = compiledPatterns.Redact(qs);
-
-                IReadOnlyDictionary<string, object?>? routeParams = null;
-                if (httpContext.Request.RouteValues?.Count > 0)
+                catch
                 {
-                    var rp = new Dictionary<string, object?>();
-                    foreach (var kvp in httpContext.Request.RouteValues)
+                    // An unhandled exception must not swallow the request summary — the failing
+                    // requests are the ones worth summarizing. Emit with 500, then rethrow.
+                    failed = true;
+                    throw;
+                }
+                finally
+                {
+                    sw.Stop();
+
+                    var rawPath = httpContext.Request.Path.Value ?? string.Empty;
+                    var path = rawPath.Length > 1 ? rawPath.TrimEnd('/') : rawPath;
+
+                    if (!exclude.Contains(path) && !excludePrefixes.Any(prefix => path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
                     {
-                        var value = kvp.Value?.ToString() ?? string.Empty;
-                        rp[kvp.Key] = compiledPatterns.Redact(value);
-                    }
-                    routeParams = rp;
-                }
+                        try
+                        {
+                            var qs = httpContext.Request.QueryString.HasValue ? httpContext.Request.QueryString.Value! : string.Empty;
+                            var redactedQs = compiledPatterns.Redact(qs);
 
-                var userAgent = ExtractUserAgent(httpContext.Request);
-                var clientIp = ExtractClientIp(httpContext);
-                var jti = httpContext.User?.FindFirst("jti")?.Value;
-                stepUpController.EmitRequestSummary(
-                    httpContext.Request.Method,
-                    path,
-                    httpContext.Response?.StatusCode ?? 0,
-                    sw.Elapsed.TotalMilliseconds,
-                    Activity.Current?.TraceId.ToString(),
-                    redactedQs,
-                    routeParams,
-                    userAgent,
-                    clientIp,
-                    jti);
+                            IReadOnlyDictionary<string, object?>? routeParams = null;
+                            if (httpContext.Request.RouteValues?.Count > 0)
+                            {
+                                var rp = new Dictionary<string, object?>();
+                                foreach (var kvp in httpContext.Request.RouteValues)
+                                {
+                                    var value = kvp.Value?.ToString() ?? string.Empty;
+                                    rp[kvp.Key] = compiledPatterns.Redact(value);
+                                }
+                                routeParams = rp;
+                            }
+
+                            var userAgent = ExtractUserAgent(httpContext.Request);
+                            var clientIp = ExtractClientIp(httpContext);
+                            var jti = httpContext.User?.FindFirst("jti")?.Value;
+                            var statusCode = failed ? StatusCodes.Status500InternalServerError : (httpContext.Response?.StatusCode ?? 0);
+                            stepUpController.EmitRequestSummary(
+                                httpContext.Request.Method,
+                                path,
+                                statusCode,
+                                sw.Elapsed.TotalMilliseconds,
+                                Activity.Current?.TraceId.ToString(),
+                                redactedQs,
+                                routeParams,
+                                userAgent,
+                                clientIp,
+                                jti);
+                        }
+                        catch
+                        {
+                            // Never let summary emission mask the original request outcome.
+                        }
+                    }
+                }
+            });
+        }
+
+        if (opts.CaptureRequestBody)
+        {
+            // Enable request buffering BEFORE the endpoint reads the body, so the enricher can rewind
+            // and re-read it at request completion. Doing this inside the enricher (after the pipeline)
+            // was too late: the body had already been consumed from a non-buffered stream (ADR 0004).
+            app.Use(async (httpContext, next) =>
+            {
+                var method = httpContext.Request.Method;
+                if (method is "POST" or "PUT" or "PATCH")
+                {
+                    httpContext.Request.EnableBuffering();
+                }
+                await next();
             });
         }
 
@@ -498,32 +549,36 @@ public static class StepUpLoggingExtensions
                 if (opts.CaptureRequestBody && stepUpController.IsSteppedUp)
                 {
                     var method = httpContext.Request.Method;
-                    if (method == "POST" || method == "PUT" || method == "PATCH")
+                    // Body.CanSeek is true only when the early buffering middleware ran for this request.
+                    if ((method is "POST" or "PUT" or "PATCH") && httpContext.Request.Body.CanSeek)
                     {
                         try
                         {
-                            httpContext.Request.EnableBuffering();
-                            var contentLength = httpContext.Request.ContentLength ?? 0;
-                            var maxBytes = Math.Min(opts.MaxBodyCaptureBytes, (int)contentLength);
-
-                            if (maxBytes > 0)
+                            using (opts.EnableActivityInstrumentation
+                                ? RequestLoggingActivitySource.StartActivity("CaptureRequestBody", ActivityKind.Internal)
+                                : null)
                             {
-                                using (opts.EnableActivityInstrumentation
-                                    ? RequestLoggingActivitySource.StartActivity("CaptureRequestBody", ActivityKind.Internal)
-                                    : null)
+                                // The enricher is synchronous; Kestrel forbids sync reads by default, so opt
+                                // this request in. The body is a rewindable buffered stream at this point.
+                                var bodyControl = httpContext.Features.Get<IHttpBodyControlFeature>();
+                                if (bodyControl is not null) bodyControl.AllowSynchronousIO = true;
+
+                                httpContext.Request.Body.Position = 0;
+                                var maxBytes = opts.MaxBodyCaptureBytes;
+                                var buffer = new char[maxBytes];
+                                using var sr = new StreamReader(httpContext.Request.Body, Encoding.UTF8, true, 1024, leaveOpen: true);
+                                var read = sr.Read(buffer, 0, maxBytes);
+                                httpContext.Request.Body.Position = 0;
+
+                                if (read > 0)
                                 {
-                                    var buffer = new char[maxBytes];
-                                    using var sr = new StreamReader(httpContext.Request.Body, Encoding.UTF8, true, maxBytes, leaveOpen: true);
-                                    var read = sr.Read(buffer, 0, maxBytes);
-                                    httpContext.Request.Body.Position = 0;
-                                    var body = new string(buffer, 0, read);
-                                    diagnosticContext.Set("RequestBody", compiledPatterns.Redact(body));
+                                    diagnosticContext.Set("RequestBody", compiledPatterns.Redact(new string(buffer, 0, read)));
                                     BodyCaptureCounter.Add(1);
                                 }
-                            }
-                            else
-                            {
-                                diagnosticContext.Set("RequestBody", "[EMPTY]");
+                                else
+                                {
+                                    diagnosticContext.Set("RequestBody", "[EMPTY]");
+                                }
                             }
                         }
                         catch
@@ -567,6 +622,12 @@ public static class StepUpLoggingExtensions
     /// Extract the client's IP address, checking for X-Forwarded-For header (proxy-aware),
     /// with fallback to direct connection IP.
     /// </summary>
+    /// <remarks>
+    /// SECURITY: <c>X-Forwarded-For</c> is client-supplied and trivially spoofable. Only trust the logged
+    /// <c>ClientIp</c> if a trusted reverse proxy sets this header and you have configured
+    /// <c>ForwardedHeadersMiddleware</c> (which validates known proxies and populates
+    /// <c>Connection.RemoteIpAddress</c>). Without that, treat this value as untrusted.
+    /// </remarks>
     private static string? ExtractClientIp(HttpContext httpContext)
     {
         try
@@ -720,19 +781,24 @@ public static class StepUpLoggingExtensions
 
 internal sealed record CompiledRedactionPatterns(Regex[] Patterns)
 {
+    /// <summary>The sentinel returned in place of a value whose redaction failed, so a secret is never leaked.</summary>
+    internal const string RedactionError = "[REDACTION-ERROR]";
+
     public string Redact(string input)
     {
         if (string.IsNullOrEmpty(input) || Patterns.Length == 0) return input;
-        try
+        foreach (var pattern in Patterns)
         {
-            foreach (var pattern in Patterns)
+            try
             {
                 input = pattern.Replace(input, "[REDACTED]");
             }
-        }
-        catch
-        {
-            // fall back to original
+            catch
+            {
+                // Fail closed: a pattern that throws (e.g. RegexMatchTimeoutException) must never
+                // leak the original value. Continue with the remaining patterns on the sentinel.
+                input = RedactionError;
+            }
         }
         return input;
     }

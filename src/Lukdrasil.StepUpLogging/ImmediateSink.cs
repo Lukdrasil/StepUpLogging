@@ -11,15 +11,17 @@ namespace Lukdrasil.StepUpLogging;
 /// </summary>
 internal sealed class ImmediateSink : ILogEventSink, IDisposable
 {
+    // Static so the meter is created once for the process, not per sink instance (which leaked an
+    // undisposed Meter on every pipeline rebuild).
+    private static readonly Meter Meter = new("StepUpLogging.Immediate", "1.0.0");
+    private static readonly Counter<long> ProcessedCounter = Meter.CreateCounter<long>("immediate_processed_total", "count", "Number of immediate log events forwarded");
+
     private readonly Serilog.ILogger _target;
-    private readonly Counter<long> _processed;
     private bool _disposed;
 
     public ImmediateSink(Serilog.ILogger target)
     {
         _target = target ?? throw new ArgumentNullException(nameof(target));
-        var meter = new Meter("StepUpLogging.Immediate", "1.0.0");
-        _processed = meter.CreateCounter<long>("immediate_processed_total", "count", "Number of immediate log events forwarded");
     }
 
     public void Emit(LogEvent logEvent)
@@ -31,7 +33,7 @@ internal sealed class ImmediateSink : ILogEventSink, IDisposable
             if (LogProperties.HasFlag(logEvent, LogProperties.IsImmediate))
             {
                 _target.Write(logEvent);
-                _processed.Add(1);
+                ProcessedCounter.Add(1);
             }
         }
         catch
