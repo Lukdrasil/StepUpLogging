@@ -186,7 +186,7 @@ public static class StepUpLoggingExtensions
                 stepUpInnerCfg.CreateLogger(),
                 stepUpController.LevelSwitch,
                 stepUpController.BaseLevel,
-                []));
+                [])); // deny-list wiring lands in B03 (ADR 0008)
 
             // Pre-error buffer: captures all events per trace; flushes to bypass logger on Error/Fatal.
             if (opts.EnablePreErrorBuffering)
