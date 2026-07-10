@@ -113,4 +113,12 @@ public class OptionsValidationTests
         Assert.Equal(180, opts.DurationSeconds);
         Assert.Equal("Warning", opts.BaseLevel);
     }
+
+    [Fact]
+    public void NeverStepUpCategories_DefaultsToEfDatabaseCommand()
+    {
+        Assert.Equal(
+            new[] { "Microsoft.EntityFrameworkCore.Database.Command" },
+            new StepUpLoggingOptions().NeverStepUpCategories);
+    }
 }

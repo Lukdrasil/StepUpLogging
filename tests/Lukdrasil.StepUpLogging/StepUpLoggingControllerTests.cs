@@ -70,5 +70,21 @@ namespace Lukdrasil.StepUpLogging.Tests
             Assert.False(sink.LastEvent!.Properties.ContainsKey("UserAgent"));
             Assert.False(sink.LastEvent.Properties.ContainsKey("ClientIp"));
         }
+
+        [Fact(DisplayName = "BaseLevel_DefaultOptions_IsWarning")]
+        public void BaseLevel_DefaultOptions_IsWarning()
+        {
+            var controller = new StepUpLoggingController(new StepUpLoggingOptions());
+
+            Assert.Equal(LogEventLevel.Warning, controller.BaseLevel);
+        }
+
+        [Fact(DisplayName = "BaseLevel_ReflectsConfiguredBaseLevelString")]
+        public void BaseLevel_ReflectsConfiguredBaseLevelString()
+        {
+            var controller = new StepUpLoggingController(new StepUpLoggingOptions { BaseLevel = "Error" });
+
+            Assert.Equal(LogEventLevel.Error, controller.BaseLevel);
+        }
     }
 }
