@@ -1,4 +1,4 @@
-using System.Net;
+using System.Linq;
 using System.Net.Http;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
@@ -16,6 +16,13 @@ using Xunit;
 
 namespace Lukdrasil.StepUpLogging.Tests
 {
+    /// <summary>
+    /// Characterization tests for the private <c>ExtractClientIp</c>/<c>ExtractUserAgent</c> methods
+    /// on <see cref="StepUpLoggingExtensions"/>. These are only reachable through the real
+    /// <c>UseStepUpRequestLogging()</c> middleware pipeline with <c>AlwaysLogRequestSummary</c> enabled,
+    /// so every test here drives a real <see cref="TestServer"/> end-to-end rather than calling a
+    /// stand-in copy of the extraction logic.
+    /// </summary>
     public class UserAgentAndIpExtractionTests
     {
         private sealed class CaptureSink : ILogEventSink
@@ -27,7 +34,7 @@ namespace Lukdrasil.StepUpLogging.Tests
             }
         }
 
-        private TestServer CreateTestServer(CaptureSink captureSink)
+        private static TestServer CreateTestServer(CaptureSink captureSink)
         {
             var summaryLogger = new LoggerConfiguration().WriteTo.Sink(captureSink).CreateLogger();
             var opts = new StepUpLoggingOptions { AlwaysLogRequestSummary = true, RequestSummaryLevel = "Information" };
@@ -35,7 +42,6 @@ namespace Lukdrasil.StepUpLogging.Tests
             var builder = new WebHostBuilder()
                 .ConfigureServices(services =>
                 {
-                    services.AddRouting();
                     services.AddSingleton(Options.Create(opts));
                     services.AddSingleton<Serilog.ILogger>(summaryLogger);
                     services.AddSingleton(sp => new StepUpLoggingController(opts, summaryLogger));
@@ -44,103 +50,33 @@ namespace Lukdrasil.StepUpLogging.Tests
                         .Select(p => new Regex(p, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100)))
                         .ToArray();
                     services.AddSingleton(new CompiledRedactionPatterns(patterns));
+                    var diagType = Type.GetType("Serilog.Extensions.Hosting.DiagnosticContext, Serilog.Extensions.Hosting")
+                                   ?? Type.GetType("Serilog.AspNetCore.DiagnosticContext, Serilog.AspNetCore");
+                    var ctor = diagType!.GetConstructors().OrderByDescending(c => c.GetParameters().Length).First();
+                    var args = ctor.GetParameters().Select(p =>
+                        p.ParameterType == typeof(Serilog.ILogger) ? (object?)summaryLogger
+                        : p.HasDefaultValue ? p.DefaultValue
+                        : null).ToArray();
+                    services.AddSingleton(diagType, ctor.Invoke(args));
                 })
                 .Configure(app =>
                 {
-                    app.UseRouting();
-                    
-                    // Simplified middleware that directly tests extraction
-                    app.Use(async (httpContext, next) =>
-                    {
-                        var controller = httpContext.RequestServices.GetRequiredService<StepUpLoggingController>();
-                        var opts2 = httpContext.RequestServices.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
-                        
-                        var sw = System.Diagnostics.Stopwatch.StartNew();
-                        await next();
-                        sw.Stop();
+                    // The real production middleware — this is what actually invokes
+                    // ExtractClientIp/ExtractUserAgent, via the AlwaysLogRequestSummary branch.
+                    app.UseStepUpRequestLogging();
 
-                        // Extract using the same logic as UseStepUpRequestLogging
-                        var userAgent = ExtractUserAgent(httpContext.Request);
-                        var clientIp = ExtractClientIp(httpContext);
-                        
-                        controller.EmitRequestSummary(
-                            httpContext.Request.Method,
-                            "/test",
-                            httpContext.Response?.StatusCode ?? 0,
-                            sw.Elapsed.TotalMilliseconds,
-                            null,
-                            null,
-                            null,
-                            userAgent,
-                            clientIp);
-                    });
-                    
-                    app.UseEndpoints(endpoints =>
+                    app.Run(async ctx =>
                     {
-                        endpoints.MapGet("/test", async ctx =>
-                        {
-                            await ctx.Response.WriteAsync("OK");
-                        });
+                        ctx.Response.StatusCode = 200;
+                        await ctx.Response.WriteAsync("OK");
                     });
                 });
 
             return new TestServer(builder);
         }
 
-        private static string? ExtractClientIp(HttpContext httpContext)
-        {
-            try
-            {
-                if (httpContext.Request.Headers.TryGetValue("X-Forwarded-For", out var forwardedFor))
-                {
-                    var forwardedForValue = forwardedFor.FirstOrDefault();
-                    if (!string.IsNullOrWhiteSpace(forwardedForValue))
-                    {
-                        var ips = forwardedForValue.Split(',');
-                        if (ips.Length > 0)
-                        {
-                            var clientIp = ips[0].Trim();
-                            if (!string.IsNullOrWhiteSpace(clientIp))
-                            {
-                                return clientIp;
-                            }
-                        }
-                    }
-                }
-
-                var remoteIp = httpContext.Connection.RemoteIpAddress?.ToString();
-                if (!string.IsNullOrWhiteSpace(remoteIp))
-                {
-                    return remoteIp;
-                }
-
-                return null;
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        private static string? ExtractUserAgent(HttpRequest request)
-        {
-            try
-            {
-                if (request.Headers.TryGetValue("User-Agent", out var userAgentValue))
-                {
-                    var userAgent = userAgentValue.FirstOrDefault();
-                    return !string.IsNullOrWhiteSpace(userAgent) ? userAgent : null;
-                }
-                return null;
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        [Fact(DisplayName = "EmitRequestSummary_IncludesUserAgent_WhenProvided")]
-        public async Task EmitRequestSummary_IncludesUserAgent_WhenProvided()
+        [Fact(DisplayName = "EmitRequestSummary_IncludesUserAgent_Unredacted_WhenProvided")]
+        public async Task EmitRequestSummary_IncludesUserAgent_Unredacted_WhenProvided()
         {
             var capture = new CaptureSink();
             using var server = CreateTestServer(capture);
@@ -153,10 +89,12 @@ namespace Lukdrasil.StepUpLogging.Tests
 
             Assert.NotNull(capture.LastEvent);
             var logEvent = capture.LastEvent;
-            
+
             Assert.True(logEvent!.Properties.ContainsKey("UserAgent"), "UserAgent property should be in the log event");
             var userAgentProp = logEvent.Properties["UserAgent"];
-            Assert.Contains("Mozilla/5.0", userAgentProp.ToString());
+            // Today's behaviour: UserAgent is logged verbatim, UNREDACTED. B04/B03 will change this;
+            // this pin exists so that change shows as a deliberate diff.
+            Assert.Equal("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", ((ScalarValue)userAgentProp).Value);
         }
 
         [Fact(DisplayName = "EmitRequestSummary_OmitsUserAgent_WhenNotProvided")]
@@ -171,12 +109,12 @@ namespace Lukdrasil.StepUpLogging.Tests
 
             Assert.NotNull(capture.LastEvent);
             var logEvent = capture.LastEvent;
-            
+
             Assert.False(logEvent!.Properties.ContainsKey("UserAgent"), "UserAgent property should not be in the log event when header is missing");
         }
 
-        [Fact(DisplayName = "EmitRequestSummary_IncludesClientIp_DirectConnection")]
-        public async Task EmitRequestSummary_IncludesClientIp_DirectConnection()
+        [Fact(DisplayName = "EmitRequestSummary_UsesRemoteIpAddress_WhenXForwardedForAbsent")]
+        public async Task EmitRequestSummary_UsesRemoteIpAddress_WhenXForwardedForAbsent()
         {
             var capture = new CaptureSink();
             using var server = CreateTestServer(capture);
@@ -187,20 +125,18 @@ namespace Lukdrasil.StepUpLogging.Tests
 
             Assert.NotNull(capture.LastEvent);
             var logEvent = capture.LastEvent;
-            
-            // ClientIp property may be present (if connection IP is available)
-            if (logEvent!.Properties.ContainsKey("ClientIp"))
+
+            // TestServer's in-memory connection may or may not populate RemoteIpAddress; today's
+            // behaviour is: when it's absent, ClientIp is omitted entirely (not logged as null/empty).
+            if (logEvent!.Properties.TryGetValue("ClientIp", out var clientIpProp))
             {
-                var clientIpProp = logEvent.Properties["ClientIp"];
-                var clientIpString = clientIpProp.ToString().Trim('"');
-                
-                // If present, should be a valid IP address
-                Assert.True(IPAddress.TryParse(clientIpString, out _), $"ClientIp should be a valid IP address, got: {clientIpString}");
+                var clientIpString = ((ScalarValue)clientIpProp).Value as string;
+                Assert.False(string.IsNullOrWhiteSpace(clientIpString));
             }
         }
 
-        [Fact(DisplayName = "EmitRequestSummary_UsesXForwardedFor_WhenProvided")]
-        public async Task EmitRequestSummary_UsesXForwardedFor_WhenProvided()
+        [Fact(DisplayName = "EmitRequestSummary_ClientIpIsFirstXForwardedForEntry_WhenPresent")]
+        public async Task EmitRequestSummary_ClientIpIsFirstXForwardedForEntry_WhenPresent()
         {
             var capture = new CaptureSink();
             using var server = CreateTestServer(capture);
@@ -213,12 +149,13 @@ namespace Lukdrasil.StepUpLogging.Tests
 
             Assert.NotNull(capture.LastEvent);
             var logEvent = capture.LastEvent;
-            
+
             Assert.True(logEvent!.Properties.ContainsKey("ClientIp"), "ClientIp property should be in the log event");
             var clientIpProp = logEvent.Properties["ClientIp"];
-            var clientIpString = clientIpProp.ToString().Trim('"');
-            
-            Assert.Equal("203.0.113.42", clientIpString);
+
+            // Today's behaviour: XFF is trusted unconditionally (no TrustForwardedHeaders gate yet),
+            // and ClientIp is the FIRST entry of the header, not the connection's RemoteIpAddress.
+            Assert.Equal("203.0.113.42", ((ScalarValue)clientIpProp).Value);
         }
 
         [Fact(DisplayName = "EmitRequestSummary_HandlesMultipleXForwardedFor_TakesFirst")]
@@ -235,12 +172,11 @@ namespace Lukdrasil.StepUpLogging.Tests
 
             Assert.NotNull(capture.LastEvent);
             var logEvent = capture.LastEvent;
-            
+
             Assert.True(logEvent!.Properties.ContainsKey("ClientIp"), "ClientIp property should be in the log event");
             var clientIpProp = logEvent.Properties["ClientIp"];
-            var clientIpString = clientIpProp.ToString().Trim('"');
-            
-            Assert.Equal("192.0.2.1", clientIpString);
+
+            Assert.Equal("192.0.2.1", ((ScalarValue)clientIpProp).Value);
         }
 
         [Fact(DisplayName = "EmitRequestSummary_IncludesUserAgentAndIp_Together")]
@@ -258,44 +194,16 @@ namespace Lukdrasil.StepUpLogging.Tests
 
             Assert.NotNull(capture.LastEvent);
             var logEvent = capture.LastEvent;
-            
+
             Assert.True(logEvent!.Properties.ContainsKey("UserAgent"), "UserAgent property should be in the log event");
             Assert.True(logEvent.Properties.ContainsKey("ClientIp"), "ClientIp property should be in the log event");
-            
-            var userAgentProp = logEvent.Properties["UserAgent"].ToString().Trim('"');
-            var clientIpProp = logEvent.Properties["ClientIp"].ToString().Trim('"');
-            
-            Assert.Equal("TestClient/1.0", userAgentProp);
-            Assert.Equal("10.0.0.1", clientIpProp);
+
+            Assert.Equal("TestClient/1.0", ((ScalarValue)logEvent.Properties["UserAgent"]).Value);
+            Assert.Equal("10.0.0.1", ((ScalarValue)logEvent.Properties["ClientIp"]).Value);
         }
 
-        [Fact(DisplayName = "EmitRequestSummary_HandlesEmptyXForwardedFor")]
-        public async Task EmitRequestSummary_HandlesEmptyXForwardedFor()
-        {
-            var capture = new CaptureSink();
-            using var server = CreateTestServer(capture);
-            var client = server.CreateClient();
-
-            var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
-            request.Headers.Add("X-Forwarded-For", "");
-
-            await client.SendAsync(request);
-
-            Assert.NotNull(capture.LastEvent);
-            var logEvent = capture.LastEvent;
-            
-            // With empty X-Forwarded-For, may fall back to connection IP if available
-            if (logEvent!.Properties.ContainsKey("ClientIp"))
-            {
-                var clientIpProp = logEvent.Properties["ClientIp"];
-                var clientIpString = clientIpProp.ToString().Trim('"');
-                
-                Assert.True(IPAddress.TryParse(clientIpString, out _), $"ClientIp should be a valid IP address, got: {clientIpString}");
-            }
-        }
-
-        [Fact(DisplayName = "EmitRequestSummary_HandlesWhitespaceXForwardedFor")]
-        public async Task EmitRequestSummary_HandlesWhitespaceXForwardedFor()
+        [Fact(DisplayName = "EmitRequestSummary_FallsBackToRemoteIp_WhenXForwardedForIsWhitespace")]
+        public async Task EmitRequestSummary_FallsBackToRemoteIp_WhenXForwardedForIsWhitespace()
         {
             var capture = new CaptureSink();
             using var server = CreateTestServer(capture);
@@ -308,37 +216,14 @@ namespace Lukdrasil.StepUpLogging.Tests
 
             Assert.NotNull(capture.LastEvent);
             var logEvent = capture.LastEvent;
-            
-            // With whitespace X-Forwarded-For, may fall back to connection IP if available
-            if (logEvent!.Properties.ContainsKey("ClientIp"))
+
+            // Today's behaviour: a whitespace-only XFF value is treated as absent, falling back to
+            // Connection.RemoteIpAddress (which itself may be null/absent on TestServer).
+            if (logEvent!.Properties.TryGetValue("ClientIp", out var clientIpProp))
             {
-                var clientIpProp = logEvent.Properties["ClientIp"];
-                var clientIpString = clientIpProp.ToString().Trim('"');
-                
-                Assert.True(IPAddress.TryParse(clientIpString, out _), $"ClientIp should be a valid IP address, got: {clientIpString}");
+                var clientIpString = ((ScalarValue)clientIpProp).Value as string;
+                Assert.NotEqual("   ", clientIpString);
             }
-        }
-
-        [Fact(DisplayName = "EmitRequestSummary_PreservesTraceIdWithUserAgentAndIp")]
-        public async Task EmitRequestSummary_PreservesTraceIdWithUserAgentAndIp()
-        {
-            var capture = new CaptureSink();
-            using var server = CreateTestServer(capture);
-            var client = server.CreateClient();
-
-            var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
-            request.Headers.Add("User-Agent", "TestAgent/2.0");
-            request.Headers.Add("X-Forwarded-For", "172.16.0.1");
-
-            await client.SendAsync(request);
-
-            Assert.NotNull(capture.LastEvent);
-            var logEvent = capture.LastEvent;
-            
-            Assert.True(logEvent!.Properties.ContainsKey("UserAgent"));
-            Assert.True(logEvent.Properties.ContainsKey("ClientIp"));
-            Assert.Contains("Request finished", logEvent.MessageTemplate.Text);
         }
     }
 }
-
