@@ -27,7 +27,7 @@ public class RequestBodyCaptureTests
         public void Emit(LogEvent logEvent) => Events.Add(logEvent);
     }
 
-    private static TestServer BuildServer(CaptureSink capture, Serilog.ILogger logger, out StepUpLoggingOptions opts)
+    private static TestServer BuildServer(CaptureSink capture, Serilog.ILogger logger, out StepUpLoggingOptions opts, int? maxBodyCaptureBytes = null)
     {
         opts = new StepUpLoggingOptions
         {
@@ -35,6 +35,7 @@ public class RequestBodyCaptureTests
             CaptureRequestBody = true,
             RedactionRegexes = new[] { "secret-[A-Za-z0-9]+" }
         };
+        if (maxBodyCaptureBytes is int max) opts.MaxBodyCaptureBytes = max;
         var options = opts;
 
         var builder = new WebHostBuilder()
@@ -134,6 +135,39 @@ public class RequestBodyCaptureTests
 
             var captured = FindRequestBody(capture);
             Assert.Equal("[EMPTY]", captured);
+        }
+        finally
+        {
+            Log.Logger = previous;
+            logger.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task RequestBody_StraddlingSecret_IsMasked_BeforeTruncation()
+    {
+        var capture = new CaptureSink();
+        var logger = new LoggerConfiguration().WriteTo.Sink(capture).CreateLogger();
+        var previous = Log.Logger;
+        Log.Logger = logger;
+        try
+        {
+            const int limit = 40;
+            using var server = BuildServer(capture, logger, out _, maxBodyCaptureBytes: limit);
+            using var client = server.CreateClient();
+
+            // The secret starts at offset 34, so a naive read of the first 40 chars would slice it
+            // mid-token ("...xxsecret" with the hyphen past the cut), the pattern would no longer
+            // match, and the "secret" prefix would leak. Redaction must run over the margin first.
+            var body = new string('x', 34) + "secret-ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+            var response = await client.PostAsync("/api/test", new StringContent(body, Encoding.UTF8, "application/json"));
+            response.EnsureSuccessStatusCode();
+            await Task.Delay(50);
+
+            var captured = FindRequestBody(capture);
+            Assert.NotNull(captured);
+            Assert.DoesNotContain("secret", captured);
+            Assert.True(captured!.Length <= limit, $"captured length {captured.Length} must not exceed {limit}");
         }
         finally
         {

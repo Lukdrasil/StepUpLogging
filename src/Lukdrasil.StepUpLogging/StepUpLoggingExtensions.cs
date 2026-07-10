@@ -139,7 +139,7 @@ public static class StepUpLoggingExtensions
             var opts = sp.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
             var patterns = opts.RedactionRegexes
                 .Where(p => !string.IsNullOrWhiteSpace(p))
-                .Select(p => new Regex(p, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100)))
+                .Select(CompilePattern)
                 .ToArray();
             return new CompiledRedactionPatterns(patterns);
         });
@@ -267,6 +267,26 @@ public static class StepUpLoggingExtensions
 
     private static bool IsValidLevel(string? value)
         => !string.IsNullOrWhiteSpace(value) && Enum.TryParse<LogEventLevel>(value, true, out _);
+
+    /// <summary>
+    /// Compiles a redaction pattern with <see cref="RegexOptions.NonBacktracking"/> so matching is
+    /// linear-time and catastrophic backtracking is structurally impossible. Patterns using lookaround
+    /// or backreferences are unsupported by that engine and throw <see cref="NotSupportedException"/> at
+    /// construction; those fall back to <see cref="RegexOptions.Compiled"/>. <c>NonBacktracking</c> cannot
+    /// be combined with <c>Compiled</c>, so the fallback swaps the option rather than adding to it. The
+    /// 100 ms timeout stays on both branches as a backstop (ADR 0001 amendment).
+    /// </summary>
+    internal static Regex CompilePattern(string pattern)
+    {
+        try
+        {
+            return new Regex(pattern, RegexOptions.NonBacktracking | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100));
+        }
+        catch (NotSupportedException)
+        {
+            return new Regex(pattern, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100));
+        }
+    }
 
     /// <summary>
     /// Applies all configured enrichers to <paramref name="lc"/>. Called on both the root
@@ -415,7 +435,8 @@ public static class StepUpLoggingExtensions
                                 routeParams = rp;
                             }
 
-                            var userAgent = ExtractUserAgent(httpContext.Request);
+                            var rawUserAgent = ExtractUserAgent(httpContext.Request);
+                            var userAgent = rawUserAgent is null ? null : compiledPatterns.Redact(rawUserAgent);
                             var clientIp = ExtractClientIp(httpContext);
                             var jti = httpContext.User?.FindFirst("jti")?.Value;
                             var statusCode = failed ? StatusCodes.Status500InternalServerError : (httpContext.Response?.StatusCode ?? 0);
@@ -469,6 +490,21 @@ public static class StepUpLoggingExtensions
                 activity?.SetTag("http.scheme", httpContext.Request.Scheme);
                 activity?.SetTag("http.host", httpContext.Request.Host.Value);
 
+                // One aggregate ApplyRedaction span per request (ADR 0009), started lazily on the first
+                // redaction so a request with nothing to redact creates no span at all.
+                Activity? redactionActivity = null;
+                var redactionCount = 0;
+                var redactionTargets = opts.EnableActivityInstrumentation ? new List<string>() : null;
+
+                void NoteRedaction(string target)
+                {
+                    RedactionCounter.Add(1);
+                    redactionCount++;
+                    if (!opts.EnableActivityInstrumentation) return;
+                    redactionActivity ??= RequestLoggingActivitySource.StartActivity("ApplyRedaction", ActivityKind.Internal);
+                    redactionTargets!.Add(target);
+                }
+
                 var rawPath = httpContext.Request.Path.Value ?? string.Empty;
                 var path = rawPath.Length > 1 ? rawPath.TrimEnd('/') : rawPath;
                 diagnosticContext.Set("RequestPath", path);
@@ -477,16 +513,7 @@ public static class StepUpLoggingExtensions
                 var redactedQs = compiledPatterns.Redact(qs);
                 if (!string.Equals(redactedQs, qs, StringComparison.Ordinal))
                 {
-                    if (opts.EnableActivityInstrumentation)
-                    {
-                        using (var redactionActivity = RequestLoggingActivitySource.StartActivity("ApplyRedaction", ActivityKind.Internal))
-                        {
-                            redactionActivity?.SetTag("security.redaction_type", "query_string");
-                            redactionActivity?.SetTag("security.redaction_target", "query_string");
-                        }
-                    }
-                    RedactionCounter.Add(1);
-                    activity?.SetTag("security.redaction_applied", true);
+                    NoteRedaction("query_string");
                 }
                 diagnosticContext.Set("QueryString", redactedQs);
 
@@ -499,15 +526,7 @@ public static class StepUpLoggingExtensions
                         var redactedValue = compiledPatterns.Redact(value);
                         if (!string.Equals(redactedValue, value, StringComparison.Ordinal))
                         {
-                            if (opts.EnableActivityInstrumentation)
-                            {
-                                using (var redactionActivity = RequestLoggingActivitySource.StartActivity("ApplyRedaction", ActivityKind.Internal))
-                                {
-                                    redactionActivity?.SetTag("security.redaction_type", "route_parameter");
-                                    redactionActivity?.SetTag("security.redaction_target", kvp.Key);
-                                }
-                            }
-                            RedactionCounter.Add(1);
+                            NoteRedaction($"route:{kvp.Key}");
                         }
                         routeParams[kvp.Key] = redactedValue;
                     }
@@ -520,15 +539,7 @@ public static class StepUpLoggingExtensions
                     if (sensitiveHeaders.Contains(header.Key))
                     {
                         headers[header.Key] = "[REDACTED]";
-                        if (opts.EnableActivityInstrumentation)
-                        {
-                            using (var redactionActivity = RequestLoggingActivitySource.StartActivity("ApplyRedaction", ActivityKind.Internal))
-                            {
-                                redactionActivity?.SetTag("security.redaction_type", "sensitive_header");
-                                redactionActivity?.SetTag("security.redaction_target", header.Key);
-                            }
-                        }
-                        RedactionCounter.Add(1);
+                        NoteRedaction($"header:{header.Key}");
                     }
                     else
                     {
@@ -536,20 +547,21 @@ public static class StepUpLoggingExtensions
                         var redactedValue = compiledPatterns.Redact(value);
                         if (!string.Equals(redactedValue, value, StringComparison.Ordinal))
                         {
-                            if (opts.EnableActivityInstrumentation)
-                            {
-                                using (var redactionActivity = RequestLoggingActivitySource.StartActivity("ApplyRedaction", ActivityKind.Internal))
-                                {
-                                    redactionActivity?.SetTag("security.redaction_type", "pattern");
-                                    redactionActivity?.SetTag("security.redaction_target", header.Key);
-                                }
-                            }
-                            RedactionCounter.Add(1);
+                            NoteRedaction($"header:{header.Key}");
                         }
                         headers[header.Key] = redactedValue;
                     }
                 }
                 diagnosticContext.Set("Headers", headers);
+
+                if (redactionActivity is not null)
+                {
+                    redactionActivity.SetTag("security.redaction_applied", true);
+                    redactionActivity.SetTag("security.redaction_count", redactionCount);
+                    redactionActivity.SetTag("security.redaction_targets", string.Join(",", redactionTargets!));
+                    activity?.SetTag("security.redaction_applied", true);
+                    redactionActivity.Dispose();
+                }
 
                 var jtiClaim = httpContext.User?.FindFirst("jti")?.Value;
                 if (!string.IsNullOrEmpty(jtiClaim))
@@ -573,15 +585,21 @@ public static class StepUpLoggingExtensions
                                 if (bodyControl is not null) bodyControl.AllowSynchronousIO = true;
 
                                 httpContext.Request.Body.Position = 0;
-                                var maxBytes = opts.MaxBodyCaptureBytes;
-                                var buffer = new char[maxBytes];
+                                // Read a margin beyond the limit so a secret straddling the cut still
+                                // matches its pattern; redact the margin-extended text, then truncate the
+                                // redacted result (ADR 0009 F2).
+                                const int RedactionMargin = 256;
+                                var limit = opts.MaxBodyCaptureBytes;
+                                var buffer = new char[limit + RedactionMargin];
                                 using var sr = new StreamReader(httpContext.Request.Body, Encoding.UTF8, true, 1024, leaveOpen: true);
-                                var read = sr.Read(buffer, 0, maxBytes);
+                                var read = sr.Read(buffer, 0, buffer.Length);
                                 httpContext.Request.Body.Position = 0;
 
                                 if (read > 0)
                                 {
-                                    diagnosticContext.Set("RequestBody", compiledPatterns.Redact(new string(buffer, 0, read)));
+                                    var redacted = compiledPatterns.Redact(new string(buffer, 0, read));
+                                    if (redacted.Length > limit) redacted = redacted[..limit];
+                                    diagnosticContext.Set("RequestBody", redacted);
                                     BodyCaptureCounter.Add(1);
                                 }
                                 else
