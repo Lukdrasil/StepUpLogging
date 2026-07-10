@@ -25,3 +25,5 @@ Verbose. It is called out in the migration notes and covered by ADR 0006 (v2).
   bypass or `AlwaysOn` mode instead.
 - Tests: a config-declared sink must NOT receive sub-step-up events when not stepped up, and
   MUST receive them once stepped up.
+- The decision stands; its implementation was changed by ADR 0012 to wrap the live
+  `IConfiguration` instead of snapshotting it, restoring `reloadOnChange`.

@@ -122,8 +122,8 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
             return;
         }
 
-        // ImmediateSink already forwarded this event — buffering it would cause a double-emit on flush
-        if (LogProperties.HasFlag(logEvent, LogProperties.IsImmediate))
+        // ImmediateSink and SummarySink already forward these events — buffering them would cause a double-emit on flush
+        if (LogProperties.HasFlag(logEvent, LogProperties.IsImmediate) || LogProperties.HasFlag(logEvent, LogProperties.IsRequestSummary))
             return;
 
         var buffer = GetOrCreateBuffer(key);

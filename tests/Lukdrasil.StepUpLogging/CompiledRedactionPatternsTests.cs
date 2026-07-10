@@ -71,5 +71,33 @@ namespace Lukdrasil.StepUpLogging.Tests
 
             Assert.Equal("user=bob&[REDACTED]&x=1", result);
         }
+
+        [Fact(DisplayName = "CompilePattern_NonBacktracking_MatchesInLinearTime_WithoutTimeout")]
+        public void CompilePattern_NonBacktracking_MatchesInLinearTime_WithoutTimeout()
+        {
+            // (a+)+$ against a long non-matching input would blow past the 100ms timeout under the old
+            // backtracking engine and yield the fail-closed sentinel. NonBacktracking evaluates in
+            // linear time, finds no match, and returns the input verbatim.
+            var input = new string('a', 5000) + "!";
+            var patterns = new CompiledRedactionPatterns(new[] { StepUpLoggingExtensions.CompilePattern("(a+)+$") });
+
+            var result = patterns.Redact(input);
+
+            Assert.Equal(input, result);
+            Assert.NotEqual("[REDACTION-ERROR]", result);
+        }
+
+        [Fact(DisplayName = "CompilePattern_Lookahead_CompilesViaCompiledFallback_AndRedacts")]
+        public void CompilePattern_Lookahead_CompilesViaCompiledFallback_AndRedacts()
+        {
+            // A lookahead is unsupported by NonBacktracking (throws NotSupportedException at construction)
+            // and must land on the Compiled fallback rather than propagate the exception.
+            var regex = StepUpLoggingExtensions.CompilePattern("(?=secret)secret");
+            var patterns = new CompiledRedactionPatterns(new[] { regex });
+
+            var result = patterns.Redact("my secret here");
+
+            Assert.Equal("my [REDACTED] here", result);
+        }
     }
 }

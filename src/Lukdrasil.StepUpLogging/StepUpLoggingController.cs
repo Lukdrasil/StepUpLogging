@@ -24,6 +24,10 @@ public sealed class StepUpLoggingController : IDisposable
     private readonly TimeSpan _minTriggerInterval = TimeSpan.FromSeconds(5);
     private readonly bool _enableActivityInstrumentation;
 
+    private readonly TimeSpan _maxContinuous;
+    private readonly TimeSpan _cooldown;
+    private long _cooldownUntilTimestamp;
+
     private Timer? _timer;
     private readonly Func<long> _clock;
     private long _lastTriggerTimestamp;
@@ -34,6 +38,8 @@ public sealed class StepUpLoggingController : IDisposable
     private static readonly Meter Meter = new("StepUpLogging", "1.0.0");
     private static readonly Counter<long> TriggerCounter = Meter.CreateCounter<long>("stepup_trigger_total", "count", "Total number of step-up triggers");
     private static readonly Counter<long> SkippedTriggerCounter = Meter.CreateCounter<long>("stepup_trigger_skipped_total", "count", "Number of skipped triggers due to rate-limiting");
+    private static readonly Counter<long> CapReachedCounter = Meter.CreateCounter<long>("stepup_cap_reached_total", "count", "Number of forced step-downs after the continuous step-up cap was reached");
+    private static readonly Counter<long> SuppressedTriggerCounter = Meter.CreateCounter<long>("stepup_trigger_suppressed_total", "count", "Number of triggers ignored while inside the post-cap cooldown window");
     private static readonly Histogram<double> StepUpDurationHistogram = Meter.CreateHistogram<double>("stepup_duration_seconds", "seconds", "Duration of step-up windows");
     private readonly UpDownCounter<int> _activeStepUpCounter = Meter.CreateUpDownCounter<int>("stepup_active", "state", "Whether step-up is active (1) or not (0)");
 
@@ -71,6 +77,8 @@ public sealed class StepUpLoggingController : IDisposable
         // Single canonical default (180) matching StepUpLoggingOptions; startup validation rejects <= 0,
         // so this guard only defends direct construction in tests (ADR 0007).
         _duration = TimeSpan.FromSeconds(options.DurationSeconds <= 0 ? 180 : options.DurationSeconds);
+        _maxContinuous = options.MaxContinuousStepUpSeconds > 0 ? TimeSpan.FromSeconds(options.MaxContinuousStepUpSeconds) : TimeSpan.Zero;
+        _cooldown = _maxContinuous == TimeSpan.Zero ? TimeSpan.Zero : TimeSpan.FromSeconds(options.StepUpCooldownSeconds);
         _enableActivityInstrumentation = options.EnableActivityInstrumentation;
         _summaryLogger = summaryLogger;
         _requestSummaryLevel = Parse(options.RequestSummaryLevel, LogEventLevel.Information);
@@ -102,7 +110,18 @@ public sealed class StepUpLoggingController : IDisposable
     /// <summary>
     /// Emit a structured request summary using the configured summary logger (bypass) if available.
     /// </summary>
-    public void EmitRequestSummary(string method, string path, int statusCode, double elapsedMs, string? traceId = null, string? queryString = null, IReadOnlyDictionary<string, object?>? routeParameters = null, string? userAgent = null, string? clientIp = null, string? jti = null)
+    /// <param name="method">HTTP method of the request.</param>
+    /// <param name="path">Normalized request path.</param>
+    /// <param name="statusCode">HTTP status code of the response.</param>
+    /// <param name="elapsedMs">Request duration in milliseconds.</param>
+    /// <param name="traceId">W3C trace identifier, when available.</param>
+    /// <param name="queryString">Redacted query string, when present.</param>
+    /// <param name="routeParameters">Redacted route parameters, when present.</param>
+    /// <param name="userAgent">Redacted User-Agent header, when present.</param>
+    /// <param name="clientIp">Client IP address (see <see cref="StepUpLoggingOptions.TrustForwardedHeaders"/>).</param>
+    /// <param name="jti">Redacted token identifier claim, when present.</param>
+    /// <param name="forwardedFor">Redacted raw <c>X-Forwarded-For</c> header, when present. Client-supplied and untrusted.</param>
+    public void EmitRequestSummary(string method, string path, int statusCode, double elapsedMs, string? traceId = null, string? queryString = null, IReadOnlyDictionary<string, object?>? routeParameters = null, string? userAgent = null, string? clientIp = null, string? jti = null, string? forwardedFor = null)
     {
         try
         {
@@ -136,6 +155,11 @@ public sealed class StepUpLoggingController : IDisposable
                 logger = logger.ForContext("Jti", jti);
             }
 
+            if (!string.IsNullOrEmpty(forwardedFor))
+            {
+                logger = logger.ForContext("ForwardedFor", forwardedFor);
+            }
+
             logger.Write(lvl, "Request finished {Method} {Path} {StatusCode} {ElapsedMs}", method, path, statusCode, elapsedMs);
         }
         catch
@@ -166,10 +190,38 @@ public sealed class StepUpLoggingController : IDisposable
                 return;
             }
 
+            // Post-cap cooldown: while active, ignore triggers entirely; once expired, clear and proceed.
+            if (_maxContinuous != TimeSpan.Zero && _cooldownUntilTimestamp != 0)
+            {
+                if (_clock() < _cooldownUntilTimestamp)
+                {
+                    SuppressedTriggerCounter.Add(1);
+                    return;
+                }
+
+                _cooldownUntilTimestamp = 0;
+            }
+
             // Fast-path: if already stepped up and recently triggered, just extend timer
             if (LevelSwitch.MinimumLevel == _stepUpLevel)
             {
                 var now = _clock();
+
+                // Hard cap: once step-up has been continuously active past the bound, force a step-down and
+                // open the cooldown. Checked before the rate-limit/extend so a caller who keeps failing can
+                // no longer hold the level indefinitely.
+                if (_maxContinuous != TimeSpan.Zero
+                    && Stopwatch.GetElapsedTime(_stepUpStartTimestamp, now) >= _maxContinuous)
+                {
+                    // Dispose the live timer so its superseded callback cannot fire a second step-down (ADR 0002).
+                    _timer?.Dispose();
+                    _timer = null;
+                    PerformStepDown(forcedByCap: true);
+                    CapReachedCounter.Add(1);
+                    _cooldownUntilTimestamp = now + ToStopwatchTicks(_cooldown);
+                    return;
+                }
+
                 if (Stopwatch.GetElapsedTime(_lastTriggerTimestamp, now) < _minTriggerInterval)
                 {
                     SkippedTriggerCounter.Add(1);
@@ -231,26 +283,38 @@ public sealed class StepUpLoggingController : IDisposable
                 return;
             }
 
-            // Only step down if currently stepped up; guards against a double step-down that would
-            // drive the active-state counter negative and record a bogus duration sample.
-            if (LevelSwitch.MinimumLevel != _stepUpLevel)
-            {
-                return;
-            }
-
-            // Activity is only created if step down actually occurs (not when disposed)
-            using (_enableActivityInstrumentation ? StepUpLoggingExtensions.ControllerActivitySource.StartActivity("PerformStepDown", ActivityKind.Internal) : null)
-            {
-                LevelSwitch.MinimumLevel = _baseLevel;
-
-                var duration = Stopwatch.GetElapsedTime(_stepUpStartTimestamp, _clock()).TotalSeconds;
-                StepUpDurationHistogram.Record(duration);
-                _activeStepUpCounter.Add(-1);
-
-                Log.Warning("Logging step down: restored minimum level to {Level}", _baseLevel);
-            }
+            PerformStepDown(forcedByCap: false);
         }
     }
+
+    /// <summary>
+    /// Restore the base level and settle the step-up metrics. Must be called while holding <see cref="_gate"/>.
+    /// A no-op when the switch is not currently stepped up, which guards against a double step-down that would
+    /// drive the active-state counter negative and record a bogus duration sample. <paramref name="forcedByCap"/>
+    /// is <c>true</c> when the continuous step-up cap forced this step-down rather than the normal timer.
+    /// </summary>
+    private void PerformStepDown(bool forcedByCap)
+    {
+        if (LevelSwitch.MinimumLevel != _stepUpLevel)
+        {
+            return;
+        }
+
+        // Activity is only created if step down actually occurs (not when disposed)
+        using var activity = _enableActivityInstrumentation ? StepUpLoggingExtensions.ControllerActivitySource.StartActivity("PerformStepDown", ActivityKind.Internal) : null;
+        activity?.SetTag("stepup.forced_by_cap", forcedByCap);
+
+        LevelSwitch.MinimumLevel = _baseLevel;
+
+        var duration = Stopwatch.GetElapsedTime(_stepUpStartTimestamp, _clock()).TotalSeconds;
+        StepUpDurationHistogram.Record(duration);
+        _activeStepUpCounter.Add(-1);
+
+        Log.Warning("Logging step down: restored minimum level to {Level}", _baseLevel);
+    }
+
+    private static long ToStopwatchTicks(TimeSpan span)
+        => (long)(span.TotalSeconds * Stopwatch.Frequency);
 
     /// <summary>
     /// Test-only accessor for the current timer generation. Reads under the lock.
@@ -262,6 +326,20 @@ public sealed class StepUpLoggingController : IDisposable
             lock (_gate)
             {
                 return _generation;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Test-only accessor reporting whether the post-cap cooldown window is currently active. Reads under the lock.
+    /// </summary>
+    internal bool IsInCooldown
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _cooldownUntilTimestamp != 0 && _clock() < _cooldownUntilTimestamp;
             }
         }
     }

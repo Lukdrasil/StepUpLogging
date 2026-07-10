@@ -42,6 +42,68 @@ public class OptionsValidationTests
     }
 
     [Fact]
+    public void ZeroMaxBodyCaptureBytes_FailsValidationOnStart()
+    {
+        Assert.Throws<OptionsValidationException>(
+            () => BuildHost(("SerilogStepUp:MaxBodyCaptureBytes", "0")));
+    }
+
+    [Fact]
+    public void NegativeMaxBodyCaptureBytes_FailsValidationOnStart()
+    {
+        Assert.Throws<OptionsValidationException>(
+            () => BuildHost(("SerilogStepUp:MaxBodyCaptureBytes", "-1")));
+    }
+
+    [Fact]
+    public void PositiveMaxBodyCaptureBytes_ResolvesOnStart()
+    {
+        using var host = BuildHost(("SerilogStepUp:MaxBodyCaptureBytes", "1"));
+
+        var opts = host.Services.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
+
+        Assert.Equal(1, opts.MaxBodyCaptureBytes);
+    }
+
+    [Fact]
+    public void CapBelowDuration_FailsValidationOnStart()
+    {
+        Assert.Throws<OptionsValidationException>(
+            () => BuildHost(
+                ("SerilogStepUp:DurationSeconds", "180"),
+                ("SerilogStepUp:MaxContinuousStepUpSeconds", "60")));
+    }
+
+    [Fact]
+    public void CapDisabled_ResolvesOnStart()
+    {
+        using var host = BuildHost(("SerilogStepUp:MaxContinuousStepUpSeconds", "0"));
+
+        var opts = host.Services.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
+
+        Assert.Equal(0, opts.MaxContinuousStepUpSeconds);
+    }
+
+    [Fact]
+    public void CapEqualToDuration_ResolvesOnStart()
+    {
+        using var host = BuildHost(
+            ("SerilogStepUp:DurationSeconds", "180"),
+            ("SerilogStepUp:MaxContinuousStepUpSeconds", "180"));
+
+        var opts = host.Services.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
+
+        Assert.Equal(180, opts.MaxContinuousStepUpSeconds);
+    }
+
+    [Fact]
+    public void NegativeCooldown_FailsValidationOnStart()
+    {
+        Assert.Throws<OptionsValidationException>(
+            () => BuildHost(("SerilogStepUp:StepUpCooldownSeconds", "-1")));
+    }
+
+    [Fact]
     public void ValidConfiguration_ResolvesWithCanonicalDefaults()
     {
         using var host = BuildHost();

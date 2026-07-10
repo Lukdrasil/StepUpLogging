@@ -63,8 +63,14 @@ public sealed class StepUpLoggingOptions
     public bool CaptureRequestBody { get; set; } = false;
 
     /// <summary>
-    /// Maximum number of bytes to capture from request body. Default: 16KB
+    /// Maximum amount of request body to capture. Default: 16KB.
     /// </summary>
+    /// <remarks>
+    /// Despite the name, this value bounds the number of CHARACTERS read from the UTF-8 decoded
+    /// body, not the number of raw bytes: a multi-byte (non-ASCII) body therefore consumes more
+    /// underlying bytes than this limit implies. Must be greater than zero — a non-positive value
+    /// fails options validation at startup.
+    /// </remarks>
     public int MaxBodyCaptureBytes { get; set; } = 16 * 1024;
 
     /// <summary>
@@ -138,4 +144,25 @@ public sealed class StepUpLoggingOptions
     /// The level to use for request summary logs (e.g., "Information").
     /// </summary>
     public string RequestSummaryLevel { get; set; } = "Information";
+
+    /// <summary>
+    /// When true, the logged <c>ClientIp</c> is taken from the first entry of the
+    /// <c>X-Forwarded-For</c> header. Only enable this behind a reverse proxy you control AND with
+    /// ForwardedHeadersMiddleware configured; the header is client-supplied and spoofable.
+    /// Default: false — <c>ClientIp</c> comes from <c>Connection.RemoteIpAddress</c>.
+    /// </summary>
+    public bool TrustForwardedHeaders { get; set; } = false;
+
+    /// <summary>
+    /// Upper bound, in seconds, on how long step-up may stay continuously active. When exceeded the
+    /// level is forced back to BaseLevel and further triggers are ignored for StepUpCooldownSeconds.
+    /// Default: 0 (no bound).
+    /// </summary>
+    public int MaxContinuousStepUpSeconds { get; set; } = 0;
+
+    /// <summary>
+    /// Seconds during which triggers are ignored after MaxContinuousStepUpSeconds forces a step-down.
+    /// Ignored when the cap is disabled. Default: 300.
+    /// </summary>
+    public int StepUpCooldownSeconds { get; set; } = 300;
 }
