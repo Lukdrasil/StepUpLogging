@@ -254,12 +254,6 @@ public static class StepUpLoggingExtensions
         return (root, gated);
     }
 
-    private static LogEventLevel ParseLogEventLevel(string? value, LogEventLevel fallback)
-    {
-        if (string.IsNullOrWhiteSpace(value)) return fallback;
-        return Enum.TryParse<LogEventLevel>(value, true, out var lvl) ? lvl : fallback;
-    }
-
     /// <summary>
     /// Validates that <paramref name="o"/> is coherent: a positive step-up duration and level strings
     /// that parse to a Serilog <see cref="LogEventLevel"/>. Used by the options pipeline at startup so a
