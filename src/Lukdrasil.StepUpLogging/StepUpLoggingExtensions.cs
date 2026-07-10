@@ -704,17 +704,7 @@ public static class StepUpLoggingExtensions
     internal static Dictionary<string, string> ParseOtlpHeaders(string? headerString)
     {
         var headers = new Dictionary<string, string>();
-        if (string.IsNullOrWhiteSpace(headerString)) return headers;
-
-        foreach (var pair in headerString.Split(','))
-        {
-            var parts = pair.Split('=', 2);
-            if (parts.Length != 2) continue;
-            var key = Uri.UnescapeDataString(parts[0].Trim());
-            var value = Uri.UnescapeDataString(parts[1].Trim());
-            if (key.Length > 0) headers[key] = value;
-        }
-
+        foreach (var (key, value) in ParseBaggageStylePairs(headerString)) headers[key] = value;
         return headers;
     }
 
@@ -722,18 +712,23 @@ public static class StepUpLoggingExtensions
     internal static Dictionary<string, object> ParseResourceAttributes(string? attributeString)
     {
         var attributes = new Dictionary<string, object>();
-        if (string.IsNullOrWhiteSpace(attributeString)) return attributes;
+        foreach (var (key, value) in ParseBaggageStylePairs(attributeString)) attributes[key] = value;
+        return attributes;
+    }
 
-        foreach (var pair in attributeString.Split(','))
+    /// <summary>Splits a comma-separated, percent-encoded key=value list, percent-decoding both sides and skipping malformed pairs or empty keys.</summary>
+    private static IEnumerable<(string Key, string Value)> ParseBaggageStylePairs(string? input)
+    {
+        if (string.IsNullOrWhiteSpace(input)) yield break;
+
+        foreach (var pair in input.Split(','))
         {
             var parts = pair.Split('=', 2);
             if (parts.Length != 2) continue;
             var key = Uri.UnescapeDataString(parts[0].Trim());
             var value = Uri.UnescapeDataString(parts[1].Trim());
-            if (key.Length > 0) attributes[key] = value;
+            if (key.Length > 0) yield return (key, value);
         }
-
-        return attributes;
     }
 
     private static void ConfigureOutputSinks(LoggerConfiguration lc,

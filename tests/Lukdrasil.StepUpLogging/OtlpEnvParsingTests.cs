@@ -4,36 +4,16 @@ namespace Lukdrasil.StepUpLogging.Tests;
 
 public class OtlpEnvParsingTests
 {
-    [Fact]
-    public void ParseOtlpHeaders_PercentEncodedValue_IsDecoded()
+    [Theory]
+    [InlineData("Authorization=Basic%20dXNlcjpwYXNz", "Authorization", "Basic dXNlcjpwYXNz")]
+    [InlineData("key=a%2Cb", "key", "a,b")]
+    [InlineData("x%2Dkey=value", "x-key", "value")]
+    [InlineData("api-key=abc123", "api-key", "abc123")]
+    public void ParseOtlpHeaders_DecodesKeyAndValue(string input, string expectedKey, string expectedValue)
     {
-        var headers = StepUpLoggingExtensions.ParseOtlpHeaders("Authorization=Basic%20dXNlcjpwYXNz");
+        var headers = StepUpLoggingExtensions.ParseOtlpHeaders(input);
 
-        Assert.Equal("Basic dXNlcjpwYXNz", headers["Authorization"]);
-    }
-
-    [Fact]
-    public void ParseOtlpHeaders_EncodedCommaInValue_IsDecoded()
-    {
-        var headers = StepUpLoggingExtensions.ParseOtlpHeaders("key=a%2Cb");
-
-        Assert.Equal("a,b", headers["key"]);
-    }
-
-    [Fact]
-    public void ParseOtlpHeaders_PercentEncodedKey_IsDecoded()
-    {
-        var headers = StepUpLoggingExtensions.ParseOtlpHeaders("x%2Dkey=value");
-
-        Assert.Equal("value", headers["x-key"]);
-    }
-
-    [Fact]
-    public void ParseOtlpHeaders_UnescapedValue_IsUnchanged()
-    {
-        var headers = StepUpLoggingExtensions.ParseOtlpHeaders("api-key=abc123");
-
-        Assert.Equal("abc123", headers["api-key"]);
+        Assert.Equal(expectedValue, headers[expectedKey]);
     }
 
     [Fact]
@@ -63,36 +43,16 @@ public class OtlpEnvParsingTests
         Assert.Equal("2 two", headers["b"]);
     }
 
-    [Fact]
-    public void ParseResourceAttributes_PercentEncodedValue_IsDecoded()
+    [Theory]
+    [InlineData("service.namespace=my%20team", "service.namespace", "my team")]
+    [InlineData("key=a%2Cb", "key", "a,b")]
+    [InlineData("x%2Dkey=value", "x-key", "value")]
+    [InlineData("deployment.environment=production", "deployment.environment", "production")]
+    public void ParseResourceAttributes_DecodesKeyAndValue(string input, string expectedKey, string expectedValue)
     {
-        var attributes = StepUpLoggingExtensions.ParseResourceAttributes("service.namespace=my%20team");
+        var attributes = StepUpLoggingExtensions.ParseResourceAttributes(input);
 
-        Assert.Equal("my team", attributes["service.namespace"]);
-    }
-
-    [Fact]
-    public void ParseResourceAttributes_EncodedCommaInValue_IsDecoded()
-    {
-        var attributes = StepUpLoggingExtensions.ParseResourceAttributes("key=a%2Cb");
-
-        Assert.Equal("a,b", attributes["key"]);
-    }
-
-    [Fact]
-    public void ParseResourceAttributes_PercentEncodedKey_IsDecoded()
-    {
-        var attributes = StepUpLoggingExtensions.ParseResourceAttributes("x%2Dkey=value");
-
-        Assert.Equal("value", attributes["x-key"]);
-    }
-
-    [Fact]
-    public void ParseResourceAttributes_UnescapedValue_IsUnchanged()
-    {
-        var attributes = StepUpLoggingExtensions.ParseResourceAttributes("deployment.environment=production");
-
-        Assert.Equal("production", attributes["deployment.environment"]);
+        Assert.Equal(expectedValue, attributes[expectedKey]);
     }
 
     [Fact]
