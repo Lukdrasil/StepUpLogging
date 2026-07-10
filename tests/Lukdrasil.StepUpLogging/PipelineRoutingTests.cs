@@ -51,7 +51,7 @@ public class PipelineRoutingTests
             var stepUpInner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(StepUpOutput).CreateLogger();
             var bypassLogger = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(BypassOutput).CreateLogger();
 
-            _stepUpSink = new StepUpSink(stepUpInner, Controller.LevelSwitch);
+            _stepUpSink = new StepUpSink(stepUpInner, Controller.LevelSwitch, Controller.BaseLevel, []);
             _triggerSink = new StepUpTriggerSink(Controller);
 
             var cfg = new LoggerConfiguration()
@@ -388,7 +388,7 @@ public class PipelineRoutingTests
 
         var opts = new StepUpLoggingOptions { BaseLevel = "Warning", StepUpLevel = "Information", DurationSeconds = 10 };
         using var controller = new StepUpLoggingController(opts);
-        using var stepUpSink = new StepUpSink(stepUpInner, controller.LevelSwitch);
+        using var stepUpSink = new StepUpSink(stepUpInner, controller.LevelSwitch, controller.BaseLevel, []);
 
         var serilogRoot = new LoggerConfiguration()
             .MinimumLevel.Verbose()
@@ -424,7 +424,7 @@ public class PipelineRoutingTests
 
         var opts = new StepUpLoggingOptions { BaseLevel = "Warning", StepUpLevel = "Information", DurationSeconds = 10 };
         using var controller = new StepUpLoggingController(opts);
-        using var stepUpSink = new StepUpSink(stepUpInner, controller.LevelSwitch);
+        using var stepUpSink = new StepUpSink(stepUpInner, controller.LevelSwitch, controller.BaseLevel, []);
 
         var serilogRoot = new LoggerConfiguration()
             .MinimumLevel.Verbose()
@@ -458,7 +458,7 @@ public class PipelineRoutingTests
 
         var opts = new StepUpLoggingOptions { BaseLevel = "Warning", StepUpLevel = "Information", DurationSeconds = 10 };
         using var controller = new StepUpLoggingController(opts);
-        using var stepUpSink = new StepUpSink(stepUpInner, controller.LevelSwitch);
+        using var stepUpSink = new StepUpSink(stepUpInner, controller.LevelSwitch, controller.BaseLevel, []);
         using var triggerSink = new StepUpTriggerSink(controller);
         using var immediateSink = new ImmediateSink(bypassLogger);
 
