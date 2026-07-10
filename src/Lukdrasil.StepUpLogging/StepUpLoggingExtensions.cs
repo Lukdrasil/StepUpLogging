@@ -573,8 +573,7 @@ public static class StepUpLoggingExtensions
                 // The step-up trigger sink is asynchronous, so the request whose Error CAUSES the
                 // step-up is still not stepped-up when this enricher runs at request completion.
                 // A 5xx status is knowable synchronously here, so capture the failing request too.
-                var failing = httpContext.Response?.StatusCode >= 500;
-                if (opts.CaptureRequestBody && (stepUpController.IsSteppedUp || failing))
+                if (opts.CaptureRequestBody && (stepUpController.IsSteppedUp || httpContext.Response?.StatusCode >= 500))
                 {
                     var method = httpContext.Request.Method;
                     // Body.CanSeek is true only when the early buffering middleware ran for this request.

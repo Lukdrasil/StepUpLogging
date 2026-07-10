@@ -27,11 +27,12 @@ public class RequestBodyCaptureTests
         public void Emit(LogEvent logEvent) => Events.Add(logEvent);
     }
 
-    private static TestServer BuildServer(CaptureSink capture, Serilog.ILogger logger, out StepUpLoggingOptions opts, int? maxBodyCaptureBytes = null)
+    private static TestServer BuildServer(Serilog.ILogger logger, out StepUpLoggingOptions opts,
+        int? maxBodyCaptureBytes = null, StepUpMode mode = StepUpMode.AlwaysOn, int statusCode = 200)
     {
         opts = new StepUpLoggingOptions
         {
-            Mode = StepUpMode.AlwaysOn,        // IsSteppedUp == true
+            Mode = mode,        // AlwaysOn => IsSteppedUp == true
             CaptureRequestBody = true,
             RedactionRegexes = new[] { "secret-[A-Za-z0-9]+" }
         };
@@ -67,7 +68,7 @@ public class RequestBodyCaptureTests
                     // leaveOpen so we don't dispose Request.Body (model binding doesn't either).
                     var reader = new StreamReader(ctx.Request.Body, Encoding.UTF8, true, 1024, leaveOpen: true);
                     var received = await reader.ReadToEndAsync();
-                    ctx.Response.StatusCode = 200;
+                    ctx.Response.StatusCode = statusCode;
                     await ctx.Response.WriteAsync($"len={received.Length}");
                 });
             });
@@ -90,7 +91,7 @@ public class RequestBodyCaptureTests
         Log.Logger = logger;
         try
         {
-            using var server = BuildServer(capture, logger, out _);
+            using var server = BuildServer(logger, out _);
             using var client = server.CreateClient();
 
             var body = "{\"user\":\"bob\",\"token\":\"secret-abc123\"}";
@@ -123,7 +124,7 @@ public class RequestBodyCaptureTests
         Log.Logger = logger;
         try
         {
-            using var server = BuildServer(capture, logger, out _);
+            using var server = BuildServer(logger, out _);
             using var client = server.CreateClient();
 
             // Zero-length body on a POST while stepped up.
@@ -153,7 +154,7 @@ public class RequestBodyCaptureTests
         try
         {
             const int limit = 40;
-            using var server = BuildServer(capture, logger, out _, maxBodyCaptureBytes: limit);
+            using var server = BuildServer(logger, out _, maxBodyCaptureBytes: limit);
             using var client = server.CreateClient();
 
             // The secret starts at offset 34, so a naive read of the first 40 chars would slice it
@@ -176,49 +177,6 @@ public class RequestBodyCaptureTests
         }
     }
 
-    private static TestServer BuildServerWithStatus(CaptureSink capture, Serilog.ILogger logger, StepUpMode mode, int statusCode)
-    {
-        var opts = new StepUpLoggingOptions
-        {
-            Mode = mode,
-            CaptureRequestBody = true,
-            RedactionRegexes = new[] { "secret-[A-Za-z0-9]+" }
-        };
-
-        var builder = new WebHostBuilder()
-            .ConfigureServices(services =>
-            {
-                services.AddSingleton(Options.Create(opts));
-                services.AddSingleton(logger);
-                services.AddSingleton(sp => new StepUpLoggingController(opts, logger));
-                var patterns = opts.RedactionRegexes
-                    .Select(p => new Regex(p, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100)))
-                    .ToArray();
-                services.AddSingleton(new CompiledRedactionPatterns(patterns));
-                var diagType = Type.GetType("Serilog.Extensions.Hosting.DiagnosticContext, Serilog.Extensions.Hosting")
-                               ?? Type.GetType("Serilog.AspNetCore.DiagnosticContext, Serilog.AspNetCore");
-                var ctor = diagType!.GetConstructors().OrderByDescending(c => c.GetParameters().Length).First();
-                var args = ctor.GetParameters().Select(p =>
-                    p.ParameterType == typeof(Serilog.ILogger) ? (object?)logger
-                    : p.HasDefaultValue ? p.DefaultValue
-                    : null).ToArray();
-                services.AddSingleton(diagType, ctor.Invoke(args));
-            })
-            .Configure(app =>
-            {
-                app.UseStepUpRequestLogging();
-                app.Run(async ctx =>
-                {
-                    var reader = new StreamReader(ctx.Request.Body, Encoding.UTF8, true, 1024, leaveOpen: true);
-                    await reader.ReadToEndAsync();
-                    ctx.Response.StatusCode = statusCode;
-                    await ctx.Response.WriteAsync("done");
-                });
-            });
-
-        return new TestServer(builder);
-    }
-
     [Fact]
     public async Task RequestBody_IsCaptured_When5xx_EvenWhenNotSteppedUp()
     {
@@ -228,7 +186,7 @@ public class RequestBodyCaptureTests
         Log.Logger = logger;
         try
         {
-            using var server = BuildServerWithStatus(capture, logger, StepUpMode.Auto, statusCode: 500);
+            using var server = BuildServer(logger, out _, mode: StepUpMode.Auto, statusCode: 500);
             using var client = server.CreateClient();
 
             var body = "{\"user\":\"bob\"}";
@@ -255,7 +213,7 @@ public class RequestBodyCaptureTests
         Log.Logger = logger;
         try
         {
-            using var server = BuildServerWithStatus(capture, logger, StepUpMode.Auto, statusCode: 200);
+            using var server = BuildServer(logger, out _, mode: StepUpMode.Auto, statusCode: 200);
             using var client = server.CreateClient();
 
             var body = "{\"user\":\"bob\"}";
