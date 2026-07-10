@@ -182,7 +182,11 @@ public static class StepUpLoggingExtensions
             stepUpInnerCfg.ReadFrom.Configuration(gatedConfig);
             ConfigureOutputSinks(stepUpInnerCfg, builder, logFilePath, opts);
             stepUpInnerCfg.MinimumLevel.Verbose();
-            lc.WriteTo.Sink(new StepUpSink(stepUpInnerCfg.CreateLogger(), stepUpController.LevelSwitch));
+            lc.WriteTo.Sink(new StepUpSink(
+                stepUpInnerCfg.CreateLogger(),
+                stepUpController.LevelSwitch,
+                stepUpController.BaseLevel,
+                []));
 
             // Pre-error buffer: captures all events per trace; flushes to bypass logger on Error/Fatal.
             if (opts.EnablePreErrorBuffering)
