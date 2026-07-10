@@ -4,8 +4,9 @@ using Serilog.Events;
 namespace Lukdrasil.StepUpLogging;
 
 /// <summary>
-/// Serilog sink that gates log events by the current <see cref="LoggingLevelSwitch"/> and
-/// suppresses events already routed to bypass sinks (marked <c>IsRequestSummary</c> or
+/// Serilog sink that gates log events by the current <see cref="LoggingLevelSwitch"/>, except
+/// for <c>SourceContext</c> categories in the deny-list which are pinned to the base level and never stepped up.
+/// Suppresses events already routed to bypass sinks (marked <c>IsRequestSummary</c> or
 /// <c>IsImmediate</c>) to guarantee exactly-once delivery.
 /// </summary>
 internal sealed class StepUpSink : ILogEventSink, IDisposable
