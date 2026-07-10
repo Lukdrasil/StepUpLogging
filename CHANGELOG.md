@@ -8,6 +8,11 @@ Tags before 1.8.0 predate this file.
 
 ## [Unreleased]
 
+## [3.2.1] - 2026-07-10
+
+The v3.2.0 tag pointed at a commit whose csproj was still versioned 3.1.0, so no 3.2.0
+package was published; 3.2.1 supersedes it.
+
 ### Fixed
 - Pre-error buffer now floors buffered events at the resolved StepUpLevel, enforced at buffering time. Previously the buffer captured every event (including Verbose/Debug) regardless of configured levels, so an error retroactively exported events below the most detailed level the user opted into. Verbose/Debug events no longer flush on error unless StepUpLevel is set that low; set StepUpLevel to "Verbose" to restore the old firehose behaviour. NeverStepUpCategories remains unaffected — the buffer floor is by level only. Fixes #13. See docs/adr/0015-preerror-buffer-level-floor.md.
 
