@@ -177,7 +177,7 @@ public sealed class StepUpLoggingOptions
     /// exactly, or begins with a prefix immediately followed by a <c>.</c> separator. The list
     /// has no effect in <see cref="StepUpMode.AlwaysOn"/> (nothing steps up there), and the
     /// pre-error buffer is never filtered by it — buffered events still flush on error. Set
-    /// this to <c>[]</c> to restore pre-2.1.0 behaviour (no category is exempt from step-up).
+    /// this to <c>[]</c> to restore pre-3.1.0 behaviour (no category is exempt from step-up).
     /// The default suppresses the Entity Framework Core SQL command log, which would otherwise
     /// flood the export — and carry unredacted SQL — during a step-up window.
     /// </remarks>

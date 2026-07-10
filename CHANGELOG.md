@@ -5,7 +5,6 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
-- NeverStepUpCategories option: a list of Serilog SourceContext prefixes the step-up never raises above BaseLevel. Defaults to ["Microsoft.EntityFrameworkCore.Database.Command"]. Observable behaviour change: EF Core SQL commands (logged at Information) are no longer exported during the step-up window by default, sparing DB-backed services an SQL flood — and unredacted SQL export — for the duration of every incident. Warning/Error events in listed categories still export; the list has no effect in AlwaysOn mode; the pre-error buffer is not filtered by it. Set "NeverStepUpCategories": [] to restore 2.0.0 behaviour.
 - AlwaysLogRequestSummary option to enable a guaranteed per-request Information-level summary.
 - SummarySink to forward IsRequestSummary events to a DI-managed summary logger so summaries are exported independently of the step-up level.
 - StepUpLoggingController.EmitRequestSummary API to emit structured request summaries (method, path, status code, elapsedMs, traceId).
@@ -13,6 +12,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 - Avoid duplicate unmanaged Serilog logger instances by centralizing the DI-managed summary logger.
+
+## [3.1.0] - 2026-07-10
+
+### Added
+- NeverStepUpCategories option: a list of Serilog SourceContext prefixes the step-up never raises above BaseLevel. Defaults to ["Microsoft.EntityFrameworkCore.Database.Command"]. Observable behaviour change: EF Core SQL commands (logged at Information) are no longer exported during the step-up window by default, sparing DB-backed services an SQL flood — and unredacted SQL export — for the duration of every incident. Warning/Error events in listed categories still export (a listed category is pinned to BaseLevel, not silenced); matching is ordinal on an exact or `prefix.`-delimited SourceContext; the list has no effect in AlwaysOn mode; the pre-error buffer is not filtered by it. Set "NeverStepUpCategories": [] to restore 3.0.0 behaviour. No public API break. See docs/adr/0008-never-step-up-categories.md.
 
 ## [1.13.1] - 2026-06-21
 

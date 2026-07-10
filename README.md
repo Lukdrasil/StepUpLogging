@@ -739,7 +739,7 @@ carries it **unredacted** (redaction covers request metadata — query string, r
 headers, body — not the rendered text of arbitrary log events). Treat EF as a channel that can
 leak secrets: do not log sensitive values through it.
 
-To restore the pre-2.1.0 behaviour (step-up raises every category, including EF SQL), set the
+To restore the pre-3.1.0 behaviour (step-up raises every category, including EF SQL), set the
 list empty:
 
 ```json
