@@ -182,11 +182,19 @@ public static class StepUpLoggingExtensions
             stepUpInnerCfg.ReadFrom.Configuration(gatedConfig);
             ConfigureOutputSinks(stepUpInnerCfg, builder, logFilePath, opts);
             stepUpInnerCfg.MinimumLevel.Verbose();
+            // AlwaysOn never steps up (Trigger() no-ops, the switch starts at StepUpLevel), so nothing
+            // needs suppressing — and a developer running it locally wants the SQL. A blank prefix is a
+            // config typo: it matches dot-rooted SourceContexts and costs a comparison on every event,
+            // so drop blanks (the same treatment RedactionRegexes gets).
+            var neverStepUp = opts.Mode == StepUpMode.AlwaysOn
+                ? []
+                : (opts.NeverStepUpCategories ?? []).Where(c => !string.IsNullOrWhiteSpace(c)).ToArray();
+
             lc.WriteTo.Sink(new StepUpSink(
                 stepUpInnerCfg.CreateLogger(),
                 stepUpController.LevelSwitch,
                 stepUpController.BaseLevel,
-                [])); // deny-list wiring lands in B03 (ADR 0008)
+                neverStepUp));
 
             // Pre-error buffer: captures all events per trace; flushes to bypass logger on Error/Fatal.
             if (opts.EnablePreErrorBuffering)

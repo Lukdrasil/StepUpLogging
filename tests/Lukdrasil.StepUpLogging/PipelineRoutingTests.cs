@@ -1,6 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Serilog;
 using Serilog.Core;
@@ -509,5 +514,139 @@ public class PipelineRoutingTests
         var evt = Assert.Single(p.BypassOutput.Events);
         Assert.True(evt.Properties.TryGetValue(LogProperties.IsRequestSummary, out var val));
         Assert.Equal(true, ((ScalarValue)val!).Value);
+    }
+
+    // ─── 8. NeverStepUpCategories deny-list wiring (ADR 0008) ──────────────────
+
+    private const string EfCategory = "Microsoft.EntityFrameworkCore.Database.Command";
+
+    [Fact]
+    public void AlwaysOn_DefaultDenyList_EfInformation_StillReachesOutput()
+    {
+        var tempFile = Path.Combine(Path.GetTempPath(), $"stepup-b03-alwayson-{Guid.NewGuid():N}.log");
+        try
+        {
+            var builder = Host.CreateApplicationBuilder();
+            builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["SerilogStepUp:EnableOtlpExporter"] = "false",
+                ["SerilogStepUp:EnablePreErrorBuffering"] = "false",
+                ["SerilogStepUp:Mode"] = "AlwaysOn",
+                ["SerilogStepUp:BaseLevel"] = "Warning",
+                ["SerilogStepUp:StepUpLevel"] = "Information",
+                ["Serilog:Using:0"] = "Serilog.Sinks.File",
+                ["Serilog:WriteTo:0:Name"] = "File",
+                ["Serilog:WriteTo:0:Args:path"] = tempFile,
+            });
+            builder.AddStepUpLogging();
+
+            const string token = "ALWAYSON_EF_TOKEN_b03";
+            using (var host = builder.Build())
+            {
+                var logger = host.Services.GetRequiredService<Serilog.ILogger>();
+                logger.ForContext("SourceContext", EfCategory).Information(token);
+            }
+
+            Assert.Contains(token, File.ReadAllText(tempFile));
+        }
+        finally
+        {
+            if (File.Exists(tempFile)) File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
+    public void Auto_SteppedUp_DefaultDenyList_EfInformation_IsDropped()
+    {
+        var tempFile = Path.Combine(Path.GetTempPath(), $"stepup-b03-auto-{Guid.NewGuid():N}.log");
+        try
+        {
+            var builder = Host.CreateApplicationBuilder();
+            builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["SerilogStepUp:EnableOtlpExporter"] = "false",
+                ["SerilogStepUp:EnablePreErrorBuffering"] = "false",
+                ["SerilogStepUp:Mode"] = "Auto",
+                ["SerilogStepUp:BaseLevel"] = "Warning",
+                ["SerilogStepUp:StepUpLevel"] = "Information",
+                ["Serilog:Using:0"] = "Serilog.Sinks.File",
+                ["Serilog:WriteTo:0:Name"] = "File",
+                ["Serilog:WriteTo:0:Args:path"] = tempFile,
+            });
+            builder.AddStepUpLogging();
+
+            const string efToken = "AUTO_EF_TOKEN_b03";
+            const string appToken = "AUTO_APP_TOKEN_b03";
+            using (var host = builder.Build())
+            {
+                var logger = host.Services.GetRequiredService<Serilog.ILogger>();
+                var controller = host.Services.GetRequiredService<StepUpLoggingController>();
+
+                controller.Trigger();
+                SpinWait.SpinUntil(() => controller.LevelSwitch.MinimumLevel <= LogEventLevel.Information, 2000);
+
+                logger.ForContext("SourceContext", EfCategory).Information(efToken);
+                logger.ForContext("SourceContext", "MyApp.Widget").Information(appToken);
+            }
+
+            var contents = File.ReadAllText(tempFile);
+            Assert.DoesNotContain(efToken, contents);
+            Assert.Contains(appToken, contents);
+        }
+        finally
+        {
+            if (File.Exists(tempFile)) File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
+    public void Auto_SteppedUp_BlankEntry_DoesNotSilenceOtherCategories()
+    {
+        var tempFile = Path.Combine(Path.GetTempPath(), $"stepup-b03-blank-{Guid.NewGuid():N}.log");
+        try
+        {
+            var builder = Host.CreateApplicationBuilder();
+            builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["SerilogStepUp:EnableOtlpExporter"] = "false",
+                ["SerilogStepUp:EnablePreErrorBuffering"] = "false",
+                ["SerilogStepUp:Mode"] = "Auto",
+                ["SerilogStepUp:BaseLevel"] = "Warning",
+                ["SerilogStepUp:StepUpLevel"] = "Information",
+                ["SerilogStepUp:NeverStepUpCategories:0"] = "",
+                ["SerilogStepUp:NeverStepUpCategories:1"] = "   ",
+                ["SerilogStepUp:NeverStepUpCategories:2"] = EfCategory,
+                ["Serilog:Using:0"] = "Serilog.Sinks.File",
+                ["Serilog:WriteTo:0:Name"] = "File",
+                ["Serilog:WriteTo:0:Args:path"] = tempFile,
+            });
+            builder.AddStepUpLogging();
+
+            const string efToken = "BLANK_EF_TOKEN_b03";
+            const string rootedToken = "BLANK_ROOTED_TOKEN_b03";
+            using (var host = builder.Build())
+            {
+                var logger = host.Services.GetRequiredService<Serilog.ILogger>();
+                var controller = host.Services.GetRequiredService<StepUpLoggingController>();
+
+                controller.Trigger();
+                SpinWait.SpinUntil(() => controller.LevelSwitch.MinimumLevel <= LogEventLevel.Information, 2000);
+
+                logger.ForContext("SourceContext", EfCategory).Information(efToken);
+                // ".Weird" is dot-rooted: an UNfiltered empty prefix matches it, so this is the only
+                // context the blank filter observably changes. It must still export.
+                logger.ForContext("SourceContext", ".Weird").Information(rootedToken);
+            }
+
+            var contents = File.ReadAllText(tempFile);
+            // Blank entries are filtered, so a dot-rooted context is not pinned to BaseLevel.
+            Assert.Contains(rootedToken, contents);
+            // The real entry still works alongside the (filtered) blanks.
+            Assert.DoesNotContain(efToken, contents);
+        }
+        finally
+        {
+            if (File.Exists(tempFile)) File.Delete(tempFile);
+        }
     }
 }
