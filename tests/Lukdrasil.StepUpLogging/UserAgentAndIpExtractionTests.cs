@@ -1,5 +1,7 @@
 using System.Linq;
+using System.Net;
 using System.Net.Http;
+using System.Security.Claims;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -17,7 +19,7 @@ using Xunit;
 namespace Lukdrasil.StepUpLogging.Tests
 {
     /// <summary>
-    /// Characterization tests for the private <c>ExtractClientIp</c>/<c>ExtractUserAgent</c> methods
+    /// Characterization tests for the private <c>ExtractClientAddresses</c>/<c>ExtractUserAgent</c> methods
     /// on <see cref="StepUpLoggingExtensions"/>. These are only reachable through the real
     /// <c>UseStepUpRequestLogging()</c> middleware pipeline with <c>AlwaysLogRequestSummary</c> enabled,
     /// so every test here drives a real <see cref="TestServer"/> end-to-end rather than calling a
@@ -25,6 +27,8 @@ namespace Lukdrasil.StepUpLogging.Tests
     /// </summary>
     public class UserAgentAndIpExtractionTests
     {
+        private const string KnownRemoteIp = "198.51.100.7";
+
         private sealed class CaptureSink : ILogEventSink
         {
             public LogEvent? LastEvent { get; private set; }
@@ -34,10 +38,10 @@ namespace Lukdrasil.StepUpLogging.Tests
             }
         }
 
-        private static TestServer CreateTestServer(CaptureSink captureSink)
+        private static TestServer CreateTestServer(CaptureSink captureSink, bool trustForwardedHeaders = false, string? jtiClaim = null)
         {
             var summaryLogger = new LoggerConfiguration().WriteTo.Sink(captureSink).CreateLogger();
-            var opts = new StepUpLoggingOptions { AlwaysLogRequestSummary = true, RequestSummaryLevel = "Information", RedactionRegexes = new[] { "secret-[A-Za-z0-9]+" } };
+            var opts = new StepUpLoggingOptions { AlwaysLogRequestSummary = true, RequestSummaryLevel = "Information", TrustForwardedHeaders = trustForwardedHeaders, RedactionRegexes = new[] { "secret-[A-Za-z0-9]+" } };
 
             var builder = new WebHostBuilder()
                 .ConfigureServices(services =>
@@ -61,8 +65,20 @@ namespace Lukdrasil.StepUpLogging.Tests
                 })
                 .Configure(app =>
                 {
+                    // Give the in-memory connection a deterministic remote address and (optionally) a
+                    // jti claim, so the extraction contract can be asserted unambiguously.
+                    app.Use(async (ctx, next) =>
+                    {
+                        ctx.Connection.RemoteIpAddress = IPAddress.Parse(KnownRemoteIp);
+                        if (jtiClaim is not null)
+                        {
+                            ctx.User = new ClaimsPrincipal(new ClaimsIdentity(new[] { new Claim("jti", jtiClaim) }, "test"));
+                        }
+                        await next();
+                    });
+
                     // The real production middleware — this is what actually invokes
-                    // ExtractClientIp/ExtractUserAgent, via the AlwaysLogRequestSummary branch.
+                    // ExtractClientAddresses/ExtractUserAgent, via the AlwaysLogRequestSummary branch.
                     app.UseStepUpRequestLogging();
 
                     app.Run(async ctx =>
@@ -74,6 +90,9 @@ namespace Lukdrasil.StepUpLogging.Tests
 
             return new TestServer(builder);
         }
+
+        private static string? StringProperty(LogEvent logEvent, string name) =>
+            logEvent.Properties.TryGetValue(name, out var prop) ? ((ScalarValue)prop).Value as string : null;
 
         [Fact(DisplayName = "EmitRequestSummary_RedactsUserAgent_WhenItMatchesAPattern")]
         public async Task EmitRequestSummary_RedactsUserAgent_WhenItMatchesAPattern()
@@ -127,17 +146,13 @@ namespace Lukdrasil.StepUpLogging.Tests
             Assert.NotNull(capture.LastEvent);
             var logEvent = capture.LastEvent;
 
-            // TestServer's in-memory connection may or may not populate RemoteIpAddress; today's
-            // behaviour is: when it's absent, ClientIp is omitted entirely (not logged as null/empty).
-            if (logEvent!.Properties.TryGetValue("ClientIp", out var clientIpProp))
-            {
-                var clientIpString = ((ScalarValue)clientIpProp).Value as string;
-                Assert.False(string.IsNullOrWhiteSpace(clientIpString));
-            }
+            // XFF absent: ClientIp is the connection's RemoteIpAddress, and no ForwardedFor is emitted.
+            Assert.Equal(KnownRemoteIp, StringProperty(logEvent!, "ClientIp"));
+            Assert.False(logEvent.Properties.ContainsKey("ForwardedFor"), "ForwardedFor should be absent when X-Forwarded-For is not present");
         }
 
-        [Fact(DisplayName = "EmitRequestSummary_ClientIpIsFirstXForwardedForEntry_WhenPresent")]
-        public async Task EmitRequestSummary_ClientIpIsFirstXForwardedForEntry_WhenPresent()
+        [Fact(DisplayName = "EmitRequestSummary_ClientIpIsRemoteIp_NotXForwardedFor_ByDefault")]
+        public async Task EmitRequestSummary_ClientIpIsRemoteIp_NotXForwardedFor_ByDefault()
         {
             var capture = new CaptureSink();
             using var server = CreateTestServer(capture);
@@ -151,19 +166,56 @@ namespace Lukdrasil.StepUpLogging.Tests
             Assert.NotNull(capture.LastEvent);
             var logEvent = capture.LastEvent;
 
-            Assert.True(logEvent!.Properties.ContainsKey("ClientIp"), "ClientIp property should be in the log event");
-            var clientIpProp = logEvent.Properties["ClientIp"];
-
-            // Today's behaviour: XFF is trusted unconditionally (no TrustForwardedHeaders gate yet),
-            // and ClientIp is the FIRST entry of the header, not the connection's RemoteIpAddress.
-            Assert.Equal("203.0.113.42", ((ScalarValue)clientIpProp).Value);
+            // SECURITY (ADR 0008): with TrustForwardedHeaders unset, the spoofable XFF header must NOT
+            // become ClientIp; the connection's RemoteIpAddress wins.
+            Assert.Equal(KnownRemoteIp, StringProperty(logEvent!, "ClientIp"));
+            Assert.NotEqual("203.0.113.42", StringProperty(logEvent, "ClientIp"));
         }
 
-        [Fact(DisplayName = "EmitRequestSummary_HandlesMultipleXForwardedFor_TakesFirst")]
-        public async Task EmitRequestSummary_HandlesMultipleXForwardedFor_TakesFirst()
+        [Fact(DisplayName = "EmitRequestSummary_EmitsForwardedFor_WhenXForwardedForPresent_ByDefault")]
+        public async Task EmitRequestSummary_EmitsForwardedFor_WhenXForwardedForPresent_ByDefault()
         {
             var capture = new CaptureSink();
             using var server = CreateTestServer(capture);
+            var client = server.CreateClient();
+
+            var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
+            request.Headers.Add("X-Forwarded-For", "203.0.113.42, 198.51.100.100");
+
+            await client.SendAsync(request);
+
+            Assert.NotNull(capture.LastEvent);
+            var logEvent = capture.LastEvent;
+
+            // The raw header is still captured — separately, as ForwardedFor — even though it is untrusted.
+            Assert.True(logEvent!.Properties.ContainsKey("ForwardedFor"), "ForwardedFor should carry the raw header when present");
+            Assert.Equal("203.0.113.42, 198.51.100.100", StringProperty(logEvent, "ForwardedFor"));
+        }
+
+        [Fact(DisplayName = "EmitRequestSummary_ClientIpIsFirstXForwardedForEntry_WhenTrusted")]
+        public async Task EmitRequestSummary_ClientIpIsFirstXForwardedForEntry_WhenTrusted()
+        {
+            var capture = new CaptureSink();
+            using var server = CreateTestServer(capture, trustForwardedHeaders: true);
+            var client = server.CreateClient();
+
+            var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
+            request.Headers.Add("X-Forwarded-For", "203.0.113.42, 198.51.100.100");
+
+            await client.SendAsync(request);
+
+            Assert.NotNull(capture.LastEvent);
+            var logEvent = capture.LastEvent;
+
+            // TrustForwardedHeaders=true restores v2 behaviour: the first XFF entry becomes ClientIp.
+            Assert.Equal("203.0.113.42", StringProperty(logEvent!, "ClientIp"));
+        }
+
+        [Fact(DisplayName = "EmitRequestSummary_TrustedMultipleXForwardedFor_TakesFirstTrimmed")]
+        public async Task EmitRequestSummary_TrustedMultipleXForwardedFor_TakesFirstTrimmed()
+        {
+            var capture = new CaptureSink();
+            using var server = CreateTestServer(capture, trustForwardedHeaders: true);
             var client = server.CreateClient();
 
             var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
@@ -174,57 +226,64 @@ namespace Lukdrasil.StepUpLogging.Tests
             Assert.NotNull(capture.LastEvent);
             var logEvent = capture.LastEvent;
 
-            Assert.True(logEvent!.Properties.ContainsKey("ClientIp"), "ClientIp property should be in the log event");
-            var clientIpProp = logEvent.Properties["ClientIp"];
-
-            Assert.Equal("192.0.2.1", ((ScalarValue)clientIpProp).Value);
+            Assert.Equal("192.0.2.1", StringProperty(logEvent!, "ClientIp"));
         }
 
-        [Fact(DisplayName = "EmitRequestSummary_IncludesUserAgentAndIp_Together")]
-        public async Task EmitRequestSummary_IncludesUserAgentAndIp_Together()
+        [Fact(DisplayName = "EmitRequestSummary_ForwardedForIsRedacted_WhenItMatchesAPattern")]
+        public async Task EmitRequestSummary_ForwardedForIsRedacted_WhenItMatchesAPattern()
         {
             var capture = new CaptureSink();
             using var server = CreateTestServer(capture);
             var client = server.CreateClient();
 
             var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
-            request.Headers.Add("User-Agent", "TestClient/1.0");
-            request.Headers.Add("X-Forwarded-For", "10.0.0.1");
+            request.Headers.TryAddWithoutValidation("X-Forwarded-For", "secret-abc123");
 
             await client.SendAsync(request);
 
             Assert.NotNull(capture.LastEvent);
             var logEvent = capture.LastEvent;
 
-            Assert.True(logEvent!.Properties.ContainsKey("UserAgent"), "UserAgent property should be in the log event");
-            Assert.True(logEvent.Properties.ContainsKey("ClientIp"), "ClientIp property should be in the log event");
-
-            Assert.Equal("TestClient/1.0", ((ScalarValue)logEvent.Properties["UserAgent"]).Value);
-            Assert.Equal("10.0.0.1", ((ScalarValue)logEvent.Properties["ClientIp"]).Value);
+            var forwardedFor = StringProperty(logEvent!, "ForwardedFor");
+            Assert.NotNull(forwardedFor);
+            Assert.Contains("[REDACTED]", forwardedFor);
+            Assert.DoesNotContain("secret-abc123", forwardedFor);
         }
 
         [Fact(DisplayName = "EmitRequestSummary_FallsBackToRemoteIp_WhenXForwardedForIsWhitespace")]
         public async Task EmitRequestSummary_FallsBackToRemoteIp_WhenXForwardedForIsWhitespace()
         {
             var capture = new CaptureSink();
-            using var server = CreateTestServer(capture);
+            using var server = CreateTestServer(capture, trustForwardedHeaders: true);
             var client = server.CreateClient();
 
             var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
-            request.Headers.Add("X-Forwarded-For", "   ");
+            request.Headers.TryAddWithoutValidation("X-Forwarded-For", "   ");
 
             await client.SendAsync(request);
 
             Assert.NotNull(capture.LastEvent);
             var logEvent = capture.LastEvent;
 
-            // Today's behaviour: a whitespace-only XFF value is treated as absent, falling back to
-            // Connection.RemoteIpAddress (which itself may be null/absent on TestServer).
-            if (logEvent!.Properties.TryGetValue("ClientIp", out var clientIpProp))
-            {
-                var clientIpString = ((ScalarValue)clientIpProp).Value as string;
-                Assert.NotEqual("   ", clientIpString);
-            }
+            // A whitespace-only XFF value is treated as absent, falling back to RemoteIpAddress.
+            Assert.Equal(KnownRemoteIp, StringProperty(logEvent!, "ClientIp"));
+        }
+
+        [Fact(DisplayName = "EmitRequestSummary_RedactsJti_WhenItMatchesAPattern")]
+        public async Task EmitRequestSummary_RedactsJti_WhenItMatchesAPattern()
+        {
+            var capture = new CaptureSink();
+            using var server = CreateTestServer(capture, jtiClaim: "secret-jti999");
+            var client = server.CreateClient();
+
+            var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
+            await client.SendAsync(request);
+
+            Assert.NotNull(capture.LastEvent);
+            var jti = StringProperty(capture.LastEvent!, "Jti");
+            Assert.NotNull(jti);
+            Assert.Contains("[REDACTED]", jti);
+            Assert.DoesNotContain("secret-jti999", jti);
         }
     }
 }
