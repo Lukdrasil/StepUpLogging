@@ -11,15 +11,17 @@ using Serilog.Events;
 namespace Lukdrasil.StepUpLogging;
 
 /// <summary>
-/// In-memory per-context ring buffer that captures recent log events and flushes them
-/// to an inner logger when an Error or Fatal event is observed. Context is keyed by
-/// OpenTelemetry/Activity <c>TraceId</c> when available; otherwise a global buffer is used.
+/// In-memory per-context ring buffer that captures recent log events at or above
+/// <paramref name="minimumLevel"/> and flushes them to an inner logger when an Error or
+/// Fatal event is observed. Events below <paramref name="minimumLevel"/> are dropped before
+/// buffering. Context is keyed by OpenTelemetry/Activity <c>TraceId</c> when available;
+/// otherwise a global buffer is used.
 /// Implements proper disposal to prevent memory leaks in LRU cache.
-/// 
+///
 /// Optionally instruments buffer flush operations with ActivitySource for distributed tracing.
 /// To enable tracing, register StepUpLoggingExtensions.BufferActivitySourceName in your OpenTelemetry config.
 /// </summary>
-internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerContext, int maxContexts) : ILogEventSink, IDisposable
+internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerContext, int maxContexts, LogEventLevel minimumLevel) : ILogEventSink, IDisposable
 {
     private readonly ILogger _bypassLogger = bypassLogger ?? throw new ArgumentNullException(nameof(bypassLogger));
     private readonly int _capacityPerContext = Math.Max(1, capacityPerContext);
@@ -119,6 +121,11 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
             }
 
             // No buffering of the error event itself
+            return;
+        }
+
+        if (logEvent.Level < minimumLevel)
+        {
             return;
         }
 
