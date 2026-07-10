@@ -19,16 +19,24 @@ standard for a silent-data-loss path.
 Pin the property with a characterization test rather than assume it. Build the real container
 through `AddStepUpLogging`, emit sub-level events under a trace, dispose the `ServiceProvider`,
 and assert the buffered events reached the bypass sink. The test is the deliverable and the
-regression pin. If it passes, the ordering is verified and no production code changes. If it
-fails, the minimal fix is to take the bypass logger's lifetime away from the controller —
-register it as its own DI singleton so the container disposes it after the Serilog provider, and
-reduce the controller's `Dispose` to the timer alone, updating the ownership contract on
-`SetSummaryLogger`.
+regression pin.
+
+**Outcome (verified 2026-07-10): the ordering is correct, and no production change was required.**
+`ShutdownFlushOrderingTests.BufferedEvents_SurviveServiceProviderDisposal_ReachBypassLogger`
+builds the real container with `EnablePreErrorBuffering = true`, emits sub-`BaseLevel` events
+under a W3C `Activity` (buffered, never exported, no `Error` emitted), disposes the host, and
+confirms the buffered events reach the bypass logger's file sink. It passes against unchanged
+production code: the controller is registered *before* `AddSerilog`, so the container disposes
+the Serilog provider (and with it `PreErrorBufferSink`) *first*, while the controller-owned
+bypass logger is still alive to receive the shutdown flush. The bypass logger's ownership
+remains with `StepUpLoggingController` as documented on `SetSummaryLogger`; no fix branch was
+taken.
 
 ## Consequences
-- An emergent, order-dependent property becomes an asserted one. Any future reordering of the
+- An emergent, order-dependent property is now an asserted one. Any future reordering of the
   registrations in `AddStepUpLoggingInternal` — an easy, innocent-looking edit — now fails a test
   instead of silently dropping the last events before a crash, which is precisely when those
   events matter most.
-- Note that IF the fix branch is taken, `SetSummaryLogger`'s documented ownership transfer changes,
-  and that is a public-surface documentation change.
+- No public-surface change: `SetSummaryLogger`'s documented ownership transfer stands. The fix
+  branch (registering the bypass `Logger` as its own DI singleton and reducing the controller's
+  `Dispose` to the timer alone) was considered but is unnecessary given the verified ordering.
