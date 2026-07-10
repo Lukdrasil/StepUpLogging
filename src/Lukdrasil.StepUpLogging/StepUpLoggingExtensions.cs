@@ -222,35 +222,26 @@ public static class StepUpLoggingExtensions
     /// </summary>
     internal static (IConfiguration Root, IConfiguration Gated) SplitSerilogConfiguration(IConfiguration appConfig)
     {
-        // Trailing colon so the prefix matches only the WriteTo/Using arrays themselves, never a
-        // hypothetical sibling like "Serilog:WriteToFoo".
-        const string writeToPrefix = "Serilog:WriteTo:";
-        const string usingPrefix = "Serilog:Using:";
+        // A path is "in" a section if it equals the section itself (so ancestor sections resolve) or
+        // starts with "<section>:" (so a hypothetical sibling like "Serilog:WriteToFoo" doesn't match).
+        // All comparisons are case-insensitive because configuration keys are.
+        const string writeToSection = "Serilog:WriteTo";
+        const string usingSection = "Serilog:Using";
+        const string serilogSection = "Serilog";
 
-        var rootPairs = new List<KeyValuePair<string, string?>>();
-        var gatedPairs = new List<KeyValuePair<string, string?>>();
+        static bool InSubtree(string path, string section)
+            => path.Equals(section, StringComparison.OrdinalIgnoreCase)
+               || path.StartsWith(section + ":", StringComparison.OrdinalIgnoreCase);
 
-        foreach (var kvp in appConfig.AsEnumerable())
-        {
-            // AsEnumerable() yields intermediate section nodes with null values; only leaves carry values.
-            if (kvp.Value is null) continue;
+        bool RootVisible(string path) => !InSubtree(path, writeToSection);
 
-            var isWriteTo = kvp.Key.StartsWith(writeToPrefix, StringComparison.OrdinalIgnoreCase);
-            var isUsing = kvp.Key.StartsWith(usingPrefix, StringComparison.OrdinalIgnoreCase);
+        bool GatedVisible(string path)
+            => InSubtree(path, writeToSection)
+               || InSubtree(path, usingSection)
+               || path.Equals(serilogSection, StringComparison.OrdinalIgnoreCase);
 
-            if (!isWriteTo)
-            {
-                rootPairs.Add(kvp);
-            }
-
-            if (isWriteTo || isUsing)
-            {
-                gatedPairs.Add(kvp);
-            }
-        }
-
-        var root = new ConfigurationBuilder().AddInMemoryCollection(rootPairs).Build();
-        var gated = new ConfigurationBuilder().AddInMemoryCollection(gatedPairs).Build();
+        var root = new PrefixFilteredConfiguration(appConfig, RootVisible);
+        var gated = new PrefixFilteredConfiguration(appConfig, GatedVisible);
         return (root, gated);
     }
 
