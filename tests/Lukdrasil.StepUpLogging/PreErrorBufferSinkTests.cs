@@ -28,7 +28,7 @@ public class PreErrorBufferSinkTests
             .WriteTo.Sink(collector)
             .CreateLogger();
 
-        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 10, maxContexts: 16);
+        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 10, maxContexts: 16, minimumLevel: LogEventLevel.Verbose);
         var parser = new MessageTemplateParser();
 
         sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Debug, null, parser.Parse("dbg1"), Array.Empty<LogEventProperty>()));
@@ -53,7 +53,7 @@ public class PreErrorBufferSinkTests
             .WriteTo.Sink(collector)
             .CreateLogger();
 
-        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 2, maxContexts: 16);
+        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 2, maxContexts: 16, minimumLevel: LogEventLevel.Verbose);
         var parser = new MessageTemplateParser();
 
         sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Debug, null, parser.Parse("a"), Array.Empty<LogEventProperty>()));
@@ -76,7 +76,7 @@ public class PreErrorBufferSinkTests
             .WriteTo.Sink(collector)
             .CreateLogger();
 
-        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 5, maxContexts: 16);
+        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 5, maxContexts: 16, minimumLevel: LogEventLevel.Verbose);
         var parser = new MessageTemplateParser();
 
         sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Debug, null, parser.Parse("x"), Array.Empty<LogEventProperty>()));
@@ -97,7 +97,7 @@ public class PreErrorBufferSinkTests
             .WriteTo.Sink(collector)
             .CreateLogger();
 
-        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 10, maxContexts: 16);
+        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 10, maxContexts: 16, minimumLevel: LogEventLevel.Verbose);
         var parser = new MessageTemplateParser();
 
         // First, create separate root trace A2
@@ -131,7 +131,7 @@ public class PreErrorBufferSinkTests
             .WriteTo.Sink(collector)
             .CreateLogger();
 
-        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 5, maxContexts: 1);
+        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 5, maxContexts: 1, minimumLevel: LogEventLevel.Verbose);
         var parser = new MessageTemplateParser();
 
         // Simulate two contexts using explicit TraceId properties
@@ -159,7 +159,7 @@ public class PreErrorBufferSinkTests
             .WriteTo.Sink(collector)
             .CreateLogger();
 
-        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 5, maxContexts: 1);
+        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 5, maxContexts: 1, minimumLevel: LogEventLevel.Verbose);
         var parser = new MessageTemplateParser();
 
         var ctx1Prop = new LogEventProperty("TraceId", new ScalarValue("ctx1"));
@@ -187,7 +187,7 @@ public class PreErrorBufferSinkTests
 
         var collector = new CollectingSink();
         var bypass = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
-        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 5, maxContexts: 16);
+        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 5, maxContexts: 16, minimumLevel: LogEventLevel.Verbose);
         var parser = new MessageTemplateParser();
 
         // Two separate TraceId values so we can confirm key isolation
@@ -225,7 +225,7 @@ public class PreErrorBufferSinkTests
             .WriteTo.Sink(collector)
             .CreateLogger();
 
-        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 10, maxContexts: 16);
+        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 10, maxContexts: 16, minimumLevel: LogEventLevel.Verbose);
         var parser = new MessageTemplateParser();
 
         var immediateProps = new[] { new LogEventProperty(LogProperties.IsImmediate, new ScalarValue(true)) };
@@ -252,7 +252,7 @@ public class PreErrorBufferSinkTests
             .WriteTo.Sink(collector)
             .CreateLogger();
 
-        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 10, maxContexts: 16);
+        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 10, maxContexts: 16, minimumLevel: LogEventLevel.Verbose);
         var parser = new MessageTemplateParser();
 
         var summaryProps = new[] { new LogEventProperty(LogProperties.IsRequestSummary, new ScalarValue(true)) };
@@ -273,7 +273,7 @@ public class PreErrorBufferSinkTests
         Activity.Current = null;
         var collector = new CollectingSink();
         var bypass = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
-        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 5, maxContexts: 16);
+        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 5, maxContexts: 16, minimumLevel: LogEventLevel.Verbose);
         var parser = new MessageTemplateParser();
 
         var newCtx = new[] { new LogEventProperty("TraceId", new ScalarValue("brand-new")) };
@@ -290,7 +290,7 @@ public class PreErrorBufferSinkTests
         Activity.Current = null;
         var collector = new CollectingSink();
         var bypass = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
-        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 5, maxContexts: 2);
+        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 5, maxContexts: 2, minimumLevel: LogEventLevel.Verbose);
         var parser = new MessageTemplateParser();
 
         static LogEventProperty[] Ctx(string id) => new[] { new LogEventProperty("TraceId", new ScalarValue(id)) };
@@ -324,7 +324,7 @@ public class PreErrorBufferSinkTests
         Activity.Current = null;
         var collector = new CollectingSink();
         var bypass = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
-        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 10, maxContexts: 16);
+        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 10, maxContexts: 16, minimumLevel: LogEventLevel.Verbose);
         var parser = new MessageTemplateParser();
 
         var ctx = new[] { new LogEventProperty("TraceId", new ScalarValue("same")) };
@@ -339,12 +339,109 @@ public class PreErrorBufferSinkTests
     }
 
     [Fact]
+    public void Buffer_EventsBelowFloor_NotFlushedOnError()
+    {
+        var collector = new CollectingSink();
+        var bypass = new LoggerConfiguration()
+            .MinimumLevel.Verbose()
+            .WriteTo.Sink(collector)
+            .CreateLogger();
+
+        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 10, maxContexts: 16, minimumLevel: LogEventLevel.Information);
+        var parser = new MessageTemplateParser();
+
+        sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Verbose, null, parser.Parse("verbose1"), Array.Empty<LogEventProperty>()));
+        sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Debug, null, parser.Parse("debug1"), Array.Empty<LogEventProperty>()));
+        sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Error, null, parser.Parse("err"), Array.Empty<LogEventProperty>()));
+
+        Assert.Empty(collector.Events);
+    }
+
+    [Fact]
+    public void Buffer_EventsAtOrAboveFloor_FlushOnError()
+    {
+        var collector = new CollectingSink();
+        var bypass = new LoggerConfiguration()
+            .MinimumLevel.Verbose()
+            .WriteTo.Sink(collector)
+            .CreateLogger();
+
+        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 10, maxContexts: 16, minimumLevel: LogEventLevel.Information);
+        var parser = new MessageTemplateParser();
+
+        sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Information, null, parser.Parse("info1"), Array.Empty<LogEventProperty>()));
+        sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Warning, null, parser.Parse("warn1"), Array.Empty<LogEventProperty>()));
+        sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Error, null, parser.Parse("err"), Array.Empty<LogEventProperty>()));
+
+        Assert.Collection(collector.Events,
+            e => Assert.Equal("info1", e.MessageTemplate.Text),
+            e => Assert.Equal("warn1", e.MessageTemplate.Text));
+    }
+
+    [Fact]
+    public void Buffer_FloorVerbose_KeepsPreFixBehaviour()
+    {
+        var collector = new CollectingSink();
+        var bypass = new LoggerConfiguration()
+            .MinimumLevel.Verbose()
+            .WriteTo.Sink(collector)
+            .CreateLogger();
+
+        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 10, maxContexts: 16, minimumLevel: LogEventLevel.Verbose);
+        var parser = new MessageTemplateParser();
+
+        sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Verbose, null, parser.Parse("verbose1"), Array.Empty<LogEventProperty>()));
+        sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Debug, null, parser.Parse("debug1"), Array.Empty<LogEventProperty>()));
+        sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Error, null, parser.Parse("err"), Array.Empty<LogEventProperty>()));
+
+        Assert.Collection(collector.Events,
+            e => Assert.Equal("verbose1", e.MessageTemplate.Text),
+            e => Assert.Equal("debug1", e.MessageTemplate.Text));
+    }
+
+    [Fact]
+    public void Buffer_EventsBelowFloor_NotCountedInBufferedEventsCounter()
+    {
+        var meterListener = new System.Diagnostics.Metrics.MeterListener();
+        var measurements = new List<long>();
+        meterListener.InstrumentPublished = (instrument, listener) =>
+        {
+            if (instrument.Meter.Name == "StepUpLogging.Buffer" && instrument.Name == "buffer_events_total")
+            {
+                listener.EnableMeasurementEvents(instrument);
+            }
+        };
+        meterListener.SetMeasurementEventCallback<long>((instrument, measurement, tags, state) => measurements.Add(measurement));
+        meterListener.Start();
+
+        try
+        {
+            var collector = new CollectingSink();
+            var bypass = new LoggerConfiguration()
+                .MinimumLevel.Verbose()
+                .WriteTo.Sink(collector)
+                .CreateLogger();
+
+            using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 10, maxContexts: 16, minimumLevel: LogEventLevel.Information);
+            var parser = new MessageTemplateParser();
+
+            sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Verbose, null, parser.Parse("verbose1"), Array.Empty<LogEventProperty>()));
+
+            Assert.Empty(measurements);
+        }
+        finally
+        {
+            meterListener.Dispose();
+        }
+    }
+
+    [Fact]
     public void Buffer_WhitespaceTraceIdProperty_FallsBackToGlobalKey()
     {
         Activity.Current = null;
         var collector = new CollectingSink();
         var bypass = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
-        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 5, maxContexts: 16);
+        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 5, maxContexts: 16, minimumLevel: LogEventLevel.Verbose);
         var parser = new MessageTemplateParser();
 
         // Whitespace TraceId → falls back to "__global__"

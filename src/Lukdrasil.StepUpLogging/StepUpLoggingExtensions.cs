@@ -196,10 +196,10 @@ public static class StepUpLoggingExtensions
                 stepUpController.BaseLevel,
                 neverStepUp));
 
-            // Pre-error buffer: captures all events per trace; flushes to bypass logger on Error/Fatal.
+            // Pre-error buffer: captures events at/above StepUpLevel per trace; flushes to bypass logger on Error/Fatal.
             if (opts.EnablePreErrorBuffering)
             {
-                lc.WriteTo.Sink(new PreErrorBufferSink(bypassLogger, opts.PreErrorBufferSize, opts.PreErrorMaxContexts));
+                lc.WriteTo.Sink(new PreErrorBufferSink(bypassLogger, opts.PreErrorBufferSize, opts.PreErrorMaxContexts, stepUpController.StepUpLevel));
             }
 
             // Trigger sink: observes Error/Fatal events and calls controller.Trigger() asynchronously.
