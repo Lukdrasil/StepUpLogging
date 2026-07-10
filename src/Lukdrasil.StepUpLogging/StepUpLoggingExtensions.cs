@@ -128,7 +128,7 @@ public static class StepUpLoggingExtensions
         builder.Services.AddOptions<StepUpLoggingOptions>()
             .Bind(builder.Configuration.GetSection(configSectionName))
             .Configure(options => configureOptions?.Invoke(options))
-            .Validate(ValidateOptions, "Invalid SerilogStepUp options: DurationSeconds must be > 0, MaxBodyCaptureBytes must be > 0, and BaseLevel/StepUpLevel/RequestSummaryLevel must be valid Serilog levels.")
+            .Validate(ValidateOptions, "Invalid SerilogStepUp options: DurationSeconds must be > 0, MaxBodyCaptureBytes must be > 0, MaxContinuousStepUpSeconds must be >= 0 and either 0 (disabled) or >= DurationSeconds, StepUpCooldownSeconds must be >= 0, and BaseLevel/StepUpLevel/RequestSummaryLevel must be valid Serilog levels.")
             .ValidateOnStart();
 
         builder.Services.ConfigureOpenTelemetryMeterProvider(metrics =>
@@ -262,6 +262,9 @@ public static class StepUpLoggingExtensions
     private static bool ValidateOptions(StepUpLoggingOptions o)
         => o.DurationSeconds > 0
            && o.MaxBodyCaptureBytes > 0
+           && o.MaxContinuousStepUpSeconds >= 0
+           && o.StepUpCooldownSeconds >= 0
+           && (o.MaxContinuousStepUpSeconds == 0 || o.MaxContinuousStepUpSeconds >= o.DurationSeconds)
            && IsValidLevel(o.BaseLevel)
            && IsValidLevel(o.StepUpLevel)
            && IsValidLevel(o.RequestSummaryLevel);
