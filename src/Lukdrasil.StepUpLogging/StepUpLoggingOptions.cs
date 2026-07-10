@@ -119,12 +119,21 @@ public sealed class StepUpLoggingOptions
     /// and flushed when an Error/Fatal event occurs. Useful for diagnosing issues by including
     /// context prior to the error.
     /// </summary>
+    /// <remarks>
+    /// Only events at or above the resolved <see cref="StepUpLevel"/> are buffered/flushed;
+    /// events below that floor are never stored. Set <see cref="StepUpLevel"/> to
+    /// <c>"Verbose"</c> to buffer every event.
+    /// </remarks>
     public bool EnablePreErrorBuffering { get; set; } = true;
 
     /// <summary>
     /// Maximum number of events to retain per logical context (Activity/Trace). Oldest events
     /// are dropped when the capacity is exceeded.
     /// </summary>
+    /// <remarks>
+    /// This limit applies only to events at or above the resolved <see cref="StepUpLevel"/> —
+    /// the buffer's implicit level floor — since events below it are never buffered.
+    /// </remarks>
     public int PreErrorBufferSize { get; set; } = 100;
 
     /// <summary>
