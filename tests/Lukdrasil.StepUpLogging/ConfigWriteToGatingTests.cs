@@ -43,6 +43,29 @@ public class ConfigWriteToGatingTests
     }
 
     [Fact]
+    public void SplitSerilogConfiguration_AncestorSectionsResolve_ThroughGetSectionApi()
+    {
+        var appConfig = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Serilog:MinimumLevel:Default"] = "Information",
+                ["Serilog:WriteTo:0:Name"] = "Console",
+            })
+            .Build();
+
+        var (root, gated) = StepUpLoggingExtensions.SplitSerilogConfiguration(appConfig);
+
+        // Root: WriteTo is entirely absent when walked through GetSection/GetChildren, while the
+        // MinimumLevel ancestor chain still resolves via the section API (not just the indexer).
+        Assert.Empty(root.GetSection("Serilog").GetSection("WriteTo").GetChildren());
+        Assert.Equal("Information", root.GetSection("Serilog").GetSection("MinimumLevel")["Default"]);
+
+        // Gated: WriteTo is present through GetSection/GetChildren, while MinimumLevel is empty.
+        Assert.NotEmpty(gated.GetSection("Serilog").GetSection("WriteTo").GetChildren());
+        Assert.Empty(gated.GetSection("Serilog").GetSection("MinimumLevel").GetChildren());
+    }
+
+    [Fact]
     public void ConfigWriteToSink_HonorsLevelSwitch_GatedThenSteppedUp()
     {
         var tempFile = Path.Combine(Path.GetTempPath(), $"stepup-b03-{System.Guid.NewGuid():N}.log");

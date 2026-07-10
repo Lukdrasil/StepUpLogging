@@ -186,8 +186,9 @@ When "AlwaysLogRequestSummary" is enabled, the middleware emits a single structu
 - **Response status code** - 200, 404, 500, etc.
 - **Elapsed milliseconds** - Request duration
 - **Trace ID** - Optional trace/correlation id
-- **UserAgent** - Client User-Agent header (for client identification)
-- **ClientIp** - Client IP address with proxy support (X-Forwarded-For header, fallback to direct connection IP)
+- **UserAgent** - Client User-Agent header (for client identification), redacted via `RedactionRegexes`
+- **ClientIp** - Client IP address from `Connection.RemoteIpAddress` by default (see [Security](#security)); when `TrustForwardedHeaders` is enabled, the first `X-Forwarded-For` entry instead
+- **ForwardedFor** - The raw `X-Forwarded-For` header value (redacted), present only when the header is sent
 
 Summary events are marked with the "IsRequestSummary" property and are processed by the library's SummarySink so they are exported independently of the StepUp level switch (base Warning) and the normal step-up flow.
 
@@ -203,24 +204,22 @@ Summary events are marked with the "IsRequestSummary" property and are processed
   "StatusCode": 201,
   "ElapsedMs": 45.23,
   "UserAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-  "ClientIp": "203.0.113.42",
+  "ClientIp": "198.51.100.100",
+  "ForwardedFor": "203.0.113.42, 198.51.100.100",
   "IsRequestSummary": true
 }
 ```
 
 #### IP Address Detection
 
-The library automatically detects the client IP address:
+By default the library takes `ClientIp` from `HttpContext.Connection.RemoteIpAddress` and
+**does not** trust the `X-Forwarded-For` (XFF) header, because that header is client-supplied
+and spoofable. When XFF is present, its raw value is still logged separately as `ForwardedFor`
+(redacted) for diagnostics.
 
-1. **Proxy scenarios** - Checks `X-Forwarded-For` header and extracts the first IP (original client's IP)
-2. **Direct connection** - Falls back to `HttpContext.Connection.RemoteIpAddress` if no proxy header
-3. **Graceful degradation** - Omits IP field if detection fails
-
-Example with proxy:
-```
-X-Forwarded-For: 203.0.113.42, 198.51.100.100
-                 ^^^^^^^^^^^ extracted (original client)
-```
+1. **Default (`TrustForwardedHeaders: false`)** - `ClientIp` = `Connection.RemoteIpAddress`; XFF is ignored for `ClientIp` but surfaced as `ForwardedFor`.
+2. **`TrustForwardedHeaders: true`** - `ClientIp` = first `X-Forwarded-For` entry when present (v2 behavior). Only enable this behind a reverse proxy you control **and** with `ForwardedHeadersMiddleware` configured. See [Security](#security).
+3. **Graceful degradation** - Omits `ClientIp` if detection fails.
 
 To customise where summaries are written, provide a dedicated summary logger in DI when calling AddStepUpLogging, or configure the default sinks; the library enforces a single DI-managed summary logger to avoid unmanaged CreateLogger instances.
 
@@ -235,6 +234,11 @@ StepUpLogging uses standard OpenTelemetry environment variables for OTLP configu
 | `OTEL_EXPORTER_OTLP_PROTOCOL` | Protocol: `grpc` or `http/protobuf` | `grpc` |
 | `OTEL_EXPORTER_OTLP_HEADERS` | Headers (format: `key1=value1,key2=value2`) | (none) |
 | `OTEL_RESOURCE_ATTRIBUTES` | Resource attributes (format: `key1=value1,key2=value2`) | (none) |
+
+Keys and values in `OTEL_EXPORTER_OTLP_HEADERS` and `OTEL_RESOURCE_ATTRIBUTES` are
+**percent-decoded** per the OTel specification, so an encoded value such as
+`Authorization=Basic%20QWxhZGRpbg%3D%3D` reaches the collector as `Basic QWxhZGRpbg==`. A
+literal comma inside a value is not representable in this format (it delimits pairs).
 
 **Example with environment variables:**
 
@@ -678,6 +682,8 @@ See full [performance test results](tests/k6/performance_test_results.md).
 | `BaseLevel` | `"Warning"` | - | Normal log level |
 | `StepUpLevel` | `"Information"` | - | Elevated log level during step-up |
 | `DurationSeconds` | `180` | - | How long step-up remains active (Auto mode) |
+| `MaxContinuousStepUpSeconds` | `0` (disabled) | - | Upper bound on a single continuous step-up window; forces a step-down and opens a cooldown when exceeded. `0` disables the cap. Must be `0` or `>= DurationSeconds`. |
+| `StepUpCooldownSeconds` | `300` | - | Seconds triggers are ignored after the cap forces a step-down; ignored when the cap is disabled |
 | `NeverStepUpCategories` | `["Microsoft.EntityFrameworkCore.Database.Command"]` | - | `SourceContext` prefixes the step-up never raises above `BaseLevel` (see below) |
 | **Pre-Error Buffering** |
 | `EnablePreErrorBuffering` | `true` | - | Enable/disable pre-error buffering |
@@ -701,8 +707,9 @@ See full [performance test results](tests/k6/performance_test_results.md).
 | `CaptureRequestBody` | `false` | - | Capture POST/PUT/PATCH bodies during step-up |
 | `MaxBodyCaptureBytes` | `16384` | - | Max bytes to capture from request body |
 | `ExcludePaths` | `["/health", "/metrics"]` | - | Paths to exclude from logging |
-| `RedactionRegexes` | `[]` | - | Regex patterns for redacting sensitive data |
+| `RedactionRegexes` | `[]` | - | Regex patterns for redacting sensitive data (request metadata and bodies only — see [Security](#security)) |
 | `AdditionalSensitiveHeaders` | `[]` | - | Custom header names to redact in request logging |
+| `TrustForwardedHeaders` | `false` | - | When `true`, `ClientIp` is taken from the first `X-Forwarded-For` entry (v2 behavior). Only enable behind a proxy you control with `ForwardedHeadersMiddleware`. See [Security](#security). |
 | **Service Identification** |
 | `ServiceVersion` | `null` | `APP_VERSION` | Service version for enrichment |
 
@@ -742,6 +749,39 @@ list empty:
   }
 }
 ```
+
+## Security
+
+Three security properties are worth understanding before you deploy:
+
+### Client IP is only as trustworthy as your proxy configuration
+
+`X-Forwarded-For` is client-supplied and trivially spoofable. Setting `TrustForwardedHeaders:
+true` blindly trusts its first entry as `ClientIp`, letting any caller forge the logged IP —
+only enable it behind a proxy you fully control. By default the library does not trust XFF:
+`ClientIp` comes from `HttpContext.Connection.RemoteIpAddress`. If you run behind a reverse
+proxy and need the real client address, configure ASP.NET Core's
+[`ForwardedHeadersMiddleware`](https://learn.microsoft.com/aspnet/core/host-and-deploy/proxy-load-balancer)
+with your known proxies so `Connection.RemoteIpAddress` reflects the true client, and leave
+`TrustForwardedHeaders` at `false`. The raw header is always logged (redacted) as
+`ForwardedFor` for diagnostics.
+
+### Redaction covers request metadata and bodies, not message-template arguments
+
+`RedactionRegexes` is applied to query strings, route values, headers, and request bodies.
+It does **not** scan the rendered text of arbitrary log messages — a secret passed as a
+message-template argument (`logger.LogInformation("token={T}", secret)`) is **not** redacted.
+Do not log secrets in message templates.
+
+### Sustained-error cost amplification
+
+Step-up raises verbosity on errors, which raises telemetry cost. `MaxContinuousStepUpSeconds`
+bounds a *single continuous* step-up window and then opens a cooldown, but an attacker pacing
+triggers to fire just outside the cooldown still obtains sustained verbosity at a reduced duty
+cycle. This is by design (see ADR 0010): the library cannot distinguish malicious from
+legitimate error bursts. Collector-side sampling / quota / rate limiting remains the backstop
+for uncapped cost, especially when the cap is disabled (`MaxContinuousStepUpSeconds = 0`, the
+default).
 
 ## OpenTelemetry Activities & Metrics
 

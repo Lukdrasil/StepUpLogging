@@ -128,7 +128,7 @@ public static class StepUpLoggingExtensions
         builder.Services.AddOptions<StepUpLoggingOptions>()
             .Bind(builder.Configuration.GetSection(configSectionName))
             .Configure(options => configureOptions?.Invoke(options))
-            .Validate(ValidateOptions, "Invalid SerilogStepUp options: DurationSeconds must be > 0 and BaseLevel/StepUpLevel/RequestSummaryLevel must be valid Serilog levels.")
+            .Validate(ValidateOptions, "Invalid SerilogStepUp options: DurationSeconds must be > 0, MaxBodyCaptureBytes must be > 0, MaxContinuousStepUpSeconds must be >= 0 and either 0 (disabled) or >= DurationSeconds, StepUpCooldownSeconds must be >= 0, and BaseLevel/StepUpLevel/RequestSummaryLevel must be valid Serilog levels.")
             .ValidateOnStart();
 
         builder.Services.ConfigureOpenTelemetryMeterProvider(metrics =>
@@ -139,7 +139,7 @@ public static class StepUpLoggingExtensions
             var opts = sp.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
             var patterns = opts.RedactionRegexes
                 .Where(p => !string.IsNullOrWhiteSpace(p))
-                .Select(p => new Regex(p, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100)))
+                .Select(CompilePattern)
                 .ToArray();
             return new CompiledRedactionPatterns(patterns);
         });
@@ -234,42 +234,27 @@ public static class StepUpLoggingExtensions
     /// </summary>
     internal static (IConfiguration Root, IConfiguration Gated) SplitSerilogConfiguration(IConfiguration appConfig)
     {
-        // Trailing colon so the prefix matches only the WriteTo/Using arrays themselves, never a
-        // hypothetical sibling like "Serilog:WriteToFoo".
-        const string writeToPrefix = "Serilog:WriteTo:";
-        const string usingPrefix = "Serilog:Using:";
+        // A path is "in" a section if it equals the section itself (so ancestor sections resolve) or
+        // starts with "<section>:" (so a hypothetical sibling like "Serilog:WriteToFoo" doesn't match).
+        // All comparisons are case-insensitive because configuration keys are.
+        const string writeToSection = "Serilog:WriteTo";
+        const string usingSection = "Serilog:Using";
+        const string serilogSection = "Serilog";
 
-        var rootPairs = new List<KeyValuePair<string, string?>>();
-        var gatedPairs = new List<KeyValuePair<string, string?>>();
+        static bool InSubtree(string path, string section)
+            => path.Equals(section, StringComparison.OrdinalIgnoreCase)
+               || path.StartsWith(section + ":", StringComparison.OrdinalIgnoreCase);
 
-        foreach (var kvp in appConfig.AsEnumerable())
-        {
-            // AsEnumerable() yields intermediate section nodes with null values; only leaves carry values.
-            if (kvp.Value is null) continue;
+        bool RootVisible(string path) => !InSubtree(path, writeToSection);
 
-            var isWriteTo = kvp.Key.StartsWith(writeToPrefix, StringComparison.OrdinalIgnoreCase);
-            var isUsing = kvp.Key.StartsWith(usingPrefix, StringComparison.OrdinalIgnoreCase);
+        bool GatedVisible(string path)
+            => InSubtree(path, writeToSection)
+               || InSubtree(path, usingSection)
+               || path.Equals(serilogSection, StringComparison.OrdinalIgnoreCase);
 
-            if (!isWriteTo)
-            {
-                rootPairs.Add(kvp);
-            }
-
-            if (isWriteTo || isUsing)
-            {
-                gatedPairs.Add(kvp);
-            }
-        }
-
-        var root = new ConfigurationBuilder().AddInMemoryCollection(rootPairs).Build();
-        var gated = new ConfigurationBuilder().AddInMemoryCollection(gatedPairs).Build();
+        var root = new PrefixFilteredConfiguration(appConfig, RootVisible);
+        var gated = new PrefixFilteredConfiguration(appConfig, GatedVisible);
         return (root, gated);
-    }
-
-    private static LogEventLevel ParseLogEventLevel(string? value, LogEventLevel fallback)
-    {
-        if (string.IsNullOrWhiteSpace(value)) return fallback;
-        return Enum.TryParse<LogEventLevel>(value, true, out var lvl) ? lvl : fallback;
     }
 
     /// <summary>
@@ -279,12 +264,36 @@ public static class StepUpLoggingExtensions
     /// </summary>
     private static bool ValidateOptions(StepUpLoggingOptions o)
         => o.DurationSeconds > 0
+           && o.MaxBodyCaptureBytes > 0
+           && o.MaxContinuousStepUpSeconds >= 0
+           && o.StepUpCooldownSeconds >= 0
+           && (o.MaxContinuousStepUpSeconds == 0 || o.MaxContinuousStepUpSeconds >= o.DurationSeconds)
            && IsValidLevel(o.BaseLevel)
            && IsValidLevel(o.StepUpLevel)
            && IsValidLevel(o.RequestSummaryLevel);
 
     private static bool IsValidLevel(string? value)
         => !string.IsNullOrWhiteSpace(value) && Enum.TryParse<LogEventLevel>(value, true, out _);
+
+    /// <summary>
+    /// Compiles a redaction pattern with <see cref="RegexOptions.NonBacktracking"/> so matching is
+    /// linear-time and catastrophic backtracking is structurally impossible. Patterns using lookaround
+    /// or backreferences are unsupported by that engine and throw <see cref="NotSupportedException"/> at
+    /// construction; those fall back to <see cref="RegexOptions.Compiled"/>. <c>NonBacktracking</c> cannot
+    /// be combined with <c>Compiled</c>, so the fallback swaps the option rather than adding to it. The
+    /// 100 ms timeout stays on both branches as a backstop (ADR 0001 amendment).
+    /// </summary>
+    internal static Regex CompilePattern(string pattern)
+    {
+        try
+        {
+            return new Regex(pattern, RegexOptions.NonBacktracking | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100));
+        }
+        catch (NotSupportedException)
+        {
+            return new Regex(pattern, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100));
+        }
+    }
 
     /// <summary>
     /// Applies all configured enrichers to <paramref name="lc"/>. Called on both the root
@@ -433,9 +442,11 @@ public static class StepUpLoggingExtensions
                                 routeParams = rp;
                             }
 
-                            var userAgent = ExtractUserAgent(httpContext.Request);
-                            var clientIp = ExtractClientIp(httpContext);
-                            var jti = httpContext.User?.FindFirst("jti")?.Value;
+                            var rawUserAgent = ExtractUserAgent(httpContext.Request);
+                            var userAgent = rawUserAgent is null ? null : compiledPatterns.Redact(rawUserAgent);
+                            var (clientIp, forwardedFor) = ExtractClientAddresses(httpContext, opts.TrustForwardedHeaders, compiledPatterns);
+                            var rawJti = httpContext.User?.FindFirst("jti")?.Value;
+                            var jti = rawJti is null ? null : compiledPatterns.Redact(rawJti);
                             var statusCode = failed ? StatusCodes.Status500InternalServerError : (httpContext.Response?.StatusCode ?? 0);
                             stepUpController.EmitRequestSummary(
                                 httpContext.Request.Method,
@@ -447,7 +458,8 @@ public static class StepUpLoggingExtensions
                                 routeParams,
                                 userAgent,
                                 clientIp,
-                                jti);
+                                jti,
+                                forwardedFor);
                         }
                         catch
                         {
@@ -487,6 +499,21 @@ public static class StepUpLoggingExtensions
                 activity?.SetTag("http.scheme", httpContext.Request.Scheme);
                 activity?.SetTag("http.host", httpContext.Request.Host.Value);
 
+                // One aggregate ApplyRedaction span per request (ADR 0009), started lazily on the first
+                // redaction so a request with nothing to redact creates no span at all.
+                Activity? redactionActivity = null;
+                var redactionCount = 0;
+                var redactionTargets = opts.EnableActivityInstrumentation ? new List<string>() : null;
+
+                void NoteRedaction(string target)
+                {
+                    RedactionCounter.Add(1);
+                    redactionCount++;
+                    if (!opts.EnableActivityInstrumentation) return;
+                    redactionActivity ??= RequestLoggingActivitySource.StartActivity("ApplyRedaction", ActivityKind.Internal);
+                    redactionTargets!.Add(target);
+                }
+
                 var rawPath = httpContext.Request.Path.Value ?? string.Empty;
                 var path = rawPath.Length > 1 ? rawPath.TrimEnd('/') : rawPath;
                 diagnosticContext.Set("RequestPath", path);
@@ -495,16 +522,7 @@ public static class StepUpLoggingExtensions
                 var redactedQs = compiledPatterns.Redact(qs);
                 if (!string.Equals(redactedQs, qs, StringComparison.Ordinal))
                 {
-                    if (opts.EnableActivityInstrumentation)
-                    {
-                        using (var redactionActivity = RequestLoggingActivitySource.StartActivity("ApplyRedaction", ActivityKind.Internal))
-                        {
-                            redactionActivity?.SetTag("security.redaction_type", "query_string");
-                            redactionActivity?.SetTag("security.redaction_target", "query_string");
-                        }
-                    }
-                    RedactionCounter.Add(1);
-                    activity?.SetTag("security.redaction_applied", true);
+                    NoteRedaction("query_string");
                 }
                 diagnosticContext.Set("QueryString", redactedQs);
 
@@ -517,15 +535,7 @@ public static class StepUpLoggingExtensions
                         var redactedValue = compiledPatterns.Redact(value);
                         if (!string.Equals(redactedValue, value, StringComparison.Ordinal))
                         {
-                            if (opts.EnableActivityInstrumentation)
-                            {
-                                using (var redactionActivity = RequestLoggingActivitySource.StartActivity("ApplyRedaction", ActivityKind.Internal))
-                                {
-                                    redactionActivity?.SetTag("security.redaction_type", "route_parameter");
-                                    redactionActivity?.SetTag("security.redaction_target", kvp.Key);
-                                }
-                            }
-                            RedactionCounter.Add(1);
+                            NoteRedaction($"route:{kvp.Key}");
                         }
                         routeParams[kvp.Key] = redactedValue;
                     }
@@ -538,15 +548,7 @@ public static class StepUpLoggingExtensions
                     if (sensitiveHeaders.Contains(header.Key))
                     {
                         headers[header.Key] = "[REDACTED]";
-                        if (opts.EnableActivityInstrumentation)
-                        {
-                            using (var redactionActivity = RequestLoggingActivitySource.StartActivity("ApplyRedaction", ActivityKind.Internal))
-                            {
-                                redactionActivity?.SetTag("security.redaction_type", "sensitive_header");
-                                redactionActivity?.SetTag("security.redaction_target", header.Key);
-                            }
-                        }
-                        RedactionCounter.Add(1);
+                        NoteRedaction($"header:{header.Key}");
                     }
                     else
                     {
@@ -554,26 +556,30 @@ public static class StepUpLoggingExtensions
                         var redactedValue = compiledPatterns.Redact(value);
                         if (!string.Equals(redactedValue, value, StringComparison.Ordinal))
                         {
-                            if (opts.EnableActivityInstrumentation)
-                            {
-                                using (var redactionActivity = RequestLoggingActivitySource.StartActivity("ApplyRedaction", ActivityKind.Internal))
-                                {
-                                    redactionActivity?.SetTag("security.redaction_type", "pattern");
-                                    redactionActivity?.SetTag("security.redaction_target", header.Key);
-                                }
-                            }
-                            RedactionCounter.Add(1);
+                            NoteRedaction($"header:{header.Key}");
                         }
                         headers[header.Key] = redactedValue;
                     }
                 }
                 diagnosticContext.Set("Headers", headers);
 
+                if (redactionActivity is not null)
+                {
+                    redactionActivity.SetTag("security.redaction_applied", true);
+                    redactionActivity.SetTag("security.redaction_count", redactionCount);
+                    redactionActivity.SetTag("security.redaction_targets", string.Join(",", redactionTargets!));
+                    activity?.SetTag("security.redaction_applied", true);
+                    redactionActivity.Dispose();
+                }
+
                 var jtiClaim = httpContext.User?.FindFirst("jti")?.Value;
                 if (!string.IsNullOrEmpty(jtiClaim))
-                    diagnosticContext.Set("Jti", jtiClaim);
+                    diagnosticContext.Set("Jti", compiledPatterns.Redact(jtiClaim));
 
-                if (opts.CaptureRequestBody && stepUpController.IsSteppedUp)
+                // The step-up trigger sink is asynchronous, so the request whose Error CAUSES the
+                // step-up is still not stepped-up when this enricher runs at request completion.
+                // A 5xx status is knowable synchronously here, so capture the failing request too.
+                if (opts.CaptureRequestBody && (stepUpController.IsSteppedUp || httpContext.Response?.StatusCode >= 500))
                 {
                     var method = httpContext.Request.Method;
                     // Body.CanSeek is true only when the early buffering middleware ran for this request.
@@ -591,15 +597,21 @@ public static class StepUpLoggingExtensions
                                 if (bodyControl is not null) bodyControl.AllowSynchronousIO = true;
 
                                 httpContext.Request.Body.Position = 0;
-                                var maxBytes = opts.MaxBodyCaptureBytes;
-                                var buffer = new char[maxBytes];
+                                // Read a margin beyond the limit so a secret straddling the cut still
+                                // matches its pattern; redact the margin-extended text, then truncate the
+                                // redacted result (ADR 0009 F2).
+                                const int RedactionMargin = 256;
+                                var limit = opts.MaxBodyCaptureBytes;
+                                var buffer = new char[limit + RedactionMargin];
                                 using var sr = new StreamReader(httpContext.Request.Body, Encoding.UTF8, true, 1024, leaveOpen: true);
-                                var read = sr.Read(buffer, 0, maxBytes);
+                                var read = sr.Read(buffer, 0, buffer.Length);
                                 httpContext.Request.Body.Position = 0;
 
                                 if (read > 0)
                                 {
-                                    diagnosticContext.Set("RequestBody", compiledPatterns.Redact(new string(buffer, 0, read)));
+                                    var redacted = compiledPatterns.Redact(new string(buffer, 0, read));
+                                    if (redacted.Length > limit) redacted = redacted[..limit];
+                                    diagnosticContext.Set("RequestBody", redacted);
                                     BodyCaptureCounter.Add(1);
                                 }
                                 else
@@ -646,47 +658,46 @@ public static class StepUpLoggingExtensions
     }
 
     /// <summary>
-    /// Extract the client's IP address, checking for X-Forwarded-For header (proxy-aware),
-    /// with fallback to direct connection IP.
+    /// Extracts the client's connection address and the raw <c>X-Forwarded-For</c> header of a request.
     /// </summary>
     /// <remarks>
-    /// SECURITY: <c>X-Forwarded-For</c> is client-supplied and trivially spoofable. Only trust the logged
-    /// <c>ClientIp</c> if a trusted reverse proxy sets this header and you have configured
-    /// <c>ForwardedHeadersMiddleware</c> (which validates known proxies and populates
-    /// <c>Connection.RemoteIpAddress</c>). Without that, treat this value as untrusted.
+    /// SECURITY: <c>X-Forwarded-For</c> is client-supplied and trivially spoofable. By default the returned
+    /// <c>ClientIp</c> is <c>Connection.RemoteIpAddress</c>, which the client cannot forge; the raw header is
+    /// returned separately as <c>ForwardedFor</c> (redacted, since it is client-supplied). Only when
+    /// <paramref name="trustForwardedHeaders"/> is <c>true</c> — which you should enable solely behind a
+    /// reverse proxy you control with <c>ForwardedHeadersMiddleware</c> configured — is the first XFF entry
+    /// used as <c>ClientIp</c>.
     /// </remarks>
-    private static string? ExtractClientIp(HttpContext httpContext)
+    private static (string? ClientIp, string? ForwardedFor) ExtractClientAddresses(
+        HttpContext httpContext, bool trustForwardedHeaders, CompiledRedactionPatterns patterns)
     {
         try
         {
-            if (httpContext.Request.Headers.TryGetValue("X-Forwarded-For", out var forwardedFor))
+            string? forwardedFor = null;
+            string? firstEntry = null;
+            if (httpContext.Request.Headers.TryGetValue("X-Forwarded-For", out var forwardedForHeader))
             {
-                var forwardedForValue = forwardedFor.FirstOrDefault();
-                if (!string.IsNullOrWhiteSpace(forwardedForValue))
+                var rawValue = forwardedForHeader.FirstOrDefault();
+                if (!string.IsNullOrWhiteSpace(rawValue))
                 {
-                    var ips = forwardedForValue.Split(',');
-                    if (ips.Length > 0)
+                    forwardedFor = patterns.Redact(rawValue);
+                    var candidate = rawValue.Split(',')[0].Trim();
+                    if (!string.IsNullOrWhiteSpace(candidate))
                     {
-                        var clientIp = ips[0].Trim();
-                        if (!string.IsNullOrWhiteSpace(clientIp))
-                        {
-                            return clientIp;
-                        }
+                        firstEntry = patterns.Redact(candidate);
                     }
                 }
             }
 
-            var remoteIp = httpContext.Connection.RemoteIpAddress?.ToString();
-            if (!string.IsNullOrWhiteSpace(remoteIp))
-            {
-                return remoteIp;
-            }
+            var clientIp = trustForwardedHeaders && firstEntry is not null
+                ? firstEntry
+                : httpContext.Connection.RemoteIpAddress?.ToString();
 
-            return null;
+            return (clientIp, forwardedFor);
         }
         catch
         {
-            return null;
+            return (null, null);
         }
     }
 
@@ -718,40 +729,35 @@ public static class StepUpLoggingExtensions
              || sd.ImplementationType?.FullName == "OpenTelemetry.Extensions.Hosting.TelemetryHostedService"));
     }
 
-    /// <summary>Parse OTEL_EXPORTER_OTLP_HEADERS environment variable (format: key1=value1,key2=value2)</summary>
-    private static Dictionary<string, string> ParseOtlpHeaders(string? headerString)
+    /// <summary>Parse OTEL_EXPORTER_OTLP_HEADERS environment variable (W3C Baggage-style list of percent-encoded key=value pairs, per the OTel spec).</summary>
+    internal static Dictionary<string, string> ParseOtlpHeaders(string? headerString)
     {
         var headers = new Dictionary<string, string>();
-        if (string.IsNullOrWhiteSpace(headerString)) return headers;
-
-        foreach (var pair in headerString.Split(','))
-        {
-            var parts = pair.Split('=', 2);
-            if (parts.Length == 2)
-            {
-                headers[parts[0].Trim()] = parts[1].Trim();
-            }
-        }
-
+        foreach (var (key, value) in ParseBaggageStylePairs(headerString)) headers[key] = value;
         return headers;
     }
 
-    /// <summary>Parse OTEL_RESOURCE_ATTRIBUTES environment variable (format: key1=value1,key2=value2)</summary>
-    private static Dictionary<string, object> ParseResourceAttributes(string? attributeString)
+    /// <summary>Parse OTEL_RESOURCE_ATTRIBUTES environment variable (W3C Baggage-style list of percent-encoded key=value pairs, per the OTel spec).</summary>
+    internal static Dictionary<string, object> ParseResourceAttributes(string? attributeString)
     {
         var attributes = new Dictionary<string, object>();
-        if (string.IsNullOrWhiteSpace(attributeString)) return attributes;
+        foreach (var (key, value) in ParseBaggageStylePairs(attributeString)) attributes[key] = value;
+        return attributes;
+    }
 
-        foreach (var pair in attributeString.Split(','))
+    /// <summary>Splits a comma-separated, percent-encoded key=value list, percent-decoding both sides and skipping malformed pairs or empty keys.</summary>
+    private static IEnumerable<(string Key, string Value)> ParseBaggageStylePairs(string? input)
+    {
+        if (string.IsNullOrWhiteSpace(input)) yield break;
+
+        foreach (var pair in input.Split(','))
         {
             var parts = pair.Split('=', 2);
-            if (parts.Length == 2)
-            {
-                attributes[parts[0].Trim()] = parts[1].Trim();
-            }
+            if (parts.Length != 2) continue;
+            var key = Uri.UnescapeDataString(parts[0].Trim());
+            var value = Uri.UnescapeDataString(parts[1].Trim());
+            if (key.Length > 0) yield return (key, value);
         }
-
-        return attributes;
     }
 
     private static void ConfigureOutputSinks(LoggerConfiguration lc,
