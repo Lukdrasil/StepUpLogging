@@ -718,15 +718,15 @@ Three security properties are worth understanding before you deploy:
 
 ### Client IP is only as trustworthy as your proxy configuration
 
-By default `ClientIp` comes from `HttpContext.Connection.RemoteIpAddress`, and the library
-**does not** trust the `X-Forwarded-For` header — it is client-supplied and spoofable. The
-library will not guess your proxy topology. If you run behind a reverse proxy and need the
-real client address, configure ASP.NET Core's
+`X-Forwarded-For` is client-supplied and trivially spoofable. Setting `TrustForwardedHeaders:
+true` blindly trusts its first entry as `ClientIp`, letting any caller forge the logged IP —
+only enable it behind a proxy you fully control. By default the library does not trust XFF:
+`ClientIp` comes from `HttpContext.Connection.RemoteIpAddress`. If you run behind a reverse
+proxy and need the real client address, configure ASP.NET Core's
 [`ForwardedHeadersMiddleware`](https://learn.microsoft.com/aspnet/core/host-and-deploy/proxy-load-balancer)
 with your known proxies so `Connection.RemoteIpAddress` reflects the true client, and leave
-`TrustForwardedHeaders` at `false`. Setting `TrustForwardedHeaders: true` blindly trusts the
-first XFF entry and lets any caller forge the logged IP; use it only behind a proxy you fully
-control. The raw header is always logged (redacted) as `ForwardedFor` for diagnostics.
+`TrustForwardedHeaders` at `false`. The raw header is always logged (redacted) as
+`ForwardedFor` for diagnostics.
 
 ### Redaction covers request metadata and bodies, not message-template arguments
 
