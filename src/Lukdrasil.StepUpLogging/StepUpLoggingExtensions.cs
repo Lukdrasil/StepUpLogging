@@ -437,8 +437,9 @@ public static class StepUpLoggingExtensions
 
                             var rawUserAgent = ExtractUserAgent(httpContext.Request);
                             var userAgent = rawUserAgent is null ? null : compiledPatterns.Redact(rawUserAgent);
-                            var clientIp = ExtractClientIp(httpContext);
-                            var jti = httpContext.User?.FindFirst("jti")?.Value;
+                            var (clientIp, forwardedFor) = ExtractClientAddresses(httpContext, opts.TrustForwardedHeaders, compiledPatterns);
+                            var rawJti = httpContext.User?.FindFirst("jti")?.Value;
+                            var jti = rawJti is null ? null : compiledPatterns.Redact(rawJti);
                             var statusCode = failed ? StatusCodes.Status500InternalServerError : (httpContext.Response?.StatusCode ?? 0);
                             stepUpController.EmitRequestSummary(
                                 httpContext.Request.Method,
@@ -450,7 +451,8 @@ public static class StepUpLoggingExtensions
                                 routeParams,
                                 userAgent,
                                 clientIp,
-                                jti);
+                                jti,
+                                forwardedFor);
                         }
                         catch
                         {
@@ -565,7 +567,7 @@ public static class StepUpLoggingExtensions
 
                 var jtiClaim = httpContext.User?.FindFirst("jti")?.Value;
                 if (!string.IsNullOrEmpty(jtiClaim))
-                    diagnosticContext.Set("Jti", jtiClaim);
+                    diagnosticContext.Set("Jti", compiledPatterns.Redact(jtiClaim));
 
                 if (opts.CaptureRequestBody && stepUpController.IsSteppedUp)
                 {
@@ -646,47 +648,46 @@ public static class StepUpLoggingExtensions
     }
 
     /// <summary>
-    /// Extract the client's IP address, checking for X-Forwarded-For header (proxy-aware),
-    /// with fallback to direct connection IP.
+    /// Extracts the client's connection address and the raw <c>X-Forwarded-For</c> header of a request.
     /// </summary>
     /// <remarks>
-    /// SECURITY: <c>X-Forwarded-For</c> is client-supplied and trivially spoofable. Only trust the logged
-    /// <c>ClientIp</c> if a trusted reverse proxy sets this header and you have configured
-    /// <c>ForwardedHeadersMiddleware</c> (which validates known proxies and populates
-    /// <c>Connection.RemoteIpAddress</c>). Without that, treat this value as untrusted.
+    /// SECURITY: <c>X-Forwarded-For</c> is client-supplied and trivially spoofable. By default the returned
+    /// <c>ClientIp</c> is <c>Connection.RemoteIpAddress</c>, which the client cannot forge; the raw header is
+    /// returned separately as <c>ForwardedFor</c> (redacted, since it is client-supplied). Only when
+    /// <paramref name="trustForwardedHeaders"/> is <c>true</c> — which you should enable solely behind a
+    /// reverse proxy you control with <c>ForwardedHeadersMiddleware</c> configured — is the first XFF entry
+    /// used as <c>ClientIp</c>.
     /// </remarks>
-    private static string? ExtractClientIp(HttpContext httpContext)
+    private static (string? ClientIp, string? ForwardedFor) ExtractClientAddresses(
+        HttpContext httpContext, bool trustForwardedHeaders, CompiledRedactionPatterns patterns)
     {
         try
         {
-            if (httpContext.Request.Headers.TryGetValue("X-Forwarded-For", out var forwardedFor))
+            string? forwardedFor = null;
+            string? firstEntry = null;
+            if (httpContext.Request.Headers.TryGetValue("X-Forwarded-For", out var forwardedForHeader))
             {
-                var forwardedForValue = forwardedFor.FirstOrDefault();
-                if (!string.IsNullOrWhiteSpace(forwardedForValue))
+                var rawValue = forwardedForHeader.FirstOrDefault();
+                if (!string.IsNullOrWhiteSpace(rawValue))
                 {
-                    var ips = forwardedForValue.Split(',');
-                    if (ips.Length > 0)
+                    forwardedFor = patterns.Redact(rawValue);
+                    var candidate = rawValue.Split(',')[0].Trim();
+                    if (!string.IsNullOrWhiteSpace(candidate))
                     {
-                        var clientIp = ips[0].Trim();
-                        if (!string.IsNullOrWhiteSpace(clientIp))
-                        {
-                            return clientIp;
-                        }
+                        firstEntry = patterns.Redact(candidate);
                     }
                 }
             }
 
-            var remoteIp = httpContext.Connection.RemoteIpAddress?.ToString();
-            if (!string.IsNullOrWhiteSpace(remoteIp))
-            {
-                return remoteIp;
-            }
+            var clientIp = trustForwardedHeaders && firstEntry is not null
+                ? firstEntry
+                : httpContext.Connection.RemoteIpAddress?.ToString();
 
-            return null;
+            return (clientIp, forwardedFor);
         }
         catch
         {
-            return null;
+            return (null, null);
         }
     }
 

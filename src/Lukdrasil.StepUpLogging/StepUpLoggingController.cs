@@ -102,7 +102,18 @@ public sealed class StepUpLoggingController : IDisposable
     /// <summary>
     /// Emit a structured request summary using the configured summary logger (bypass) if available.
     /// </summary>
-    public void EmitRequestSummary(string method, string path, int statusCode, double elapsedMs, string? traceId = null, string? queryString = null, IReadOnlyDictionary<string, object?>? routeParameters = null, string? userAgent = null, string? clientIp = null, string? jti = null)
+    /// <param name="method">HTTP method of the request.</param>
+    /// <param name="path">Normalized request path.</param>
+    /// <param name="statusCode">HTTP status code of the response.</param>
+    /// <param name="elapsedMs">Request duration in milliseconds.</param>
+    /// <param name="traceId">W3C trace identifier, when available.</param>
+    /// <param name="queryString">Redacted query string, when present.</param>
+    /// <param name="routeParameters">Redacted route parameters, when present.</param>
+    /// <param name="userAgent">Redacted User-Agent header, when present.</param>
+    /// <param name="clientIp">Client IP address (see <see cref="StepUpLoggingOptions.TrustForwardedHeaders"/>).</param>
+    /// <param name="jti">Redacted token identifier claim, when present.</param>
+    /// <param name="forwardedFor">Redacted raw <c>X-Forwarded-For</c> header, when present. Client-supplied and untrusted.</param>
+    public void EmitRequestSummary(string method, string path, int statusCode, double elapsedMs, string? traceId = null, string? queryString = null, IReadOnlyDictionary<string, object?>? routeParameters = null, string? userAgent = null, string? clientIp = null, string? jti = null, string? forwardedFor = null)
     {
         try
         {
@@ -134,6 +145,11 @@ public sealed class StepUpLoggingController : IDisposable
             if (!string.IsNullOrEmpty(jti))
             {
                 logger = logger.ForContext("Jti", jti);
+            }
+
+            if (!string.IsNullOrEmpty(forwardedFor))
+            {
+                logger = logger.ForContext("ForwardedFor", forwardedFor);
             }
 
             logger.Write(lvl, "Request finished {Method} {Path} {StatusCode} {ElapsedMs}", method, path, statusCode, elapsedMs);

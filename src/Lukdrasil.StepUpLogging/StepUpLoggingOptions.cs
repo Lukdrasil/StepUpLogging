@@ -138,4 +138,12 @@ public sealed class StepUpLoggingOptions
     /// The level to use for request summary logs (e.g., "Information").
     /// </summary>
     public string RequestSummaryLevel { get; set; } = "Information";
+
+    /// <summary>
+    /// When true, the logged <c>ClientIp</c> is taken from the first entry of the
+    /// <c>X-Forwarded-For</c> header. Only enable this behind a reverse proxy you control AND with
+    /// ForwardedHeadersMiddleware configured; the header is client-supplied and spoofable.
+    /// Default: false — <c>ClientIp</c> comes from <c>Connection.RemoteIpAddress</c>.
+    /// </summary>
+    public bool TrustForwardedHeaders { get; set; } = false;
 }
