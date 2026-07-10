@@ -152,4 +152,17 @@ public sealed class StepUpLoggingOptions
     /// Default: false — <c>ClientIp</c> comes from <c>Connection.RemoteIpAddress</c>.
     /// </summary>
     public bool TrustForwardedHeaders { get; set; } = false;
+
+    /// <summary>
+    /// Upper bound, in seconds, on how long step-up may stay continuously active. When exceeded the
+    /// level is forced back to BaseLevel and further triggers are ignored for StepUpCooldownSeconds.
+    /// Default: 0 (no bound).
+    /// </summary>
+    public int MaxContinuousStepUpSeconds { get; set; } = 0;
+
+    /// <summary>
+    /// Seconds during which triggers are ignored after MaxContinuousStepUpSeconds forces a step-down.
+    /// Ignored when the cap is disabled. Default: 300.
+    /// </summary>
+    public int StepUpCooldownSeconds { get; set; } = 300;
 }
