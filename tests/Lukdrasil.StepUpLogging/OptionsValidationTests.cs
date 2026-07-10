@@ -42,6 +42,30 @@ public class OptionsValidationTests
     }
 
     [Fact]
+    public void ZeroMaxBodyCaptureBytes_FailsValidationOnStart()
+    {
+        Assert.Throws<OptionsValidationException>(
+            () => BuildHost(("SerilogStepUp:MaxBodyCaptureBytes", "0")));
+    }
+
+    [Fact]
+    public void NegativeMaxBodyCaptureBytes_FailsValidationOnStart()
+    {
+        Assert.Throws<OptionsValidationException>(
+            () => BuildHost(("SerilogStepUp:MaxBodyCaptureBytes", "-1")));
+    }
+
+    [Fact]
+    public void PositiveMaxBodyCaptureBytes_ResolvesOnStart()
+    {
+        using var host = BuildHost(("SerilogStepUp:MaxBodyCaptureBytes", "1"));
+
+        var opts = host.Services.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
+
+        Assert.Equal(1, opts.MaxBodyCaptureBytes);
+    }
+
+    [Fact]
     public void ValidConfiguration_ResolvesWithCanonicalDefaults()
     {
         using var host = BuildHost();
