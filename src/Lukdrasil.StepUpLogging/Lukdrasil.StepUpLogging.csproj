@@ -8,7 +8,7 @@
     <!-- Package Metadata -->
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <PackageId>Lukdrasil.StepUpLogging</PackageId>
-    <Version>2.0.0</Version>
+    <Version>2.1.0</Version>
     <PackageReleaseNotes>v2.0.0 — BREAKING. See MIGRATION.md. Breaking API: (1) the `enableConsoleLogging` parameter is removed from both `AddStepUpLogging(...)` overloads — console output is now driven solely by `StepUpLoggingOptions.EnableConsoleLogging`. (2) The `configure` delegate changed from `Action&lt;HostBuilderContext, IServiceProvider, LoggerConfiguration&gt;` to `Action&lt;IServiceProvider, LoggerConfiguration&gt;`; the synthesized fake `HostBuilderContext` (with null Configuration/HostingEnvironment) is gone, removing an NRE risk — resolve `IConfiguration`/`IHostEnvironment` from the `IServiceProvider` instead. Breaking behavior: (3) config-declared `Serilog:WriteTo` sinks now sit behind the step-up LevelSwitch instead of exporting everything at Verbose from the Verbose root; use the immediate (`IsImmediate`) / request-summary (`IsRequestSummary`) bypass for always-on export. Also carried in this release (non-breaking): removed the reflective DiagnosticContext registration; the bypass logger is now disposed on shutdown so its async buffers flush; the File sink is shared.</PackageReleaseNotes>
     <Authors>Lukdrasil</Authors>
     <Description>Dynamic step-up logging for ASP.NET Core with Serilog - automatically increase log verbosity when errors occur, with minimal performance overhead. Includes request body capture, sensitive data redaction, and OpenTelemetry metrics.</Description>

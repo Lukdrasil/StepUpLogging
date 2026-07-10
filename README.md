@@ -678,6 +678,7 @@ See full [performance test results](tests/k6/performance_test_results.md).
 | `BaseLevel` | `"Warning"` | - | Normal log level |
 | `StepUpLevel` | `"Information"` | - | Elevated log level during step-up |
 | `DurationSeconds` | `180` | - | How long step-up remains active (Auto mode) |
+| `NeverStepUpCategories` | `["Microsoft.EntityFrameworkCore.Database.Command"]` | - | `SourceContext` prefixes the step-up never raises above `BaseLevel` (see below) |
 | **Pre-Error Buffering** |
 | `EnablePreErrorBuffering` | `true` | - | Enable/disable pre-error buffering |
 | `PreErrorBufferSize` | `100` | - | Max events per request before oldest are dropped |
@@ -704,6 +705,43 @@ See full [performance test results](tests/k6/performance_test_results.md).
 | `AdditionalSensitiveHeaders` | `[]` | - | Custom header names to redact in request logging |
 | **Service Identification** |
 | `ServiceVersion` | `null` | `APP_VERSION` | Service version for enrichment |
+
+### Categories the step-up never raises (`NeverStepUpCategories`)
+
+When an error trips the step-up, every category is exported at `StepUpLevel` for the whole
+window. That is usually what you want, but a few high-volume categories turn the window into a
+flood. EF Core is the canonical case: it logs every executed SQL command under
+`Microsoft.EntityFrameworkCore.Database.Command` at `Information`, so the first error in a
+DB-backed service would export the application's entire SQL traffic for `DurationSeconds` — a
+volume and cost spike that lands exactly during an incident, and one that carries the raw SQL
+(with `EnableSensitiveDataLogging`, the parameter values too).
+
+`NeverStepUpCategories` is a list of Serilog `SourceContext` prefixes that are pinned to
+`BaseLevel` even while the switch is raised. A listed category is not silenced — its `Warning`
+and `Error` events still export — only the step-up's extra verbosity is withheld from it.
+Matching is ordinal: a `SourceContext` matches a prefix when it is equal to it, or when it
+continues with a `.` (so `…Database.Command` also covers `…Database.Command.Internal`, but not
+`…Database.CommandBuilder`). The default holds exactly one entry, the EF command category.
+
+The list has no effect in `StepUpMode.AlwaysOn`: that mode never steps up, so there is nothing
+to suppress, and a developer running it locally wants to see the SQL.
+
+One caveat: the deny-list gates the export path only. The pre-error buffer is deliberately **not**
+filtered — when it flushes on an error it still carries the SQL that led up to that error, and it
+carries it **unredacted** (redaction covers request metadata — query string, route values,
+headers, body — not the rendered text of arbitrary log events). Treat EF as a channel that can
+leak secrets: do not log sensitive values through it.
+
+To restore the pre-2.1.0 behaviour (step-up raises every category, including EF SQL), set the
+list empty:
+
+```json
+{
+  "SerilogStepUp": {
+    "NeverStepUpCategories": []
+  }
+}
+```
 
 ## OpenTelemetry Activities & Metrics
 
