@@ -48,6 +48,9 @@ public sealed class StepUpLoggingController : IDisposable
     /// <summary>The resolved <c>BaseLevel</c> — the floor the step-up raises from.</summary>
     internal LogEventLevel BaseLevel => _baseLevel;
 
+    /// <summary>The resolved <c>StepUpLevel</c> — the level the switch is raised to on trigger.</summary>
+    internal LogEventLevel StepUpLevel => _stepUpLevel;
+
     private readonly LogEventLevel _requestSummaryLevel;
     private Serilog.ILogger? _summaryLogger;
 

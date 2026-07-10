@@ -68,7 +68,7 @@ public class PipelineRoutingTests
 
             if (withPreErrorBuffer)
             {
-                cfg.WriteTo.Sink(new PreErrorBufferSink(bypassLogger, 50, 64));
+                cfg.WriteTo.Sink(new PreErrorBufferSink(bypassLogger, 50, 64, LogEventLevel.Verbose));
             }
 
             Root = cfg.CreateLogger();
