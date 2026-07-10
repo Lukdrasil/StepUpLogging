@@ -73,8 +73,9 @@ check inside the sink: `StepUpSink` stays free of any `StepUpMode` dependency. I
 leaves `BaseLevel`).
 
 **5. Blank entries are filtered out at wiring time**, mirroring how `RedactionRegexes`
-filters empty patterns. This is not cosmetic: an empty-string prefix would match *every*
-`SourceContext` and silently pin the whole application to `BaseLevel`.
+filters empty patterns. A blank entry is a configuration typo: an empty-string prefix
+matches dot-rooted `SourceContext` values (those starting with `.`) and costs a comparison
+on every event, so blanks are dropped as defensive hygiene rather than passed to the sink.
 
 The resolved `BaseLevel` is read from a new `internal LogEventLevel BaseLevel` accessor on
 `StepUpLoggingController` rather than re-parsed at the wiring site, so the sink and the

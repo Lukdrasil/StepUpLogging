@@ -183,8 +183,9 @@ public static class StepUpLoggingExtensions
             ConfigureOutputSinks(stepUpInnerCfg, builder, logFilePath, opts);
             stepUpInnerCfg.MinimumLevel.Verbose();
             // AlwaysOn never steps up (Trigger() no-ops, the switch starts at StepUpLevel), so nothing
-            // needs suppressing — and a developer running it locally wants the SQL. A blank prefix would
-            // match every SourceContext, so drop blanks (the same treatment RedactionRegexes gets).
+            // needs suppressing — and a developer running it locally wants the SQL. A blank prefix is a
+            // config typo: it matches dot-rooted SourceContexts and costs a comparison on every event,
+            // so drop blanks (the same treatment RedactionRegexes gets).
             var neverStepUp = opts.Mode == StepUpMode.AlwaysOn
                 ? []
                 : (opts.NeverStepUpCategories ?? []).Where(c => !string.IsNullOrWhiteSpace(c)).ToArray();

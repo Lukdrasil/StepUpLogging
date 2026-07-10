@@ -623,7 +623,7 @@ public class PipelineRoutingTests
             builder.AddStepUpLogging();
 
             const string efToken = "BLANK_EF_TOKEN_b03";
-            const string appToken = "BLANK_APP_TOKEN_b03";
+            const string rootedToken = "BLANK_ROOTED_TOKEN_b03";
             using (var host = builder.Build())
             {
                 var logger = host.Services.GetRequiredService<Serilog.ILogger>();
@@ -633,12 +633,14 @@ public class PipelineRoutingTests
                 SpinWait.SpinUntil(() => controller.LevelSwitch.MinimumLevel <= LogEventLevel.Information, 2000);
 
                 logger.ForContext("SourceContext", EfCategory).Information(efToken);
-                logger.ForContext("SourceContext", "MyApp.Widget").Information(appToken);
+                // ".Weird" is dot-rooted: an UNfiltered empty prefix matches it, so this is the only
+                // context the blank filter observably changes. It must still export.
+                logger.ForContext("SourceContext", ".Weird").Information(rootedToken);
             }
 
             var contents = File.ReadAllText(tempFile);
-            // The blank entries must not pin every category to BaseLevel: the app event still exports.
-            Assert.Contains(appToken, contents);
+            // Blank entries are filtered, so a dot-rooted context is not pinned to BaseLevel.
+            Assert.Contains(rootedToken, contents);
             // The real entry still works alongside the (filtered) blanks.
             Assert.DoesNotContain(efToken, contents);
         }
