@@ -447,7 +447,7 @@ app.MapGet("/stepup/status", (StepUpLoggingController controller) =>
 
 ### How It Works
 
-1. **Buffering phase**: All non-error logs are stored in a ring buffer per OpenTelemetry trace ID (one buffer per request)
+1. **Buffering phase**: Non-error logs at or above the resolved `StepUpLevel` are stored in a ring buffer per OpenTelemetry trace ID (one buffer per request); events below `StepUpLevel` are never buffered. Set `StepUpLevel` to `"Verbose"` to buffer everything.
 2. **Flush trigger**: When an `Error` or `Fatal` log is emitted, the buffer flushes all captured events from that request to the output
 3. **Memory management**: Uses LRU eviction to prevent unbounded memory growth (configurable limits on buffer size and active contexts)
 
