@@ -176,6 +176,102 @@ public class RequestBodyCaptureTests
         }
     }
 
+    private static TestServer BuildServerWithStatus(CaptureSink capture, Serilog.ILogger logger, StepUpMode mode, int statusCode)
+    {
+        var opts = new StepUpLoggingOptions
+        {
+            Mode = mode,
+            CaptureRequestBody = true,
+            RedactionRegexes = new[] { "secret-[A-Za-z0-9]+" }
+        };
+
+        var builder = new WebHostBuilder()
+            .ConfigureServices(services =>
+            {
+                services.AddSingleton(Options.Create(opts));
+                services.AddSingleton(logger);
+                services.AddSingleton(sp => new StepUpLoggingController(opts, logger));
+                var patterns = opts.RedactionRegexes
+                    .Select(p => new Regex(p, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100)))
+                    .ToArray();
+                services.AddSingleton(new CompiledRedactionPatterns(patterns));
+                var diagType = Type.GetType("Serilog.Extensions.Hosting.DiagnosticContext, Serilog.Extensions.Hosting")
+                               ?? Type.GetType("Serilog.AspNetCore.DiagnosticContext, Serilog.AspNetCore");
+                var ctor = diagType!.GetConstructors().OrderByDescending(c => c.GetParameters().Length).First();
+                var args = ctor.GetParameters().Select(p =>
+                    p.ParameterType == typeof(Serilog.ILogger) ? (object?)logger
+                    : p.HasDefaultValue ? p.DefaultValue
+                    : null).ToArray();
+                services.AddSingleton(diagType, ctor.Invoke(args));
+            })
+            .Configure(app =>
+            {
+                app.UseStepUpRequestLogging();
+                app.Run(async ctx =>
+                {
+                    var reader = new StreamReader(ctx.Request.Body, Encoding.UTF8, true, 1024, leaveOpen: true);
+                    await reader.ReadToEndAsync();
+                    ctx.Response.StatusCode = statusCode;
+                    await ctx.Response.WriteAsync("done");
+                });
+            });
+
+        return new TestServer(builder);
+    }
+
+    [Fact]
+    public async Task RequestBody_IsCaptured_When5xx_EvenWhenNotSteppedUp()
+    {
+        var capture = new CaptureSink();
+        var logger = new LoggerConfiguration().WriteTo.Sink(capture).CreateLogger();
+        var previous = Log.Logger;
+        Log.Logger = logger;
+        try
+        {
+            using var server = BuildServerWithStatus(capture, logger, StepUpMode.Auto, statusCode: 500);
+            using var client = server.CreateClient();
+
+            var body = "{\"user\":\"bob\"}";
+            await client.PostAsync("/api/test", new StringContent(body, Encoding.UTF8, "application/json"));
+            await Task.Delay(50);
+
+            var captured = FindRequestBody(capture);
+            Assert.NotNull(captured);
+            Assert.Contains("bob", captured);
+        }
+        finally
+        {
+            Log.Logger = previous;
+            logger.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task RequestBody_IsNotCaptured_When2xx_AndNotSteppedUp()
+    {
+        var capture = new CaptureSink();
+        var logger = new LoggerConfiguration().WriteTo.Sink(capture).CreateLogger();
+        var previous = Log.Logger;
+        Log.Logger = logger;
+        try
+        {
+            using var server = BuildServerWithStatus(capture, logger, StepUpMode.Auto, statusCode: 200);
+            using var client = server.CreateClient();
+
+            var body = "{\"user\":\"bob\"}";
+            await client.PostAsync("/api/test", new StringContent(body, Encoding.UTF8, "application/json"));
+            await Task.Delay(50);
+
+            var captured = FindRequestBody(capture);
+            Assert.Null(captured);
+        }
+        finally
+        {
+            Log.Logger = previous;
+            logger.Dispose();
+        }
+    }
+
     private sealed class ThrowingOnReadBody : Stream
     {
         private readonly Stream _inner;

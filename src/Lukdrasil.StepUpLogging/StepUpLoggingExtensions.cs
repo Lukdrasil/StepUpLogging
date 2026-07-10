@@ -128,7 +128,7 @@ public static class StepUpLoggingExtensions
         builder.Services.AddOptions<StepUpLoggingOptions>()
             .Bind(builder.Configuration.GetSection(configSectionName))
             .Configure(options => configureOptions?.Invoke(options))
-            .Validate(ValidateOptions, "Invalid SerilogStepUp options: DurationSeconds must be > 0 and BaseLevel/StepUpLevel/RequestSummaryLevel must be valid Serilog levels.")
+            .Validate(ValidateOptions, "Invalid SerilogStepUp options: DurationSeconds must be > 0, MaxBodyCaptureBytes must be > 0, and BaseLevel/StepUpLevel/RequestSummaryLevel must be valid Serilog levels.")
             .ValidateOnStart();
 
         builder.Services.ConfigureOpenTelemetryMeterProvider(metrics =>
@@ -261,6 +261,7 @@ public static class StepUpLoggingExtensions
     /// </summary>
     private static bool ValidateOptions(StepUpLoggingOptions o)
         => o.DurationSeconds > 0
+           && o.MaxBodyCaptureBytes > 0
            && IsValidLevel(o.BaseLevel)
            && IsValidLevel(o.StepUpLevel)
            && IsValidLevel(o.RequestSummaryLevel);
@@ -569,7 +570,11 @@ public static class StepUpLoggingExtensions
                 if (!string.IsNullOrEmpty(jtiClaim))
                     diagnosticContext.Set("Jti", compiledPatterns.Redact(jtiClaim));
 
-                if (opts.CaptureRequestBody && stepUpController.IsSteppedUp)
+                // The step-up trigger sink is asynchronous, so the request whose Error CAUSES the
+                // step-up is still not stepped-up when this enricher runs at request completion.
+                // A 5xx status is knowable synchronously here, so capture the failing request too.
+                var failing = httpContext.Response?.StatusCode >= 500;
+                if (opts.CaptureRequestBody && (stepUpController.IsSteppedUp || failing))
                 {
                     var method = httpContext.Request.Method;
                     // Body.CanSeek is true only when the early buffering middleware ran for this request.
