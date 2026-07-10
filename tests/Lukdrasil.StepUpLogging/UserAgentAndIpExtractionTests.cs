@@ -37,7 +37,7 @@ namespace Lukdrasil.StepUpLogging.Tests
         private static TestServer CreateTestServer(CaptureSink captureSink)
         {
             var summaryLogger = new LoggerConfiguration().WriteTo.Sink(captureSink).CreateLogger();
-            var opts = new StepUpLoggingOptions { AlwaysLogRequestSummary = true, RequestSummaryLevel = "Information" };
+            var opts = new StepUpLoggingOptions { AlwaysLogRequestSummary = true, RequestSummaryLevel = "Information", RedactionRegexes = new[] { "secret-[A-Za-z0-9]+" } };
 
             var builder = new WebHostBuilder()
                 .ConfigureServices(services =>
@@ -75,15 +75,15 @@ namespace Lukdrasil.StepUpLogging.Tests
             return new TestServer(builder);
         }
 
-        [Fact(DisplayName = "EmitRequestSummary_IncludesUserAgent_Unredacted_WhenProvided")]
-        public async Task EmitRequestSummary_IncludesUserAgent_Unredacted_WhenProvided()
+        [Fact(DisplayName = "EmitRequestSummary_RedactsUserAgent_WhenItMatchesAPattern")]
+        public async Task EmitRequestSummary_RedactsUserAgent_WhenItMatchesAPattern()
         {
             var capture = new CaptureSink();
             using var server = CreateTestServer(capture);
             var client = server.CreateClient();
 
             var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
-            request.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+            request.Headers.TryAddWithoutValidation("User-Agent", "Agent/1.0 token=secret-abc123");
 
             await client.SendAsync(request);
 
@@ -91,10 +91,11 @@ namespace Lukdrasil.StepUpLogging.Tests
             var logEvent = capture.LastEvent;
 
             Assert.True(logEvent!.Properties.ContainsKey("UserAgent"), "UserAgent property should be in the log event");
-            var userAgentProp = logEvent.Properties["UserAgent"];
-            // Today's behaviour: UserAgent is logged verbatim, UNREDACTED. B04/B03 will change this;
-            // this pin exists so that change shows as a deliberate diff.
-            Assert.Equal("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", ((ScalarValue)userAgentProp).Value);
+            var userAgent = ((ScalarValue)logEvent.Properties["UserAgent"]).Value as string;
+            // The User-Agent now flows through the same redaction as every other request-derived value.
+            Assert.NotNull(userAgent);
+            Assert.Contains("[REDACTED]", userAgent);
+            Assert.DoesNotContain("secret-abc123", userAgent);
         }
 
         [Fact(DisplayName = "EmitRequestSummary_OmitsUserAgent_WhenNotProvided")]
