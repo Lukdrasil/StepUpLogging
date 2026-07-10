@@ -244,6 +244,30 @@ public class PreErrorBufferSinkTests
     }
 
     [Fact]
+    public void Buffer_SummaryEvents_NotBuffered_NoDoubleEmitOnFlush()
+    {
+        var collector = new CollectingSink();
+        var bypass = new LoggerConfiguration()
+            .MinimumLevel.Verbose()
+            .WriteTo.Sink(collector)
+            .CreateLogger();
+
+        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 10, maxContexts: 16);
+        var parser = new MessageTemplateParser();
+
+        var summaryProps = new[] { new LogEventProperty(LogProperties.IsRequestSummary, new ScalarValue(true)) };
+        var normalProps = Array.Empty<LogEventProperty>();
+
+        sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Information, null, parser.Parse("normal"), normalProps));
+        sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Information, null, parser.Parse("summary"), summaryProps));
+
+        sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Error, null, parser.Parse("err"), normalProps));
+
+        Assert.Single(collector.Events);
+        Assert.Equal("normal", collector.Events[0].MessageTemplate.Text);
+    }
+
+    [Fact]
     public void Error_ForUnseenContext_CreatesNoBufferAndConsumesNoLruSlot()
     {
         Activity.Current = null;
