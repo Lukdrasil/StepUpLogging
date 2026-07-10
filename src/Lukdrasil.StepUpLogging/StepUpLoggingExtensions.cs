@@ -700,8 +700,8 @@ public static class StepUpLoggingExtensions
              || sd.ImplementationType?.FullName == "OpenTelemetry.Extensions.Hosting.TelemetryHostedService"));
     }
 
-    /// <summary>Parse OTEL_EXPORTER_OTLP_HEADERS environment variable (format: key1=value1,key2=value2)</summary>
-    private static Dictionary<string, string> ParseOtlpHeaders(string? headerString)
+    /// <summary>Parse OTEL_EXPORTER_OTLP_HEADERS environment variable (W3C Baggage-style list of percent-encoded key=value pairs, per the OTel spec).</summary>
+    internal static Dictionary<string, string> ParseOtlpHeaders(string? headerString)
     {
         var headers = new Dictionary<string, string>();
         if (string.IsNullOrWhiteSpace(headerString)) return headers;
@@ -709,17 +709,17 @@ public static class StepUpLoggingExtensions
         foreach (var pair in headerString.Split(','))
         {
             var parts = pair.Split('=', 2);
-            if (parts.Length == 2)
-            {
-                headers[parts[0].Trim()] = parts[1].Trim();
-            }
+            if (parts.Length != 2) continue;
+            var key = Uri.UnescapeDataString(parts[0].Trim());
+            var value = Uri.UnescapeDataString(parts[1].Trim());
+            if (key.Length > 0) headers[key] = value;
         }
 
         return headers;
     }
 
-    /// <summary>Parse OTEL_RESOURCE_ATTRIBUTES environment variable (format: key1=value1,key2=value2)</summary>
-    private static Dictionary<string, object> ParseResourceAttributes(string? attributeString)
+    /// <summary>Parse OTEL_RESOURCE_ATTRIBUTES environment variable (W3C Baggage-style list of percent-encoded key=value pairs, per the OTel spec).</summary>
+    internal static Dictionary<string, object> ParseResourceAttributes(string? attributeString)
     {
         var attributes = new Dictionary<string, object>();
         if (string.IsNullOrWhiteSpace(attributeString)) return attributes;
@@ -727,10 +727,10 @@ public static class StepUpLoggingExtensions
         foreach (var pair in attributeString.Split(','))
         {
             var parts = pair.Split('=', 2);
-            if (parts.Length == 2)
-            {
-                attributes[parts[0].Trim()] = parts[1].Trim();
-            }
+            if (parts.Length != 2) continue;
+            var key = Uri.UnescapeDataString(parts[0].Trim());
+            var value = Uri.UnescapeDataString(parts[1].Trim());
+            if (key.Length > 0) attributes[key] = value;
         }
 
         return attributes;
