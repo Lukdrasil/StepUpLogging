@@ -222,25 +222,22 @@ public static class StepUpLoggingExtensions
     /// </summary>
     internal static (IConfiguration Root, IConfiguration Gated) SplitSerilogConfiguration(IConfiguration appConfig)
     {
-        // Trailing colon so the prefix matches only the WriteTo/Using arrays themselves, never a
-        // hypothetical sibling like "Serilog:WriteToFoo". The colon-less section names match the
-        // array node itself so ancestor sections resolve. All comparisons are case-insensitive
-        // because configuration keys are.
+        // A path is "in" a section if it equals the section itself (so ancestor sections resolve) or
+        // starts with "<section>:" (so a hypothetical sibling like "Serilog:WriteToFoo" doesn't match).
+        // All comparisons are case-insensitive because configuration keys are.
         const string writeToSection = "Serilog:WriteTo";
-        const string writeToPrefix = "Serilog:WriteTo:";
         const string usingSection = "Serilog:Using";
-        const string usingPrefix = "Serilog:Using:";
         const string serilogSection = "Serilog";
 
-        static bool InSubtree(string path, string section, string prefix)
+        static bool InSubtree(string path, string section)
             => path.Equals(section, StringComparison.OrdinalIgnoreCase)
-               || path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+               || path.StartsWith(section + ":", StringComparison.OrdinalIgnoreCase);
 
-        bool RootVisible(string path) => !InSubtree(path, writeToSection, writeToPrefix);
+        bool RootVisible(string path) => !InSubtree(path, writeToSection);
 
         bool GatedVisible(string path)
-            => InSubtree(path, writeToSection, writeToPrefix)
-               || InSubtree(path, usingSection, usingPrefix)
+            => InSubtree(path, writeToSection)
+               || InSubtree(path, usingSection)
                || path.Equals(serilogSection, StringComparison.OrdinalIgnoreCase);
 
         var root = new PrefixFilteredConfiguration(appConfig, RootVisible);

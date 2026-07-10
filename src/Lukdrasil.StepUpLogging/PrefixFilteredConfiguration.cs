@@ -27,15 +27,19 @@ internal sealed class PrefixFilteredConfiguration(IConfiguration inner, Func<str
         set => inner[key] = value;
     }
 
-    public IConfigurationSection GetSection(string key)
-        => new PrefixFilteredConfigurationSection(inner.GetSection(key), isVisible);
+    public IConfigurationSection GetSection(string key) => Wrap(inner.GetSection(key), isVisible);
 
-    public IEnumerable<IConfigurationSection> GetChildren()
-        => inner.GetChildren()
-            .Where(child => isVisible(child.Path))
-            .Select(IConfigurationSection (child) => new PrefixFilteredConfigurationSection(child, isVisible));
+    public IEnumerable<IConfigurationSection> GetChildren() => FilterChildren(inner, isVisible);
 
     public IChangeToken GetReloadToken() => inner.GetReloadToken();
+
+    internal static IConfigurationSection Wrap(IConfigurationSection section, Func<string, bool> isVisible)
+        => new PrefixFilteredConfigurationSection(section, isVisible);
+
+    internal static IEnumerable<IConfigurationSection> FilterChildren(IConfiguration inner, Func<string, bool> isVisible)
+        => inner.GetChildren()
+            .Where(child => isVisible(child.Path))
+            .Select(child => Wrap(child, isVisible));
 }
 
 /// <summary>
@@ -62,13 +66,9 @@ internal sealed class PrefixFilteredConfigurationSection(IConfigurationSection i
         set => inner[key] = value;
     }
 
-    public IConfigurationSection GetSection(string key)
-        => new PrefixFilteredConfigurationSection(inner.GetSection(key), isVisible);
+    public IConfigurationSection GetSection(string key) => PrefixFilteredConfiguration.Wrap(inner.GetSection(key), isVisible);
 
-    public IEnumerable<IConfigurationSection> GetChildren()
-        => inner.GetChildren()
-            .Where(child => isVisible(child.Path))
-            .Select(IConfigurationSection (child) => new PrefixFilteredConfigurationSection(child, isVisible));
+    public IEnumerable<IConfigurationSection> GetChildren() => PrefixFilteredConfiguration.FilterChildren(inner, isVisible);
 
     public IChangeToken GetReloadToken() => inner.GetReloadToken();
 }
