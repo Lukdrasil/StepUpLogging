@@ -21,3 +21,13 @@ downgraded to the raw value.
   a visible signal, which is desirable.
 - Test: a deliberately catastrophic pattern over a long input must yield the sentinel, never
   the secret substring.
+
+## Amendment (2026-07-10)
+Redaction patterns are now compiled with `RegexOptions.NonBacktracking`, which guarantees
+linear-time matching and makes catastrophic backtracking structurally impossible rather than
+merely time-bounded. Patterns that use lookaround or backreferences are unsupported by that
+engine and throw `NotSupportedException` at construction; those fall back to
+`RegexOptions.Compiled`, exactly as before. The 100 ms timeout stays in both cases as a
+backstop, and the fail-closed sentinel above remains the behavior when it fires.
+`NonBacktracking` cannot be combined with `Compiled`, so the fallback swaps the option rather
+than adding to it.
