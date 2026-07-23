@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using Serilog;
 using Serilog.Events;
 using Serilog.Core;
@@ -86,5 +88,86 @@ namespace Lukdrasil.StepUpLogging.Tests
 
             Assert.Equal(LogEventLevel.Error, controller.BaseLevel);
         }
+
+        [Fact(DisplayName = "IsSteppedUp_AutoMode_BaseLevelEqualsStepUpLevel_TracksExplicitFlagNotLevelComparison")]
+        public void IsSteppedUp_AutoMode_BaseLevelEqualsStepUpLevel_TracksExplicitFlagNotLevelComparison()
+        {
+            long ticks = Stopwatch.GetTimestamp();
+            var opts = new StepUpLoggingOptions
+            {
+                Mode = StepUpMode.Auto,
+                BaseLevel = "Information",
+                StepUpLevel = "Information",
+                DurationSeconds = 300
+            };
+
+            using var controller = new StepUpLoggingController(opts, null, () => ticks);
+
+            // With BaseLevel == StepUpLevel, a level comparison can never distinguish stepped-up
+            // from not; only an explicit flag can. Before any trigger, the switch already sits at
+            // this shared level, so a level-comparison implementation would report true here.
+            Assert.False(controller.IsSteppedUp);
+
+            controller.Trigger();
+            Assert.True(controller.IsSteppedUp);
+
+            controller.InvokeStepDownForTest(controller.CurrentGeneration);
+            Assert.False(controller.IsSteppedUp);
+        }
+
+        [Fact(DisplayName = "PerformStepDown_AutoMode_BaseEqualsStepUp_ForcedCapThenStaleCallback_DecrementsActiveCounterOnce")]
+        public void PerformStepDown_AutoMode_BaseEqualsStepUp_ForcedCapThenStaleCallback_DecrementsActiveCounterOnce()
+        {
+            long ticks = Stopwatch.GetTimestamp();
+            var opts = new StepUpLoggingOptions
+            {
+                Mode = StepUpMode.Auto,
+                BaseLevel = "Information",
+                StepUpLevel = "Information",
+                DurationSeconds = 60,
+                MaxContinuousStepUpSeconds = 120,
+                StepUpCooldownSeconds = 300
+            };
+
+            using var controller = new StepUpLoggingController(opts, null, () => ticks);
+
+            int netActive = 0;
+            using var listener = new MeterListener
+            {
+                InstrumentPublished = (instrument, l) =>
+                {
+                    if (instrument.Meter.Name == "StepUpLogging" && instrument.Name == "stepup_active")
+                    {
+                        l.EnableMeasurementEvents(instrument);
+                    }
+                }
+            };
+            listener.SetMeasurementEventCallback<int>((_, measurement, _, _) => netActive += measurement);
+            listener.Start();
+
+            controller.Trigger();
+
+            // Extend once so the forced-cap trigger inherits this generation. The cap path does not
+            // re-arm the timer, so this is the generation a queued callback would still carry.
+            ticks += Seconds(60);
+            controller.Trigger();
+            long staleGeneration = controller.CurrentGeneration;
+
+            ticks += Seconds(70);
+            controller.Trigger();
+            Assert.False(controller.IsSteppedUp);
+
+            // The queued timer callback for the still-current generation races in after the forced
+            // cap step-down. With BaseLevel == StepUpLevel the level-based guard cannot short-circuit
+            // it (the switch reads the shared level either way), so only the explicit-flag guard keeps
+            // this second call from double-decrementing the active-state counter.
+            controller.InvokeStepDownForTest(staleGeneration);
+
+            Assert.False(controller.IsSteppedUp);
+            Assert.Equal(LogEventLevel.Information, controller.LevelSwitch.MinimumLevel);
+            Assert.Equal(0, netActive);
+        }
+
+        private static long Seconds(double s) => (long)(s * Stopwatch.Frequency);
     }
 }
