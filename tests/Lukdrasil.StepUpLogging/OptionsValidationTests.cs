@@ -104,6 +104,47 @@ public class OptionsValidationTests
     }
 
     [Fact]
+    public void ZeroPreErrorBufferSize_FailsValidationOnStart()
+    {
+        Assert.Throws<OptionsValidationException>(
+            () => BuildHost(("SerilogStepUp:PreErrorBufferSize", "0")));
+    }
+
+    [Fact]
+    public void NegativePreErrorBufferSize_FailsValidationOnStart()
+    {
+        Assert.Throws<OptionsValidationException>(
+            () => BuildHost(("SerilogStepUp:PreErrorBufferSize", "-1")));
+    }
+
+    [Fact]
+    public void ZeroPreErrorMaxContexts_FailsValidationOnStart()
+    {
+        Assert.Throws<OptionsValidationException>(
+            () => BuildHost(("SerilogStepUp:PreErrorMaxContexts", "0")));
+    }
+
+    [Fact]
+    public void NegativePreErrorMaxContexts_FailsValidationOnStart()
+    {
+        Assert.Throws<OptionsValidationException>(
+            () => BuildHost(("SerilogStepUp:PreErrorMaxContexts", "-1")));
+    }
+
+    [Fact]
+    public void PositivePreErrorBufferBounds_ResolveOnStart()
+    {
+        using var host = BuildHost(
+            ("SerilogStepUp:PreErrorBufferSize", "5"),
+            ("SerilogStepUp:PreErrorMaxContexts", "7"));
+
+        var opts = host.Services.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
+
+        Assert.Equal(5, opts.PreErrorBufferSize);
+        Assert.Equal(7, opts.PreErrorMaxContexts);
+    }
+
+    [Fact]
     public void ValidConfiguration_ResolvesWithCanonicalDefaults()
     {
         using var host = BuildHost();

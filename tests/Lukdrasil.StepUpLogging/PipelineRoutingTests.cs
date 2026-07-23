@@ -537,6 +537,9 @@ public class PipelineRoutingTests
                 ["Serilog:Using:0"] = "Serilog.Sinks.File",
                 ["Serilog:WriteTo:0:Name"] = "File",
                 ["Serilog:WriteTo:0:Args:path"] = tempFile,
+                // shared:true is required once a config File sink attaches to both the gated and the
+                // bypass logger, or the two writers contend for the file lock (ADR 0003).
+                ["Serilog:WriteTo:0:Args:shared"] = "true",
             });
             builder.AddStepUpLogging();
 
@@ -572,6 +575,9 @@ public class PipelineRoutingTests
                 ["Serilog:Using:0"] = "Serilog.Sinks.File",
                 ["Serilog:WriteTo:0:Name"] = "File",
                 ["Serilog:WriteTo:0:Args:path"] = tempFile,
+                // shared:true is required once a config File sink attaches to both the gated and the
+                // bypass logger, or the two writers contend for the file lock (ADR 0003).
+                ["Serilog:WriteTo:0:Args:shared"] = "true",
             });
             builder.AddStepUpLogging();
 
@@ -619,6 +625,9 @@ public class PipelineRoutingTests
                 ["Serilog:Using:0"] = "Serilog.Sinks.File",
                 ["Serilog:WriteTo:0:Name"] = "File",
                 ["Serilog:WriteTo:0:Args:path"] = tempFile,
+                // shared:true is required once a config File sink attaches to both the gated and the
+                // bypass logger, or the two writers contend for the file lock (ADR 0003).
+                ["Serilog:WriteTo:0:Args:shared"] = "true",
             });
             builder.AddStepUpLogging();
 

@@ -230,6 +230,106 @@ public class RequestBodyCaptureTests
         }
     }
 
+    private sealed class DripStream : Stream
+    {
+        private readonly Stream _inner;
+        private readonly int _maxPerRead;
+        public DripStream(Stream inner, int maxPerRead)
+        {
+            _inner = inner;
+            _maxPerRead = maxPerRead;
+        }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => true;
+        public override bool CanWrite => false;
+        public override long Length => _inner.Length;
+        public override long Position { get => _inner.Position; set => _inner.Position = value; }
+
+        // Hand back at most _maxPerRead bytes per call to force StreamReader into short reads.
+        public override int Read(byte[] buffer, int offset, int count) =>
+            _inner.Read(buffer, offset, Math.Min(count, _maxPerRead));
+
+        public override void Flush() => _inner.Flush();
+        public override long Seek(long offset, SeekOrigin origin) => _inner.Seek(offset, origin);
+        public override void SetLength(long value) => _inner.SetLength(value);
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    [Fact]
+    public async Task RequestBody_LargerThanReaderBuffer_IsCapturedInFull_DespiteShortReads()
+    {
+        var capture = new CaptureSink();
+        var logger = new LoggerConfiguration().WriteTo.Sink(capture).CreateLogger();
+        var previous = Log.Logger;
+        Log.Logger = logger;
+        try
+        {
+            var opts = new StepUpLoggingOptions
+            {
+                Mode = StepUpMode.AlwaysOn,
+                CaptureRequestBody = true,
+                RedactionRegexes = new[] { "secret-[A-Za-z0-9]+" }
+            };
+
+            var builder = new WebHostBuilder()
+                .ConfigureServices(services =>
+                {
+                    services.AddSingleton(Options.Create(opts));
+                    services.AddSingleton(logger);
+                    services.AddSingleton(sp => new StepUpLoggingController(opts, logger));
+                    var patterns = opts.RedactionRegexes
+                        .Select(p => new Regex(p, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100)))
+                        .ToArray();
+                    services.AddSingleton(new CompiledRedactionPatterns(patterns));
+                    var diagType = Type.GetType("Serilog.Extensions.Hosting.DiagnosticContext, Serilog.Extensions.Hosting")
+                                   ?? Type.GetType("Serilog.AspNetCore.DiagnosticContext, Serilog.AspNetCore");
+                    var ctor = diagType!.GetConstructors().OrderByDescending(c => c.GetParameters().Length).First();
+                    var args = ctor.GetParameters().Select(p =>
+                        p.ParameterType == typeof(Serilog.ILogger) ? (object?)logger
+                        : p.HasDefaultValue ? p.DefaultValue
+                        : null).ToArray();
+                    services.AddSingleton(diagType, ctor.Invoke(args));
+                })
+                .Configure(app =>
+                {
+                    // Drip the buffered body 64 bytes at a time so a single StreamReader.Read returns
+                    // far short of the full body — the exact condition ReadBlock must survive.
+                    app.Use(async (ctx, next) =>
+                    {
+                        ctx.Request.EnableBuffering();
+                        ctx.Request.Body = new DripStream(ctx.Request.Body, 64);
+                        await next();
+                    });
+                    app.UseStepUpRequestLogging();
+                    app.Run(async ctx =>
+                    {
+                        ctx.Response.StatusCode = 200;
+                        await ctx.Response.WriteAsync("ok");
+                    });
+                });
+
+            using var server = new TestServer(builder);
+            using var client = server.CreateClient();
+
+            var body = new string('a', 300) + "secret-TAILTOKEN";
+            var response = await client.PostAsync("/api/test", new StringContent(body, Encoding.UTF8, "application/json"));
+            response.EnsureSuccessStatusCode();
+            await Task.Delay(50);
+
+            var captured = FindRequestBody(capture);
+            Assert.NotNull(captured);
+            Assert.Contains("[REDACTED]", captured);
+            Assert.DoesNotContain("secret-TAILTOKEN", captured);
+            Assert.True(captured!.Length >= 300, $"expected the full body, captured only {captured.Length} chars");
+        }
+        finally
+        {
+            Log.Logger = previous;
+            logger.Dispose();
+        }
+    }
+
     private sealed class ThrowingOnReadBody : Stream
     {
         private readonly Stream _inner;
