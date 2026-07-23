@@ -36,6 +36,19 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
     /// <summary>Number of live per-context buffers. Exposed for tests.</summary>
     internal int ContextCount => _buffers.Count;
 
+    /// <summary>
+    /// Test-only seam invoked between the LRU touch and the enqueue of a buffered event, so a
+    /// test can simulate a concurrent evictor landing in that window. No-op in production.
+    /// </summary>
+    internal Action? BeforeEnqueueTestHook { get; set; }
+
+    /// <summary>
+    /// Test-only seam invoked immediately after the enqueue, still inside the same buffering
+    /// operation, so a test can deterministically observe the just-buffered state before any
+    /// concurrent eviction can land. No-op in production.
+    /// </summary>
+    internal Action? AfterEnqueueTestHook { get; set; }
+
     private static readonly Meter Meter = new("StepUpLogging.Buffer", "1.0.0");
     private static readonly Counter<long> BufferedEventsCounter = Meter.CreateCounter<long>("buffer_events_total", unit: "count", description: "Total number of events buffered");
     private static readonly Counter<long> FlushedEventsCounter = Meter.CreateCounter<long>("buffer_flushed_events_total", unit: "count", description: "Total number of events flushed due to error");
@@ -133,45 +146,52 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
         if (LogProperties.HasFlag(logEvent, LogProperties.IsImmediate) || LogProperties.HasFlag(logEvent, LogProperties.IsRequestSummary))
             return;
 
-        var buffer = GetOrCreateBuffer(key);
-        buffer.Enqueue(logEvent);
+        BufferEvent(key, logEvent);
         BufferedEventsCounter.Add(1);
     }
 
-    private Buffer GetOrCreateBuffer(string key)
-    {
-        var buffer = _buffers.GetOrAdd(key, static (_, capacity) => new Buffer(capacity), _capacityPerContext);
-        TrackLruFor(key);
-        return buffer;
-    }
-
-    private void TrackLruFor(string key)
+    // ponytail: get-or-create, LRU touch, and enqueue for a key must complete as one unit —
+    // otherwise a concurrent TouchLru for a different key can evict this key's buffer between
+    // the touch and the enqueue, silently orphaning the event. Holding _lruGate for the whole
+    // operation serializes all buffering across every context behind one lock; revisit with
+    // per-key locking if that ever shows up as a throughput bottleneck.
+    private void BufferEvent(string key, LogEvent logEvent)
     {
         lock (_lruGate)
         {
-            // O(1) move-to-front via the node index.
-            if (_lruNodes.TryGetValue(key, out var node))
-            {
-                _lru.Remove(node);
-                _lru.AddFirst(node);
-            }
-            else
-            {
-                _lruNodes[key] = _lru.AddFirst(key);
-            }
+            var buffer = _buffers.GetOrAdd(key, static (_, capacity) => new Buffer(capacity), _capacityPerContext);
+            TouchLru(key);
+            BeforeEnqueueTestHook?.Invoke();
+            buffer.Enqueue(logEvent);
+            AfterEnqueueTestHook?.Invoke();
+        }
+    }
 
-            // Enforce max contexts, evicting least-recently-touched first.
-            while (_lru.Count > _maxContexts)
+    // Must be called while holding _lruGate.
+    private void TouchLru(string key)
+    {
+        // O(1) move-to-front via the node index.
+        if (_lruNodes.TryGetValue(key, out var node))
+        {
+            _lru.Remove(node);
+            _lru.AddFirst(node);
+        }
+        else
+        {
+            _lruNodes[key] = _lru.AddFirst(key);
+        }
+
+        // Enforce max contexts, evicting least-recently-touched first.
+        while (_lru.Count > _maxContexts)
+        {
+            var last = _lru.Last;
+            if (last is not null)
             {
-                var last = _lru.Last;
-                if (last is not null)
+                _lru.RemoveLast();
+                _lruNodes.Remove(last.Value);
+                if (_buffers.TryRemove(last.Value, out _))
                 {
-                    _lru.RemoveLast();
-                    _lruNodes.Remove(last.Value);
-                    if (_buffers.TryRemove(last.Value, out _))
-                    {
-                        EvictedContextsCounter.Add(1);
-                    }
+                    EvictedContextsCounter.Add(1);
                 }
             }
         }

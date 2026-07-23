@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Threading;
 using Serilog;
 using Serilog.Core;
 using Serilog.Events;
@@ -433,6 +434,65 @@ public class PreErrorBufferSinkTests
         {
             meterListener.Dispose();
         }
+    }
+
+    [Fact]
+    public void Buffer_ConcurrentEvictionDuringTouch_DoesNotOrphanJustBufferedEvent()
+    {
+        Activity.Current = null;
+        var collector = new CollectingSink();
+        var bypass = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
+        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 5, maxContexts: 1, minimumLevel: LogEventLevel.Verbose);
+        var parser = new MessageTemplateParser();
+
+        var targetProps = new[] { new LogEventProperty("TraceId", new ScalarValue("target")) };
+        var evictorProps = new[] { new LogEventProperty("TraceId", new ScalarValue("evictor")) };
+        var evictorEvent = new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Information, null, parser.Parse("evictor-1"), evictorProps);
+
+        var releaseEvictor = new ManualResetEventSlim(false);
+        var evictorDone = new ManualResetEventSlim(false);
+
+        // A second thread, parked until the hook below releases it, that touches a different
+        // context — with maxContexts: 1 this evicts whatever context is currently buffered.
+        var evictorThread = new Thread(() =>
+        {
+            releaseEvictor.Wait();
+            sink.Emit(evictorEvent);
+            evictorDone.Set();
+        })
+        {
+            IsBackground = true,
+        };
+        evictorThread.Start();
+
+        // Simulates the concurrent evictor landing exactly between the target context's LRU
+        // touch and the enqueue of its own event.
+        sink.BeforeEnqueueTestHook = () =>
+        {
+            releaseEvictor.Set();
+            evictorDone.Wait(TimeSpan.FromMilliseconds(500));
+        };
+
+        // Checks the flush-on-error outcome from inside the same buffering operation that just
+        // enqueued "target-1" — before the (possibly still-pending) evictor can have touched
+        // anything, so the assertion isn't itself racing the evictor thread's scheduling.
+        sink.AfterEnqueueTestHook = () =>
+        {
+            sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Error, null, parser.Parse("err-target"), targetProps));
+        };
+
+        try
+        {
+            sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Information, null, parser.Parse("target-1"), targetProps));
+        }
+        finally
+        {
+            sink.BeforeEnqueueTestHook = null;
+            sink.AfterEnqueueTestHook = null;
+        }
+
+        Assert.Single(collector.Events);
+        Assert.Equal("target-1", collector.Events[0].MessageTemplate.Text);
     }
 
     [Fact]
