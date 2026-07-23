@@ -1,9 +1,24 @@
+using Serilog.Sinks.OpenTelemetry;
 using Xunit;
 
 namespace Lukdrasil.StepUpLogging.Tests;
 
 public class OtlpEnvParsingTests
 {
+    [Theory]
+    [InlineData("http", OtlpProtocol.HttpProtobuf)]
+    [InlineData("http/protobuf", OtlpProtocol.HttpProtobuf)]
+    [InlineData("HTTP/PROTOBUF", OtlpProtocol.HttpProtobuf)]
+    [InlineData("Http", OtlpProtocol.HttpProtobuf)]
+    [InlineData("grpc", OtlpProtocol.Grpc)]
+    [InlineData("", OtlpProtocol.Grpc)]
+    [InlineData(null, OtlpProtocol.Grpc)]
+    [InlineData("gopher", OtlpProtocol.Grpc)]
+    public void ResolveOtlpProtocol_MapsProtocolStringToProtocol(string? protocol, OtlpProtocol expected)
+    {
+        Assert.Equal(expected, StepUpLoggingExtensions.ResolveOtlpProtocol(protocol));
+    }
+
     [Theory]
     [InlineData("Authorization=Basic%20dXNlcjpwYXNz", "Authorization", "Basic dXNlcjpwYXNz")]
     [InlineData("key=a%2Cb", "key", "a,b")]

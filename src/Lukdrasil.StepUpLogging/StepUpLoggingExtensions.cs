@@ -128,7 +128,7 @@ public static class StepUpLoggingExtensions
         builder.Services.AddOptions<StepUpLoggingOptions>()
             .Bind(builder.Configuration.GetSection(configSectionName))
             .Configure(options => configureOptions?.Invoke(options))
-            .Validate(ValidateOptions, "Invalid SerilogStepUp options: DurationSeconds must be > 0, MaxBodyCaptureBytes must be > 0, MaxContinuousStepUpSeconds must be >= 0 and either 0 (disabled) or >= DurationSeconds, StepUpCooldownSeconds must be >= 0, and BaseLevel/StepUpLevel/RequestSummaryLevel must be valid Serilog levels.")
+            .Validate(ValidateOptions, "Invalid SerilogStepUp options: DurationSeconds must be > 0, MaxBodyCaptureBytes must be > 0, MaxContinuousStepUpSeconds must be >= 0 and either 0 (disabled) or >= DurationSeconds, StepUpCooldownSeconds must be >= 0, PreErrorBufferSize and PreErrorMaxContexts must be > 0, and BaseLevel/StepUpLevel/RequestSummaryLevel must be valid Serilog levels.")
             .ValidateOnStart();
 
         builder.Services.ConfigureOpenTelemetryMeterProvider(metrics =>
@@ -171,8 +171,18 @@ public static class StepUpLoggingExtensions
             // Built directly here (not via DI) to avoid a circular deadlock:
             // AddSerilog registers Serilog.ILogger as a factory that depends on ILoggerFactory,
             // which in turn depends on this very callback — resolving it inside the callback deadlocks.
-            var bypassLogger = CreateBypassLogger(builder, logFilePath, opts);
+            var bypassLogger = CreateBypassLogger(builder, logFilePath, opts, gatedConfig);
             try { stepUpController.SetSummaryLogger(bypassLogger); } catch { }
+
+            // ADR 0007 warn-not-fail: in Auto mode a StepUpLevel that is not strictly more verbose than
+            // BaseLevel (numerically >= it, since a more verbose level is a LOWER LogEventLevel) means a
+            // trigger cannot raise verbosity. AlwaysOn/Disabled ignore the ordering, so they never warn.
+            if (opts.Mode == StepUpMode.Auto && stepUpController.StepUpLevel >= stepUpController.BaseLevel)
+            {
+                bypassLogger.Warning(
+                    "StepUpLevel {StepUpLevel} is not more verbose than BaseLevel {BaseLevel}; step-up cannot increase verbosity in Auto mode.",
+                    stepUpController.StepUpLevel, stepUpController.BaseLevel);
+            }
 
             // Step-up sink: gated by LevelSwitch, drops bypass-marked events to prevent duplication.
             var stepUpInnerCfg = new LoggerConfiguration();
@@ -268,6 +278,8 @@ public static class StepUpLoggingExtensions
            && o.MaxContinuousStepUpSeconds >= 0
            && o.StepUpCooldownSeconds >= 0
            && (o.MaxContinuousStepUpSeconds == 0 || o.MaxContinuousStepUpSeconds >= o.DurationSeconds)
+           && o.PreErrorBufferSize > 0
+           && o.PreErrorMaxContexts > 0
            && IsValidLevel(o.BaseLevel)
            && IsValidLevel(o.StepUpLevel)
            && IsValidLevel(o.RequestSummaryLevel);
@@ -350,14 +362,24 @@ public static class StepUpLoggingExtensions
 
     /// <summary>
     /// Creates the bypass/summary logger that exports events independently of the main LevelSwitch.
+    /// The config-declared <c>Serilog:WriteTo</c> sinks (<paramref name="gatedConfig"/>) are attached
+    /// alongside the library's own output sinks so bypass-routed events — immediate, request-summary,
+    /// and pre-error-buffer flushes — still reach user WriteTo sinks even when the OTLP exporter is off.
     /// </summary>
+    /// <remarks>
+    /// A config-declared File sink now attaches to both the gated and the bypass logger. Without
+    /// <c>shared:true</c> the two writers contend for the file lock and one silently drops its output
+    /// (ADR 0003); config File sinks must set <c>shared:true</c>.
+    /// </remarks>
     private static Serilog.ILogger CreateBypassLogger(
         IHostApplicationBuilder builder,
         string? logFilePath,
-        StepUpLoggingOptions opts)
+        StepUpLoggingOptions opts,
+        IConfiguration gatedConfig)
     {
         var cfg = new LoggerConfiguration().MinimumLevel.Verbose();
         ApplyCommonEnrichers(cfg, builder, opts);
+        cfg.ReadFrom.Configuration(gatedConfig);
         ConfigureOutputSinks(cfg, builder, logFilePath, opts);
         return cfg.CreateLogger();
     }
@@ -423,7 +445,7 @@ public static class StepUpLoggingExtensions
                     var rawPath = httpContext.Request.Path.Value ?? string.Empty;
                     var path = rawPath.Length > 1 ? rawPath.TrimEnd('/') : rawPath;
 
-                    if (!exclude.Contains(path) && !excludePrefixes.Any(prefix => path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
+                    if (!IsExcludedPath(path, exclude, excludePrefixes))
                     {
                         try
                         {
@@ -604,7 +626,10 @@ public static class StepUpLoggingExtensions
                                 var limit = opts.MaxBodyCaptureBytes;
                                 var buffer = new char[limit + RedactionMargin];
                                 using var sr = new StreamReader(httpContext.Request.Body, Encoding.UTF8, true, 1024, leaveOpen: true);
-                                var read = sr.Read(buffer, 0, buffer.Length);
+                                // ReadBlock loops until the buffer is filled or EOF; a single Read can
+                                // return short when the underlying stream hands back a partial chunk,
+                                // silently truncating a large body.
+                                var read = sr.ReadBlock(buffer, 0, buffer.Length);
                                 httpContext.Request.Body.Position = 0;
 
                                 if (read > 0)
@@ -632,7 +657,7 @@ public static class StepUpLoggingExtensions
             {
                 var rawPath = httpContext.Request.Path.Value ?? string.Empty;
                 var path = rawPath.Length > 1 ? rawPath.TrimEnd('/') : rawPath;
-                if (exclude.Contains(path) || excludePrefixes.Any(prefix => path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
+                if (IsExcludedPath(path, exclude, excludePrefixes))
                 {
                     return LogEventLevel.Verbose;
                 }
@@ -760,6 +785,41 @@ public static class StepUpLoggingExtensions
         }
     }
 
+    /// <summary>
+    /// Decides whether <paramref name="path"/> is excluded from request logging. A path matches when it
+    /// is in the <paramref name="exact"/> set, or when it equals one of the <paramref name="prefixes"/> or
+    /// sits under it on a segment boundary (<c>prefix + "/"</c>). Matching on the boundary keeps a
+    /// wildcard like <c>/api/*</c> from swallowing an unrelated sibling such as <c>/apifoo</c>.
+    /// </summary>
+    internal static bool IsExcludedPath(string path, IReadOnlySet<string> exact, IReadOnlyList<string> prefixes)
+    {
+        if (exact.Contains(path)) return true;
+
+        foreach (var prefix in prefixes)
+        {
+            if (path.Equals(prefix, StringComparison.OrdinalIgnoreCase)
+                || path.StartsWith(prefix + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Resolves the OTLP wire protocol from the <c>OTEL_EXPORTER_OTLP_PROTOCOL</c> value. Both
+    /// <c>"http"</c> and the spec-canonical <c>"http/protobuf"</c> map to
+    /// <see cref="OtlpProtocol.HttpProtobuf"/> (case-insensitive); <c>"grpc"</c>, empty, null, or any
+    /// unrecognized value fall back to <see cref="OtlpProtocol.Grpc"/>.
+    /// </summary>
+    internal static OtlpProtocol ResolveOtlpProtocol(string? protocol)
+        => protocol?.Trim().ToLowerInvariant() switch
+        {
+            "http" or "http/protobuf" => OtlpProtocol.HttpProtobuf,
+            _ => OtlpProtocol.Grpc,
+        };
+
     private static void ConfigureOutputSinks(LoggerConfiguration lc,
         IHostApplicationBuilder builder,
         string? logFilePath,
@@ -773,9 +833,7 @@ public static class StepUpLoggingExtensions
                 var protocol = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_PROTOCOL");
 
                 otlpOptions.Endpoint = endpoint;
-                otlpOptions.Protocol = protocol == "http"
-                    ? OtlpProtocol.HttpProtobuf
-                    : OtlpProtocol.Grpc;
+                otlpOptions.Protocol = ResolveOtlpProtocol(protocol);
 
                 var headers = ParseOtlpHeaders(Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_HEADERS"));
                 foreach (var header in headers)

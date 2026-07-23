@@ -673,6 +673,8 @@ See full [performance test results](tests/k6/performance_test_results.md).
 - Daily rolling files with 30-day retention
 - Enable via `logFilePath` parameter in `AddStepUpLogging()`
 
+**Config-Declared Sinks** — User-defined `Serilog:WriteTo` sinks in configuration now receive bypass-routed events (immediate logs, request summaries, pre-error buffer flushes) in addition to gated logs. If using a config File sink, set `shared: true` to prevent file lock contention between the two loggers writing to the same file (ADR 0003).
+
 ## Configuration Options
 
 | Option | Default | Environment Variable | Description |
