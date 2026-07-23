@@ -87,7 +87,7 @@ public class StepUpTriggerSinkTests
     [Fact]
     public void ConstructorWithNullController_ThrowsArgumentNullException()
     {
-        Assert.Throws<ArgumentNullException>(() => new StepUpTriggerSink(null!));
+        Assert.Throws<ArgumentNullException>(() => new StepUpTriggerSink((StepUpLoggingController)null!));
     }
 
     [Fact]
@@ -113,6 +113,32 @@ public class StepUpTriggerSinkTests
         await Task.Delay(100);
 
         Assert.False(controller.IsSteppedUp);
+    }
+
+    [Fact]
+    public async Task Emit_Error_ThrowingTriggerDoesNotStopSubsequentProcessing()
+    {
+        var callCount = 0;
+        using var sink = new StepUpTriggerSink(() =>
+        {
+            callCount++;
+            if (callCount == 1)
+            {
+                throw new InvalidOperationException("first trigger fails");
+            }
+        });
+
+        var parser = new MessageTemplateParser();
+        var logEvent = new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Error, exception: null,
+            messageTemplate: parser.Parse("err"),
+            properties: Array.Empty<LogEventProperty>());
+
+        sink.Emit(logEvent);
+        await Task.Delay(100);
+        sink.Emit(logEvent);
+        await Task.Delay(100);
+
+        Assert.Equal(2, callCount);
     }
 
     [Fact]
