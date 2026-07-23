@@ -8,6 +8,23 @@ Tags before 1.8.0 predate this file.
 
 ## [Unreleased]
 
+## [3.3.0] - 2026-07-23
+
+Fixes from a source review plus one new export behaviour. No public API break.
+
+### Added
+- Bypass-routed events — immediate logs (LogImmediate*), request summaries, and pre-error buffer flushes — now also export to config-declared Serilog:WriteTo sinks, not only the built-in OTLP/console/file sinks. Previously, with EnableOtlpExporter false and no console or file sink, these events went nowhere. Behaviour note: a config-declared File sink now attaches to both the gated and bypass loggers, so it must set `shared: true` or it will hit a file lock (ADR 0003). The gated logger still drops immediate/summary events, so there is no double-emit.
+- Startup warning (Auto mode) when StepUpLevel is not more verbose than BaseLevel — a likely misconfiguration. Warn, not fail: equal/inverted levels are still accepted and AlwaysOn/Disabled are unaffected (ADR 0007).
+
+### Fixed
+- OTLP protocol: the spec-correct OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf was ignored and silently fell back to gRPC. Both `http` and `http/protobuf` now select HttpProtobuf.
+- Exclude paths: a wildcard entry like `/api/*` over-matched sibling paths such as `/apifoo`. Matching is now `path == prefix` or `path` starts with `prefix + "/"`, shared by the request-summary middleware and the request-log level filter.
+- IsSteppedUp was permanently true when BaseLevel == StepUpLevel (and inverted when the levels were), because state was inferred from a level comparison. It is now tracked by an explicit flag. PerformStepDown is also idempotent, closing a forced-cap + stale-timer double-step-down that drove the active-state counter negative.
+- Options validation now rejects non-positive PreErrorBufferSize and PreErrorMaxContexts (previously clamped to 1 silently).
+- The step-up trigger sink's background loop survives a throwing Trigger() instead of faulting and permanently disabling step-up.
+- Request-body capture uses ReadBlock so a body larger than the reader buffer is captured in full rather than truncated by a short read.
+- Pre-error buffer: get-or-create and enqueue are now atomic under the LRU gate, closing a race that could orphan a just-buffered event when a concurrent eviction removed its context.
+
 ## [3.2.1] - 2026-07-10
 
 The v3.2.0 tag pointed at a commit whose csproj was still versioned 3.1.0, so no 3.2.0
