@@ -14,7 +14,7 @@ namespace Lukdrasil.StepUpLogging;
 /// </summary>
 internal sealed class StepUpTriggerSink : ILogEventSink, IAsyncDisposable, IDisposable
 {
-    private readonly StepUpLoggingController _controller;
+    private readonly Action _trigger;
     private readonly Channel<bool> _triggerChannel;
     private readonly Task _processingTask;
     private readonly CancellationTokenSource _cts;
@@ -24,17 +24,32 @@ internal sealed class StepUpTriggerSink : ILogEventSink, IAsyncDisposable, IDisp
     private static readonly Counter<long> ErrorEventsCounter = Meter.CreateCounter<long>("sink_error_events_total", "count", "Total number of error-level events observed");
     private static readonly Counter<long> DroppedEventsCounter = Meter.CreateCounter<long>("sink_dropped_events_total", "count", "Number of dropped events due to full channel");
     private static readonly Counter<long> ProcessedTriggersCounter = Meter.CreateCounter<long>("sink_processed_triggers_total", "count", "Number of triggers processed by background task");
+    private static readonly Counter<long> FailedTriggersCounter = Meter.CreateCounter<long>("sink_failed_triggers_total", "count", "Number of triggers that threw and were skipped");
 
     public StepUpTriggerSink(StepUpLoggingController controller)
+        : this(RequireTrigger(controller))
     {
-        ArgumentNullException.ThrowIfNull(controller);
-        _controller = controller;
+    }
+
+    /// <summary>
+    /// Internal seam allowing tests to substitute a trigger delegate that can fail independently
+    /// of a real <see cref="StepUpLoggingController"/>.
+    /// </summary>
+    internal StepUpTriggerSink(Action trigger)
+    {
+        _trigger = trigger;
         _triggerChannel = Channel.CreateBounded<bool>(new BoundedChannelOptions(100)
         {
             FullMode = BoundedChannelFullMode.DropOldest
         });
         _cts = new CancellationTokenSource();
         _processingTask = Task.Run(ProcessTriggersAsync);
+    }
+
+    private static Action RequireTrigger(StepUpLoggingController controller)
+    {
+        ArgumentNullException.ThrowIfNull(controller);
+        return controller.Trigger;
     }
 
     public void Emit(LogEvent logEvent)
@@ -60,8 +75,20 @@ internal sealed class StepUpTriggerSink : ILogEventSink, IAsyncDisposable, IDisp
         {
             await foreach (var _ in _triggerChannel.Reader.ReadAllAsync(_cts.Token))
             {
-                _controller.Trigger();
-                ProcessedTriggersCounter.Add(1);
+                try
+                {
+                    _trigger();
+                    ProcessedTriggersCounter.Add(1);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception)
+                {
+                    // A failing trigger must not kill the background loop; later triggers still need processing.
+                    FailedTriggersCounter.Add(1);
+                }
             }
         }
         catch (OperationCanceledException)
