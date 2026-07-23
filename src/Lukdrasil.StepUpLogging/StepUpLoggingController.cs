@@ -34,6 +34,9 @@ public sealed class StepUpLoggingController : IDisposable
     private long _stepUpStartTimestamp;
     private long _generation;
     private bool _disposed;
+    // Authoritative record of step-up state. The LevelSwitch cannot stand in for it: when
+    // BaseLevel == StepUpLevel the switch reads the same level whether stepped up or not.
+    private bool _isSteppedUp;
 
     private static readonly Meter Meter = new("StepUpLogging", "1.0.0");
     private static readonly Counter<long> TriggerCounter = Meter.CreateCounter<long>("stepup_trigger_total", "count", "Total number of step-up triggers");
@@ -132,6 +135,9 @@ public sealed class StepUpLoggingController : IDisposable
         try
         {
             var lvl = _requestSummaryLevel;
+            // The Log.ForContext fallback is not reachable in the normal pipeline: SetSummaryLogger
+            // runs at logger-build time, before any request, so _summaryLogger is already set by the
+            // time a request handler can call EmitRequestSummary.
             var logger = _summaryLogger is not null
                 ? _summaryLogger.ForContext(LogProperties.IsRequestSummary, true)
                 : Log.ForContext(LogProperties.IsRequestSummary, true);
@@ -178,7 +184,7 @@ public sealed class StepUpLoggingController : IDisposable
     {
         StepUpMode.AlwaysOn => true,
         StepUpMode.Disabled => false,
-        _ => LevelSwitch.MinimumLevel == _stepUpLevel
+        _ => _isSteppedUp
     };
 
     public void Trigger()
@@ -208,8 +214,11 @@ public sealed class StepUpLoggingController : IDisposable
                 _cooldownUntilTimestamp = 0;
             }
 
-            // Fast-path: if already stepped up and recently triggered, just extend timer
-            if (LevelSwitch.MinimumLevel == _stepUpLevel)
+            // Fast-path: if already stepped up and recently triggered, just extend timer.
+            // Reads the explicit flag rather than comparing levels: when BaseLevel == StepUpLevel,
+            // the switch already sits at _stepUpLevel before the first trigger, which a level
+            // comparison cannot tell apart from a genuine step-up.
+            if (_isSteppedUp)
             {
                 var now = _clock();
 
@@ -243,6 +252,7 @@ public sealed class StepUpLoggingController : IDisposable
             using (_enableActivityInstrumentation ? StepUpLoggingExtensions.ControllerActivitySource.StartActivity("TriggerStepUp", ActivityKind.Internal) : null)
             {
                 LevelSwitch.MinimumLevel = _stepUpLevel;
+                _isSteppedUp = true;
                 _lastTriggerTimestamp = _clock();
                 _stepUpStartTimestamp = _lastTriggerTimestamp;
 
@@ -295,13 +305,16 @@ public sealed class StepUpLoggingController : IDisposable
 
     /// <summary>
     /// Restore the base level and settle the step-up metrics. Must be called while holding <see cref="_gate"/>.
-    /// A no-op when the switch is not currently stepped up, which guards against a double step-down that would
-    /// drive the active-state counter negative and record a bogus duration sample. <paramref name="forcedByCap"/>
-    /// is <c>true</c> when the continuous step-up cap forced this step-down rather than the normal timer.
+    /// A no-op when not currently stepped up, which makes the method idempotent: a forced-cap step-down followed
+    /// by an already-queued stale timer callback (which can pass the generation check) must not double-decrement
+    /// the active-state counter or record a bogus duration sample. <paramref name="forcedByCap"/> is <c>true</c>
+    /// when the continuous step-up cap forced this step-down rather than the normal timer.
     /// </summary>
     private void PerformStepDown(bool forcedByCap)
     {
-        if (LevelSwitch.MinimumLevel != _stepUpLevel)
+        // Guard on the authoritative flag, not the level: when BaseLevel == StepUpLevel the switch reads the
+        // shared level whether stepped up or not, so a level comparison could never short-circuit the second call.
+        if (!_isSteppedUp)
         {
             return;
         }
@@ -311,6 +324,7 @@ public sealed class StepUpLoggingController : IDisposable
         activity?.SetTag("stepup.forced_by_cap", forcedByCap);
 
         LevelSwitch.MinimumLevel = _baseLevel;
+        _isSteppedUp = false;
 
         var duration = Stopwatch.GetElapsedTime(_stepUpStartTimestamp, _clock()).TotalSeconds;
         StepUpDurationHistogram.Record(duration);
