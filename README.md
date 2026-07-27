@@ -210,6 +210,29 @@ Summary events are marked with the "IsRequestSummary" property and are processed
 }
 ```
 
+#### Which requests count as errors
+
+The request-completion event's level is what trips the step-up and flushes the pre-error buffer,
+so it is deliberately narrow:
+
+| Outcome | Level |
+|---|---|
+| Excluded path (`ExcludePaths`) | Verbose |
+| Client aborted the connection (closed tab, reload, dropped connection) | Information |
+| Unhandled exception | Error |
+| Status >= 500, no exception | Error, or Warning when `TreatServerErrorStatusAsError` is `false` |
+| Status >= 400 | Warning |
+| Otherwise | Information |
+
+An aborted request is logged at Information rather than Error because a disconnect is not an
+application failure — otherwise any caller, on an anonymous route included, could flush the buffer
+and step the instance up just by disconnecting. A genuine exception on a request the client also
+aborted is still Error.
+
+Behind a reverse proxy or BFF, set `TreatServerErrorStatusAsError` to `false`: a 5xx relayed from a
+backend then logs at Warning and stays out of the trigger path, while your own unhandled exceptions
+still log at Error.
+
 #### IP Address Detection
 
 By default the library takes `ClientIp` from `HttpContext.Connection.RemoteIpAddress` and
@@ -712,6 +735,7 @@ See full [performance test results](tests/k6/performance_test_results.md).
 | `RedactionRegexes` | `[]` | - | Regex patterns for redacting sensitive data (request metadata and bodies only — see [Security](#security)) |
 | `AdditionalSensitiveHeaders` | `[]` | - | Custom header names to redact in request logging |
 | `TrustForwardedHeaders` | `false` | - | When `true`, `ClientIp` is taken from the first `X-Forwarded-For` entry (v2 behavior). Only enable behind a proxy you control with `ForwardedHeadersMiddleware`. See [Security](#security). |
+| `TreatServerErrorStatusAsError` | `true` | - | When `false`, a request completing with status >= 500 but **no** exception is logged at Warning instead of Error, so it does not trigger step-up. Set this in a reverse proxy / BFF where most 5xx are relayed from a backend. An unhandled exception is still Error. |
 | **Service Identification** |
 | `ServiceVersion` | `null` | `APP_VERSION` | Service version for enrichment |
 

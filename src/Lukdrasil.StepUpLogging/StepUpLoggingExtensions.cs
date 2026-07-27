@@ -662,9 +662,21 @@ public static class StepUpLoggingExtensions
                     return LogEventLevel.Verbose;
                 }
 
+                // A client that drops the connection is not an application failure. Logging it at Error
+                // would let any caller — anonymous ones included — flush the pre-error buffer and step
+                // the instance up just by disconnecting. Information keeps the record visible at a normal
+                // BaseLevel without triggering step-up. A real exception on an also-aborted request still
+                // falls through to Error below.
+                if (httpContext.RequestAborted.IsCancellationRequested && ex is null or OperationCanceledException)
+                {
+                    return LogEventLevel.Information;
+                }
+
                 if (ex != null) return LogEventLevel.Error;
                 var status = httpContext.Response?.StatusCode ?? 0;
-                if (status >= 500) return LogEventLevel.Error;
+                // A 5xx with no exception is often a backend failure relayed by a proxy, not this
+                // application's; TreatServerErrorStatusAsError = false keeps those out of the trigger path.
+                if (status >= 500) return opts.TreatServerErrorStatusAsError ? LogEventLevel.Error : LogEventLevel.Warning;
                 if (status >= 400) return LogEventLevel.Warning;
                 return LogEventLevel.Information;
             };

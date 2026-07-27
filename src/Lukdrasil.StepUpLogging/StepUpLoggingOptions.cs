@@ -163,6 +163,15 @@ public sealed class StepUpLoggingOptions
     public bool TrustForwardedHeaders { get; set; } = false;
 
     /// <summary>
+    /// When true, a request that completes with a status code &gt;= 500 but no exception is logged at
+    /// <c>Error</c> — which also triggers step-up and flushes the pre-error buffer. Set this to false in
+    /// a reverse proxy or BFF, where most 5xx responses are relayed from a backend and say nothing about
+    /// this application; such requests are then logged at <c>Warning</c> instead. An unhandled exception
+    /// is still logged at <c>Error</c> either way. Default: true (existing behaviour).
+    /// </summary>
+    public bool TreatServerErrorStatusAsError { get; set; } = true;
+
+    /// <summary>
     /// Upper bound, in seconds, on how long step-up may stay continuously active. When exceeded the
     /// level is forced back to BaseLevel and further triggers are ignored for StepUpCooldownSeconds.
     /// Default: 0 (no bound).
