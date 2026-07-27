@@ -8,6 +8,16 @@ Tags before 1.8.0 predate this file.
 
 ## [Unreleased]
 
+## [3.4.0] - 2026-07-27
+
+Request logging no longer reports Error for failures that are not the application's. No public API break.
+
+### Added
+- `TreatServerErrorStatusAsError` (default `true`, today's behaviour). Set it to `false` in a reverse proxy or BFF: a request completing with a status code >= 500 but no exception is then logged at Warning instead of Error, so a backend-relayed 5xx no longer triggers step-up or flushes the pre-error buffer. An unhandled exception is still Error either way.
+
+### Fixed
+- A client-aborted request (closed tab, reload, dropped connection) was logged at Error, which triggered step-up and flushed the pre-error buffer. On an anonymous route that made log amplification externally controllable — any caller could dump the buffer and open a Debug window on the instance just by disconnecting. Such a request is now logged at Information: still visible at a normal BaseLevel, but no longer a trigger. A genuine exception on an also-aborted request is still Error. Behaviour change without an opt-out (it is the fix); note that a server-initiated cancellation, e.g. an in-flight request at shutdown, is likewise no longer Error. Fixes #17.
+
 ## [3.3.0] - 2026-07-23
 
 Fixes from a source review plus one new export behaviour. No public API break.
