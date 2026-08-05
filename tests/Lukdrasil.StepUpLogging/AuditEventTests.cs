@@ -54,12 +54,12 @@ public class AuditEventTests
         {
             TargetType = "order",
             TargetId = "42",
-            Data = new Dictionary<string, object?> { ["reason"] = "customer request" }
+            Data = new Dictionary<string, object?> { ["channel"] = "support-portal" }
         };
 
         Assert.Equal("order", enriched.TargetType);
         Assert.Equal("42", enriched.TargetId);
-        Assert.Equal("customer request", enriched.Data!["reason"]);
+        Assert.Equal("support-portal", enriched.Data!["channel"]);
         Assert.Equal(original.Action, enriched.Action);
         Assert.Equal(original.ActorId, enriched.ActorId);
         Assert.Equal(original.Outcome, enriched.Outcome);
@@ -74,7 +74,7 @@ public class AuditEventTests
         var property = typeof(AuditEvent).GetProperty(propertyName);
 
         Assert.NotNull(property);
-        Assert.True(property!.GetCustomAttribute<RequiredMemberAttribute>() is not null);
+        Assert.NotNull(property.GetCustomAttribute<RequiredMemberAttribute>());
     }
 
     [Fact]

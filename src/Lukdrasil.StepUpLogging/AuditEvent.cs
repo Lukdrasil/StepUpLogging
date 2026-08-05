@@ -50,30 +50,58 @@ public sealed record AuditEvent
     /// <summary>Additional caller-supplied context, opaque to the library.</summary>
     public IReadOnlyDictionary<string, object?>? Data { get; init; }
 
-    /// <summary>The UTC time the action was audited. Stamped by the library at call time.</summary>
+    /// <summary>
+    /// The UTC time the action was audited. Owned by the library: stamped on every call, so any
+    /// value a caller sets here is overwritten before the record reaches the sink.
+    /// </summary>
     public DateTimeOffset TimestampUtc { get; init; }
 
-    /// <summary>The W3C trace identifier of the enclosing activity, if any. Stamped by the library.</summary>
+    /// <summary>
+    /// The W3C trace identifier of the enclosing activity, if any. Owned by the library: taken
+    /// from the ambient activity on every call, so a caller-set value is overwritten.
+    /// </summary>
     public string? TraceId { get; init; }
 
-    /// <summary>The W3C span identifier of the enclosing activity, if any. Stamped by the library.</summary>
+    /// <summary>
+    /// The W3C span identifier of the enclosing activity, if any. Owned by the library: taken
+    /// from the ambient activity on every call, so a caller-set value is overwritten.
+    /// </summary>
     public string? SpanId { get; init; }
 
-    /// <summary>The client IP address of the originating request, if any. Stamped by the library.</summary>
+    /// <summary>
+    /// The client IP address of the originating request, if any. Owned by the library: taken from
+    /// the current request on every call, so a caller-set value is overwritten.
+    /// </summary>
     public string? SourceIp { get; init; }
 
-    /// <summary>The redacted <c>User-Agent</c> header of the originating request, if any. Stamped by the library.</summary>
+    /// <summary>
+    /// The redacted <c>User-Agent</c> header of the originating request, if any. Owned by the
+    /// library: taken from the current request and redacted on every call, so a caller-set value
+    /// is overwritten.
+    /// </summary>
     public string? UserAgent { get; init; }
 
-    /// <summary>Creates an <see cref="AuditEvent"/> with <see cref="Outcome"/> set to <see cref="AuditOutcome.Success"/>.</summary>
+    /// <summary>
+    /// Creates a <see cref="AuditOutcome.Success"/> event. Everything beyond
+    /// <paramref name="action"/> and <paramref name="actorId"/> stays at its default — add context
+    /// with a <c>with</c> expression.
+    /// </summary>
     public static AuditEvent Success(string action, string actorId) =>
         new() { Action = action, ActorId = actorId, Outcome = AuditOutcome.Success };
 
-    /// <summary>Creates an <see cref="AuditEvent"/> with <see cref="Outcome"/> set to <see cref="AuditOutcome.Failure"/>.</summary>
+    /// <summary>
+    /// Creates a <see cref="AuditOutcome.Failure"/> event. Everything beyond
+    /// <paramref name="action"/> and <paramref name="actorId"/> stays at its default — add context
+    /// with a <c>with</c> expression.
+    /// </summary>
     public static AuditEvent Failure(string action, string actorId) =>
         new() { Action = action, ActorId = actorId, Outcome = AuditOutcome.Failure };
 
-    /// <summary>Creates an <see cref="AuditEvent"/> with <see cref="Outcome"/> set to <see cref="AuditOutcome.Denied"/>.</summary>
+    /// <summary>
+    /// Creates a <see cref="AuditOutcome.Denied"/> event. Everything beyond
+    /// <paramref name="action"/> and <paramref name="actorId"/> stays at its default — add context
+    /// with a <c>with</c> expression.
+    /// </summary>
     public static AuditEvent Denied(string action, string actorId) =>
         new() { Action = action, ActorId = actorId, Outcome = AuditOutcome.Denied };
 }
