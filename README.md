@@ -721,8 +721,8 @@ public sealed class DbAuditSink(MyDbContext db) : IAuditEventSink
     }
 }
 
-// In Program.cs
-builder.Services.AddScoped<DbAuditSink>();
+// In Program.cs — AddAuditLogging registers the sink itself; a separate
+// AddScoped<DbAuditSink>() would just be a second, unused descriptor.
 builder.AddAuditLogging<DbAuditSink>(ServiceLifetime.Scoped);
 ```
 
