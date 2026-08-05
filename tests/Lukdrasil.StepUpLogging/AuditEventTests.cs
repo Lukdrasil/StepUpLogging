@@ -30,18 +30,22 @@ public class AuditEventTests
     }
 
     [Fact]
-    public void Failure_SetsMatchingOutcome()
+    public void Failure_SetsActionActorIdAndMatchingOutcome()
     {
-        var evt = AuditEvent.Failure("order.cancel", "user-1");
+        var evt = AuditEvent.Failure("payment.capture", "user-2");
 
+        Assert.Equal("payment.capture", evt.Action);
+        Assert.Equal("user-2", evt.ActorId);
         Assert.Equal(AuditOutcome.Failure, evt.Outcome);
     }
 
     [Fact]
-    public void Denied_SetsMatchingOutcome()
+    public void Denied_SetsActionActorIdAndMatchingOutcome()
     {
-        var evt = AuditEvent.Denied("order.cancel", "user-1");
+        var evt = AuditEvent.Denied("report.export", "user-3");
 
+        Assert.Equal("report.export", evt.Action);
+        Assert.Equal("user-3", evt.ActorId);
         Assert.Equal(AuditOutcome.Denied, evt.Outcome);
     }
 

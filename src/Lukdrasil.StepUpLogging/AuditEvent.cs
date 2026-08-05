@@ -1,16 +1,20 @@
 namespace Lukdrasil.StepUpLogging;
 
-/// <summary>The result of the audited action.</summary>
+/// <summary>
+/// The result of the audited action. Consumers persist this as an integer in their own audit
+/// store, so these numeric values are part of the contract and must never be renumbered or
+/// reordered — add new members with new, higher values instead.
+/// </summary>
 public enum AuditOutcome
 {
     /// <summary>The action completed as intended.</summary>
-    Success,
+    Success = 0,
 
     /// <summary>The action was attempted but did not complete.</summary>
-    Failure,
+    Failure = 1,
 
     /// <summary>The action was refused, typically by an authorization check.</summary>
-    Denied
+    Denied = 2
 }
 
 /// <summary>
