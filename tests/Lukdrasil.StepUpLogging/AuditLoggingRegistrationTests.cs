@@ -1,9 +1,11 @@
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 using Serilog;
 using Xunit;
 
@@ -139,22 +141,74 @@ public class AuditLoggingRegistrationTests : IDisposable
     }
 
     [Fact]
-    public async Task WithoutAddStepUpLogging_TheHostStartsCleanly_AndTheFirstResolutionThrows()
+    public async Task WithoutAddStepUpLogging_TheHostFailsToStart_NamingBothMethods()
     {
         var builder = Host.CreateApplicationBuilder();
         builder.AddAuditLogging<TestAuditSink>();
 
         using var host = builder.Build();
 
-        // The dependency on AddStepUpLogging is structural, not validated at start-up: an app that
-        // forgot it boots normally and fails on its first audited operation.
+        var thrown = await Assert.ThrowsAsync<OptionsValidationException>(
+            () => host.StartAsync(TestContext.Current.CancellationToken));
+
+        var message = Assert.Single(thrown.Failures);
+        Assert.Contains(nameof(StepUpLoggingExtensions.AddAuditLogging), message);
+        Assert.Contains(nameof(StepUpLoggingExtensions.AddStepUpLogging), message);
+    }
+
+    [Fact]
+    public async Task WithoutAddStepUpLogging_TheHostFailsToStart_BeforeAnyHostedServiceRuns()
+    {
+        var builder = Host.CreateApplicationBuilder();
+
+        // Stands in for Kestrel, which is a hosted service registered before the consumer's own
+        // calls: a check that merely queued itself behind it would let requests through first.
+        var serverStub = new StartupRecordingService();
+        builder.Services.AddSingleton<IHostedService>(serverStub);
+        builder.AddAuditLogging<TestAuditSink>();
+
+        using var host = builder.Build();
+
+        await Assert.ThrowsAsync<OptionsValidationException>(
+            () => host.StartAsync(TestContext.Current.CancellationToken));
+
+        Assert.False(serverStub.Started);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task TheTwoRegistrationCalls_StartTheHost_InEitherOrder(bool auditFirst)
+    {
+        var builder = CreateHostBuilder();
+
+        if (auditFirst)
+        {
+            builder.AddAuditLogging<TestAuditSink>();
+            builder.AddStepUpLogging();
+        }
+        else
+        {
+            builder.AddStepUpLogging();
+            builder.AddAuditLogging<TestAuditSink>();
+        }
+
+        using var host = builder.Build();
+
         await host.StartAsync(TestContext.Current.CancellationToken);
-
-        using var scope = host.Services.CreateScope();
-        var thrown = Assert.Throws<InvalidOperationException>(
-            () => scope.ServiceProvider.GetRequiredService<IAuditLogger<AuditLoggingRegistrationTests>>());
-        Assert.Contains(nameof(CompiledRedactionPatterns), thrown.Message);
-
         await host.StopAsync(TestContext.Current.CancellationToken);
+    }
+
+    private sealed class StartupRecordingService : IHostedService
+    {
+        public bool Started { get; private set; }
+
+        public Task StartAsync(CancellationToken cancellationToken)
+        {
+            Started = true;
+            return Task.CompletedTask;
+        }
+
+        public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
     }
 }

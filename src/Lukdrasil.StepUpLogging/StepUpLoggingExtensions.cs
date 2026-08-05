@@ -129,6 +129,16 @@ public static class StepUpLoggingExtensions
         builder.Services.Add(new ServiceDescriptor(typeof(IAuditEventSink), typeof(TSink), sinkLifetime));
         // Scoped regardless of the sink's lifetime: the audit logger reads per-request context.
         builder.Services.AddScoped(typeof(IAuditLogger<>), typeof(AuditLogger<>));
+
+        // The prerequisite is checked through the service provider rather than through
+        // builder.Services, so the two registration calls stay valid in either order (ADR 0007
+        // start-up validation, as for StepUpLoggingOptions).
+        builder.Services.AddOptions<AuditLoggingPrerequisites>()
+            .Validate<IServiceProvider>(
+                (_, services) => services.GetService<CompiledRedactionPatterns>() is not null,
+                "AddAuditLogging requires AddStepUpLogging: audit records resolve the client IP with the same rule as request logging (ADR 0008), and only AddStepUpLogging registers it. Add builder.AddStepUpLogging() in Program.cs — the order of the two calls does not matter.")
+            .ValidateOnStart();
+
         return builder;
     }
 
@@ -908,6 +918,13 @@ public static class StepUpLoggingExtensions
         }
     }
 }
+
+/// <summary>
+/// Carries nothing; it exists only so that the prerequisites of
+/// <see cref="StepUpLoggingExtensions.AddAuditLogging{TSink}"/> can be checked by the options
+/// pipeline's <c>ValidateOnStart</c>, which is what makes the host refuse to start.
+/// </summary>
+internal sealed class AuditLoggingPrerequisites;
 
 internal sealed record CompiledRedactionPatterns(Regex[] Patterns)
 {

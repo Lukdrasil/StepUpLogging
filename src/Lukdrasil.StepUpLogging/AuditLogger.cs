@@ -14,8 +14,8 @@ namespace Lukdrasil.StepUpLogging;
 /// The dependency on <see cref="CompiledRedactionPatterns"/> is what makes
 /// <see cref="StepUpLoggingExtensions.AddAuditLogging{TSink}"/> require
 /// <see cref="StepUpLoggingExtensions.AddStepUpLogging(Microsoft.Extensions.Hosting.IHostApplicationBuilder, Action{StepUpLoggingOptions}?, string, string?)"/>:
-/// only the latter registers it, so an app that forgot it fails when the first audit logger is
-/// resolved rather than silently deriving client addresses by a second, weaker rule (ADR 0008).
+/// only the latter registers it, rather than silently deriving client addresses by a second,
+/// weaker rule (ADR 0008). An app that forgot it fails at host start, not here.
 /// </remarks>
 internal sealed class AuditLogger<T>(
     IAuditEventSink sink,
