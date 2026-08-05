@@ -45,13 +45,13 @@ The decision to admit audit logging here is conditional on a boundary: the libra
 - The library provides neither a default sink nor a configuration flag for disabling audit; these omissions prevent false confidence and make compliance decisions explicit in code.
 - The redaction boundary is the *origin* of the value (library-supplied, client-supplied, or caller-supplied), not its data type. This clarifies the CLAUDE.md rule rather than carving an exception into it.
 - No `CancellationToken` closes a semantic trap: a caller reflexively passing `RequestAborted` would erase audit on disconnect, which is worse than being prevented from trying.
-- The strict ordering (audit, then log) makes the invariant "audit record exists ⇒ companion log exists" the simplest path, rather than a special case.
+- The strict ordering (audit, then log) makes the invariant "a companion log exists ⇒ an audit record exists" the simplest path, rather than a special case. The converse does not hold and is not intended to: the one-argument overload writes an audit record with no log at all.
 - The hard requirement for `AddStepUpLogging` (via `CompiledRedactionPatterns` dependency) prevents audit from deriving its own client-IP rule, keeping ADR 0008's single-rule boundary intact.
 
 ### Metrics
 
 The library emits two counters under the meter `StepUpLogging.Audit`:
 - `audit_events_total{outcome}` — number of records written, tagged by outcome (Success, Failure, Denied, Unknown). Cardinality is 3 (or 4 with edge cases); never a free string.
-- `audit_write_failures_total` — number of writes that threw an exception before reaching the sink.
+- `audit_write_failures_total` — number of writes for which the sink's `WriteAsync` threw. The exception is counted and rethrown; the record did not reach the consumer's store.
 
 Zero audit events over an observation window is itself an alarm that audit stopped working — alert on the rate of `audit_events_total`.

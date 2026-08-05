@@ -608,7 +608,7 @@ builder.AddStepUpLogging();  // Required: audit uses its client-IP rules
 builder.AddAuditLogging<RecordingAuditSink>();
 ```
 
-**`AddAuditLogging` requires `AddStepUpLogging`** — audit logging derives client IP via the same `TrustForwardedHeaders` policy as request logging, so it must come after step-up is registered. If you call only `AddAuditLogging` without `AddStepUpLogging`, the first audit will fail at DI resolution with a clear message.
+**`AddAuditLogging` requires `AddStepUpLogging`** — audit logging derives client IP via the same `TrustForwardedHeaders` policy as request logging. Both calls are registration-only, so their order does not matter; what matters is that `AddStepUpLogging` is called at all. If it is not, the failure surfaces at the first resolution of `IAuditLogger<T>` — not at host start — with a clear message naming `CompiledRedactionPatterns`.
 
 To disable audit logging in an environment (e.g., development), simply do not call `AddAuditLogging`. There is no configuration flag:
 
@@ -663,7 +663,7 @@ public sealed class OrderService(IAuditLogger<OrderService> audit)
 
 The optional `log` parameter lets you emit a log event alongside the audit record:
 
-- **The companion log is written exactly as given and is never redacted** — the same as every other application log the library emits. The redaction you see in the audit's `UserAgent` or `SourceIp` comes from the library's extraction logic, not from redacting the template itself.
+- **The companion log is written exactly as given and is never redacted** — the same as every other application log the library emits. Whatever redaction you see on the audit record's library-filled fields comes from the library's extraction logic, not from redacting the template itself.
 - **Only use the log for a summary.** Put identifiers (order ID, user ID) and structured context (outcome, reason) in the audit `Action`, required fields, and `Data`. Put the human-readable narrative in the log. Example:
   ```csharp
   var evt = AuditEvent.Failure("user.login", userId) with
@@ -683,6 +683,8 @@ Every `AuditEvent` has:
 
 - **Caller-supplied:** `Action` (string, e.g., `"order.cancel"`), `ActorId`, `Outcome` (Success/Failure/Denied), and optional `TargetType`, `TargetId`, `Reason`, `Data`, `ActorType`, `OnBehalfOfId`, `TenantId`.
 - **Library-filled:** `TimestampUtc` (UTC), `TraceId`, `SpanId` (from OpenTelemetry), `SourceIp`, `UserAgent` (redacted; see [Security](#security)).
+
+`SourceIp` is redacted asymmetrically, by where the address came from: an address read from `X-Forwarded-For` (only when `TrustForwardedHeaders = true`) is client-supplied and goes through redaction, while an address read from the connection is supplied by the network layer, cannot be forged, and reaches your sink bare. This is the same client-IP rule request logging uses (ADR 0008), reused rather than restated.
 
 The library does **not** copy the `Data` dictionary — if your sink buffers the event and your code mutates the dictionary afterwards, the audit record sees the mutations. Pass a snapshot if you need to mutate it: `Data = new Dictionary<string, object?>(myDict)`.
 
