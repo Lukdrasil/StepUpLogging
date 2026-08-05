@@ -38,10 +38,10 @@ namespace Lukdrasil.StepUpLogging.Tests
             }
         }
 
-        private static TestServer CreateTestServer(CaptureSink captureSink, bool trustForwardedHeaders = false, string? jtiClaim = null)
+        private static TestServer CreateTestServer(CaptureSink captureSink, bool trustForwardedHeaders = false, string? jtiClaim = null, string[]? redactionRegexes = null)
         {
             var summaryLogger = new LoggerConfiguration().WriteTo.Sink(captureSink).CreateLogger();
-            var opts = new StepUpLoggingOptions { AlwaysLogRequestSummary = true, RequestSummaryLevel = "Information", TrustForwardedHeaders = trustForwardedHeaders, RedactionRegexes = new[] { "secret-[A-Za-z0-9]+" } };
+            var opts = new StepUpLoggingOptions { AlwaysLogRequestSummary = true, RequestSummaryLevel = "Information", TrustForwardedHeaders = trustForwardedHeaders, RedactionRegexes = redactionRegexes ?? new[] { "secret-[A-Za-z0-9]+" } };
 
             var builder = new WebHostBuilder()
                 .ConfigureServices(services =>
@@ -284,6 +284,50 @@ namespace Lukdrasil.StepUpLogging.Tests
             Assert.NotNull(jti);
             Assert.Contains("[REDACTED]", jti);
             Assert.DoesNotContain("secret-jti999", jti);
+        }
+
+        [Fact(DisplayName = "EmitRequestSummary_ClientIpFromRemoteIp_IsNotRedacted_WhenUntrustedXForwardedForPresent")]
+        public async Task EmitRequestSummary_ClientIpFromRemoteIp_IsNotRedacted_WhenUntrustedXForwardedForPresent()
+        {
+            var capture = new CaptureSink();
+            // A pattern that WOULD match KnownRemoteIp if redaction were applied to it.
+            using var server = CreateTestServer(capture, trustForwardedHeaders: false, redactionRegexes: new[] { @"198\.51\.100\.7" });
+            var client = server.CreateClient();
+
+            var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
+            request.Headers.Add("X-Forwarded-For", "203.0.113.42");
+
+            await client.SendAsync(request);
+
+            Assert.NotNull(capture.LastEvent);
+            var logEvent = capture.LastEvent;
+
+            // ExtractClientAddresses (StepUpLoggingExtensions.cs:731) falls back to the bare, unredacted
+            // Connection.RemoteIpAddress here (TrustForwardedHeaders=false ⇒ the XFF entry is never used
+            // as ClientIp) — deliberately, because a connection address is not client-supplied and so is
+            // not run through CompiledRedactionPatterns.Redact() the way ForwardedFor is.
+            Assert.Equal(KnownRemoteIp, StringProperty(logEvent!, "ClientIp"));
+            Assert.DoesNotContain("[REDACTED]", StringProperty(logEvent!, "ClientIp")!);
+        }
+
+        [Fact(DisplayName = "EmitRequestSummary_ClientIpFromRemoteIp_IsNotRedacted_WhenTrustedButXForwardedForAbsent")]
+        public async Task EmitRequestSummary_ClientIpFromRemoteIp_IsNotRedacted_WhenTrustedButXForwardedForAbsent()
+        {
+            var capture = new CaptureSink();
+            // A pattern that WOULD match KnownRemoteIp if redaction were applied to it.
+            using var server = CreateTestServer(capture, trustForwardedHeaders: true, redactionRegexes: new[] { @"198\.51\.100\.7" });
+            var client = server.CreateClient();
+
+            var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
+            // No X-Forwarded-For header: even with TrustForwardedHeaders=true, ExtractClientAddresses
+            // falls back to the same unredacted Connection.RemoteIpAddress branch.
+            await client.SendAsync(request);
+
+            Assert.NotNull(capture.LastEvent);
+            var logEvent = capture.LastEvent;
+
+            Assert.Equal(KnownRemoteIp, StringProperty(logEvent!, "ClientIp"));
+            Assert.DoesNotContain("[REDACTED]", StringProperty(logEvent!, "ClientIp")!);
         }
     }
 }

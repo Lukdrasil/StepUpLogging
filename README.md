@@ -580,6 +580,188 @@ Immediate-routed events are tracked by the `StepUpLogging.Immediate` meter:
 
 - `immediate_processed_total` — number of events forwarded via `ImmediateSink`
 
+## Audit Logging
+
+Audit trails answer "who did what, to what, and with what outcome?" in response to regulatory investigations and security incidents. StepUpLogging provides facilities to emit audit records to your own durable store, guaranteeing they are never dropped by step-up gating.
+
+### Setup
+
+Implement `IAuditEventSink` over your durable store — see [Example Production Sink](#example-production-sink) for a database-backed one — and wire it via `AddAuditLogging`:
+
+```csharp
+using Lukdrasil.StepUpLogging;
+
+// In Program.cs — DbAuditSink is the sink from "Example Production Sink" below
+builder.AddStepUpLogging();  // Required: audit uses its client-IP rules
+builder.AddAuditLogging<DbAuditSink>();
+```
+
+The sink must write somewhere the records survive: audit records that go to memory or to nowhere are worse than no audit at all, because they are relied upon. The package ships no `IAuditEventSink` implementation for exactly that reason.
+
+**`AddAuditLogging` requires `AddStepUpLogging`** — audit logging derives client IP via the same `TrustForwardedHeaders` policy as request logging. Both calls are registration-only, so their order does not matter; what matters is that `AddStepUpLogging` is called at all. If it is not, **the host refuses to start** with a message naming both methods — the app never serves a request that should have been audited.
+
+To disable audit logging in an environment (e.g., development), simply do not call `AddAuditLogging`. There is no configuration flag:
+
+```csharp
+if (!builder.Environment.IsDevelopment())
+{
+    builder.AddAuditLogging<MyProductionAuditSink>();
+}
+```
+
+### Recording Audit Events
+
+Inject `IAuditLogger<T>` (scoped) and call `AuditAsync`:
+
+```csharp
+public sealed class OrderService(IAuditLogger<OrderService> audit)
+{
+    public async Task CancelOrderAsync(string orderId, string userId)
+    {
+        try
+        {
+            // Business logic
+            await _db.CancelOrderAsync(orderId);
+            
+            // Record success with companion log
+            var evt = AuditEvent.Success("order.cancel", userId) with
+            {
+                TargetType = "order",
+                TargetId = orderId,
+                Data = new Dictionary<string, object?> { { "reason", "customer requested" } }
+            };
+            
+            await audit.AuditAsync(evt, log =>
+                log.LogInformation("Order {OrderId} cancelled by {UserId}", orderId, userId)
+            );
+        }
+        catch (NotFoundException)
+        {
+            await audit.AuditAsync(AuditEvent.Denied("order.cancel", userId) with
+            {
+                TargetType = "order",
+                TargetId = orderId,
+                Reason = "order not found"
+            });
+            throw;
+        }
+    }
+}
+```
+
+### Understanding the Companion Log
+
+The optional `log` parameter lets you emit a log event alongside the audit record:
+
+- **The companion log is written exactly as given and is never redacted** — the same as every other application log the library emits. Whatever redaction you see on the audit record's library-filled fields comes from the library's extraction logic, not from redacting the template itself.
+- **Only use the log for a summary.** Put identifiers (order ID, user ID) and structured context (outcome, reason) in the audit `Action`, required fields, and `Data`. Put the human-readable narrative in the log. Example:
+  ```csharp
+  var evt = AuditEvent.Failure("user.login", userId) with
+  {
+      Data = new Dictionary<string, object?> { { "attempt", 3 } }
+  };
+  
+  await audit.AuditAsync(evt, log =>
+      log.LogWarning("User login failed after {Attempts} attempts", 3)
+  );
+  ```
+  The audit record carries the count (3) as structured data in the consumer's store; the log carries the narrative (failed after N attempts) in telemetry where it helps operators understand the incident.
+
+### What the Sink Receives
+
+Every `AuditEvent` has:
+
+- **Caller-supplied:** `Action` (string, e.g., `"order.cancel"`), `ActorId`, `Outcome` (Success/Failure/Denied), and optional `TargetType`, `TargetId`, `Reason`, `Data`, `ActorType`, `OnBehalfOfId`, `TenantId`.
+- **Library-filled:** `TimestampUtc` (UTC), `TraceId`, `SpanId` (from OpenTelemetry), `SourceIp` (redacted on only one of its two branches — see below), `UserAgent` (always redacted; see [Security](#security)).
+
+`SourceIp` is redacted asymmetrically, by where the address came from: an address read from `X-Forwarded-For` (only when `TrustForwardedHeaders = true`) is client-supplied and goes through redaction, while an address read from the connection is supplied by the network layer, cannot be forged, and reaches your sink bare. This is the same client-IP rule request logging uses (ADR 0008), reused rather than restated.
+
+The library does **not** copy the `Data` dictionary — if your sink buffers the event and your code mutates the dictionary afterwards, the audit record sees the mutations. Pass a snapshot if you need to mutate it: `Data = new Dictionary<string, object?>(myDict)`.
+
+### Metrics and Alerting
+
+The audit meter `StepUpLogging.Audit` provides:
+- `audit_events_total{outcome}` — count of records written, grouped by outcome (Success, Failure, Denied).
+- `audit_write_failures_total` — count of sink writes that threw.
+
+**Zero audit events over a period is itself an alarm** — it indicates your audit stopped working. Query for the *rate* of `audit_events_total` over a rolling window:
+
+```promql
+# Alert if no audit events in the last hour
+rate(audit_events_total[1h]) == 0
+```
+
+### Example Production Sink
+
+This example writes to Entity Framework Core with transactional consistency:
+
+```csharp
+public sealed class DbAuditSink(MyDbContext db) : IAuditEventSink
+{
+    public async ValueTask WriteAsync(AuditEvent auditEvent)
+    {
+        db.AuditLogs.Add(new AuditLogEntity
+        {
+            Action = auditEvent.Action,
+            ActorId = auditEvent.ActorId,
+            ActorType = auditEvent.ActorType,
+            TargetType = auditEvent.TargetType,
+            TargetId = auditEvent.TargetId,
+            Outcome = auditEvent.Outcome,
+            Reason = auditEvent.Reason,
+            SourceIp = auditEvent.SourceIp,
+            UserAgent = auditEvent.UserAgent,
+            TraceId = auditEvent.TraceId,
+            TimestampUtc = auditEvent.TimestampUtc,
+            Data = JsonSerializer.Serialize(auditEvent.Data)
+        });
+        
+        // Writes in the same transaction as the business operation
+        await db.SaveChangesAsync();
+    }
+}
+
+// In Program.cs — AddAuditLogging registers the sink itself; a separate
+// AddScoped<DbAuditSink>() would just be a second, unused descriptor.
+builder.AddAuditLogging<DbAuditSink>(ServiceLifetime.Scoped);
+```
+
+**Note:** This is a working example, not a shipped type. The package deliberately ships no `IAuditEventSink` implementation — the one you implement is yours, suited to your store and transaction model.
+
+### Testing Your Audit Trail
+
+Because nothing in the package writes audit records for you, the assertion that they *are* written is yours to make. In tests, substitute an in-memory test double for the production sink and assert on what it recorded:
+
+```csharp
+using System.Collections.Concurrent;
+
+// Test double only — never wire this in Program.cs; it discards every record on shutdown
+public sealed class RecordingAuditSink : IAuditEventSink
+{
+    // Concurrent, not List<T>: as a singleton this instance is shared by every request the test
+    // drives, and each writes on its own thread
+    public ConcurrentQueue<AuditEvent> Records { get; } = new();
+
+    public ValueTask WriteAsync(AuditEvent auditEvent)
+    {
+        Records.Enqueue(auditEvent);
+        return default;
+    }
+}
+
+builder.AddStepUpLogging();
+// Singleton so one instance outlives the request scope the assertions run outside of
+builder.AddAuditLogging<RecordingAuditSink>(ServiceLifetime.Singleton);
+
+// ... exercise the operation, then:
+var sink = (RecordingAuditSink)host.Services.GetRequiredService<IAuditEventSink>();
+var recorded = Assert.Single(sink.Records);
+Assert.Equal("order.cancel", recorded.Action);
+Assert.Equal(AuditOutcome.Success, recorded.Outcome);
+```
+
+Cover the failure path too: a sink that throws must abort the business operation (exceptions propagate unchanged), and an operation that was denied must still leave a `Denied` record.
+
 ## Common Scenarios
 
 ### Production with Auto Step-Up
