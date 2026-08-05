@@ -746,9 +746,11 @@ public sealed class RecordingAuditSink : IAuditEventSink
 }
 
 builder.AddStepUpLogging();
+// Singleton so one instance outlives the request scope the assertions run outside of
 builder.AddAuditLogging<RecordingAuditSink>(ServiceLifetime.Singleton);
 
 // ... exercise the operation, then:
+var sink = (RecordingAuditSink)host.Services.GetRequiredService<IAuditEventSink>();
 var recorded = Assert.Single(sink.Records);
 Assert.Equal("order.cancel", recorded.Action);
 Assert.Equal(AuditOutcome.Success, recorded.Outcome);
