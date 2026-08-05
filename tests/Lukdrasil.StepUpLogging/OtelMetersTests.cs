@@ -9,7 +9,7 @@ namespace Lukdrasil.StepUpLogging.Tests;
 /// <summary>
 /// Characterization test pinning the exact set of meter names registered by
 /// <see cref="StepUpLoggingExtensions.AddStepUpLoggingMeters"/>. Nothing else in the suite
-/// covers this method today; an accidental drop, duplicate, or typo of one of the five
+/// covers this method today; an accidental drop, duplicate, or typo of one of the six
 /// existing names must fail this test loudly.
 /// </summary>
 public class OtelMetersTests
@@ -37,7 +37,7 @@ public class OtelMetersTests
     }
 
     [Fact]
-    public void AddStepUpLoggingMeters_RegistersExactlyTheFiveKnownMeterNames()
+    public void AddStepUpLoggingMeters_RegistersExactlyTheSixKnownMeterNames()
     {
         var exporter = new CapturingExporter();
         using var reader = new BaseExportingMetricReader(exporter);
@@ -49,7 +49,7 @@ public class OtelMetersTests
 
         // One probe meter per name we expect to be registered, plus decoys that must NOT be
         // registered (a plausible future addition and a typo of an existing name), to prove the
-        // exact set — not just "at least these five".
+        // exact set — not just "at least these six".
         var candidateNames = new[]
         {
             "StepUpLogging",
@@ -58,6 +58,7 @@ public class OtelMetersTests
             "StepUpLogging.Buffer",
             "StepUpLogging.Immediate",
             "StepUpLogging.Audit",
+            "StepUpLogging.Auditing",
             "StepUpLogging.Sinks",
         };
 
@@ -77,6 +78,7 @@ public class OtelMetersTests
             "StepUpLogging.RequestLogging",
             "StepUpLogging.Buffer",
             "StepUpLogging.Immediate",
+            "StepUpLogging.Audit",
         };
 
         Assert.Equal(expected, exporter.ObservedMeterNames);
