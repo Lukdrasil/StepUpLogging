@@ -159,20 +159,51 @@ public class AuditLoggingRegistrationTests : IDisposable
     [Fact]
     public async Task WithoutAddStepUpLogging_TheHostFailsToStart_BeforeAnyHostedServiceRuns()
     {
-        var builder = Host.CreateApplicationBuilder();
+        var (host, serverStub) = BuildHostWithServerStub(withStepUpLogging: false);
+        using (host)
+        {
+            await Assert.ThrowsAsync<OptionsValidationException>(
+                () => host.StartAsync(TestContext.Current.CancellationToken));
 
-        // Stands in for Kestrel, which is a hosted service registered before the consumer's own
-        // calls: a check that merely queued itself behind it would let requests through first.
+            Assert.False(serverStub.Started);
+        }
+    }
+
+    /// <summary>
+    /// The positive control for the test above, whose only assertion is a negative one: were the
+    /// stub to stop being a hosted service that runs at all, that assertion would hold vacuously.
+    /// </summary>
+    [Fact]
+    public async Task WithAddStepUpLogging_TheHostStarts_AndTheSameHostedServiceRuns()
+    {
+        var (host, serverStub) = BuildHostWithServerStub(withStepUpLogging: true);
+        using (host)
+        {
+            await host.StartAsync(TestContext.Current.CancellationToken);
+
+            Assert.True(serverStub.Started);
+
+            await host.StopAsync(TestContext.Current.CancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// The stub stands in for Kestrel: registered before the consumer's own calls, so a check that
+    /// merely queued itself behind it would let requests through before failing.
+    /// </summary>
+    private static (IHost Host, StartupRecordingService ServerStub) BuildHostWithServerStub(bool withStepUpLogging)
+    {
+        var builder = CreateHostBuilder();
         var serverStub = new StartupRecordingService();
         builder.Services.AddSingleton<IHostedService>(serverStub);
         builder.AddAuditLogging<TestAuditSink>();
 
-        using var host = builder.Build();
+        if (withStepUpLogging)
+        {
+            builder.AddStepUpLogging();
+        }
 
-        await Assert.ThrowsAsync<OptionsValidationException>(
-            () => host.StartAsync(TestContext.Current.CancellationToken));
-
-        Assert.False(serverStub.Started);
+        return (builder.Build(), serverStub);
     }
 
     [Theory]

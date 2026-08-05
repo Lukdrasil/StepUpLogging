@@ -15,7 +15,9 @@ namespace Lukdrasil.StepUpLogging;
 /// <see cref="StepUpLoggingExtensions.AddAuditLogging{TSink}"/> require
 /// <see cref="StepUpLoggingExtensions.AddStepUpLogging(Microsoft.Extensions.Hosting.IHostApplicationBuilder, Action{StepUpLoggingOptions}?, string, string?)"/>:
 /// only the latter registers it, rather than silently deriving client addresses by a second,
-/// weaker rule (ADR 0008). An app that forgot it fails at host start, not here.
+/// weaker rule (ADR 0008). An application that forgot it fails at host start, where
+/// <c>AddAuditLogging</c>'s start-up validation reports it; a container resolved without ever
+/// starting a host still fails here, on the missing dependency.
 /// </remarks>
 internal sealed class AuditLogger<T>(
     IAuditEventSink sink,

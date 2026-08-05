@@ -733,14 +733,18 @@ builder.AddAuditLogging<DbAuditSink>(ServiceLifetime.Scoped);
 Because nothing in the package writes audit records for you, the assertion that they *are* written is yours to make. In tests, substitute an in-memory test double for the production sink and assert on what it recorded:
 
 ```csharp
+using System.Collections.Concurrent;
+
 // Test double only — never wire this in Program.cs; it discards every record on shutdown
 public sealed class RecordingAuditSink : IAuditEventSink
 {
-    public List<AuditEvent> Records { get; } = [];
+    // Concurrent, not List<T>: as a singleton this instance is shared by every request the test
+    // drives, and each writes on its own thread
+    public ConcurrentQueue<AuditEvent> Records { get; } = new();
 
     public ValueTask WriteAsync(AuditEvent auditEvent)
     {
-        Records.Add(auditEvent);
+        Records.Enqueue(auditEvent);
         return default;
     }
 }
