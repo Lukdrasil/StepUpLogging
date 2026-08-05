@@ -75,13 +75,12 @@ internal sealed class AuditLogger<T>(
 
     private AuditEvent Enrich(AuditEvent auditEvent)
     {
-        var timestampUtc = DateTimeOffset.UtcNow;
         var activity = Activity.Current;
         var (sourceIp, userAgent) = ReadRequestContext();
 
         return auditEvent with
         {
-            TimestampUtc = timestampUtc,
+            TimestampUtc = DateTimeOffset.UtcNow,
             TraceId = activity?.TraceId.ToString(),
             SpanId = activity?.SpanId.ToString(),
             SourceIp = sourceIp,
@@ -94,6 +93,9 @@ internal sealed class AuditLogger<T>(
         var httpContext = httpContextAccessor.HttpContext;
         if (httpContext is null) return (null, null);
 
+        // Deliberately not Connection.RemoteIpAddress: ADR 0008 allows exactly one client-IP rule
+        // in the package, so the audit trail resolves the client the same way request logging does
+        // (including the TrustForwardedHeaders decision).
         var (clientIp, _) = StepUpLoggingExtensions.ExtractClientAddresses(
             httpContext, options.Value.TrustForwardedHeaders, redactionPatterns);
         var rawUserAgent = StepUpLoggingExtensions.ExtractUserAgent(httpContext.Request);
