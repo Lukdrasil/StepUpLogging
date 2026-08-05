@@ -106,6 +106,32 @@ public static class StepUpLoggingExtensions
         return AddStepUpLoggingInternal(builder, null, configure, configSectionName, logFilePath);
     }
 
+    /// <summary>
+    /// Adds audit logging: <typeparamref name="TSink"/> becomes the <see cref="IAuditEventSink"/>
+    /// that every <see cref="IAuditLogger{T}"/> writes to. Requires <see cref="AddStepUpLogging(IHostApplicationBuilder, Action{StepUpLoggingOptions}?, string, string?)"/>.
+    /// </summary>
+    /// <remarks>
+    /// The package ships no sink: there is deliberately no default and no no-op implementation to
+    /// fall back on, because an audit trail that silently goes nowhere is worse than none at all.
+    /// Auditing is turned off by not calling this method — there is no configuration flag for it.
+    /// </remarks>
+    /// <typeparam name="TSink">The consumer's sink, which owns the audit store and its transaction.</typeparam>
+    /// <param name="builder">The host application builder</param>
+    /// <param name="sinkLifetime">Lifetime of <typeparamref name="TSink"/> (default: <see cref="ServiceLifetime.Scoped"/>, so the sink can share the request's <c>DbContext</c>)</param>
+    public static IHostApplicationBuilder AddAuditLogging<TSink>(
+        this IHostApplicationBuilder builder,
+        ServiceLifetime sinkLifetime = ServiceLifetime.Scoped)
+        where TSink : class, IAuditEventSink
+    {
+        // Audit records must carry where the action came from, so the accessor is a deliberate
+        // dependency rather than an optional one.
+        builder.Services.AddHttpContextAccessor();
+        builder.Services.Add(new ServiceDescriptor(typeof(IAuditEventSink), typeof(TSink), sinkLifetime));
+        // Scoped regardless of the sink's lifetime: the audit logger reads per-request context.
+        builder.Services.AddScoped(typeof(IAuditLogger<>), typeof(AuditLogger<>));
+        return builder;
+    }
+
     private static IHostApplicationBuilder AddStepUpLoggingInternal(
         IHostApplicationBuilder builder,
         Action<StepUpLoggingOptions>? configureOptions,
@@ -391,7 +417,8 @@ public static class StepUpLoggingExtensions
             .AddMeter("StepUpLogging.Sink")
             .AddMeter("StepUpLogging.RequestLogging")
             .AddMeter("StepUpLogging.Buffer")
-            .AddMeter("StepUpLogging.Immediate");
+            .AddMeter("StepUpLogging.Immediate")
+            .AddMeter("StepUpLogging.Audit");
     }
 
     /// <summary>
@@ -705,7 +732,7 @@ public static class StepUpLoggingExtensions
     /// reverse proxy you control with <c>ForwardedHeadersMiddleware</c> configured — is the first XFF entry
     /// used as <c>ClientIp</c>.
     /// </remarks>
-    private static (string? ClientIp, string? ForwardedFor) ExtractClientAddresses(
+    internal static (string? ClientIp, string? ForwardedFor) ExtractClientAddresses(
         HttpContext httpContext, bool trustForwardedHeaders, CompiledRedactionPatterns patterns)
     {
         try
@@ -739,7 +766,7 @@ public static class StepUpLoggingExtensions
     }
 
     /// <summary>Extract the User-Agent header from the request.</summary>
-    private static string? ExtractUserAgent(HttpRequest request)
+    internal static string? ExtractUserAgent(HttpRequest request)
     {
         try
         {
