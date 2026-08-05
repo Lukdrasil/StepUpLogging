@@ -108,6 +108,9 @@ public class AuditLoggerTests
         public StepUpLoggingController Controller { get; }
         public AuditLogger<AuditLoggerTests> AuditLogger { get; }
 
+        /// <summary>A logger on the audit logger's own category, for contrasting an ordinary event with the companion log.</summary>
+        public ILogger<AuditLoggerTests> AuditCategoryLogger { get; }
+
         private readonly StepUpSink _stepUpSink;
         private readonly ImmediateSink _immediateSink;
         private readonly SerilogLoggerFactory _loggerFactory;
@@ -116,7 +119,8 @@ public class AuditLoggerTests
             IAuditEventSink sink,
             HttpContext? httpContext = null,
             string[]? redactionRegexes = null,
-            bool trustForwardedHeaders = false)
+            bool trustForwardedHeaders = false,
+            string[]? neverStepUpCategories = null)
         {
             var options = new StepUpLoggingOptions
             {
@@ -124,14 +128,15 @@ public class AuditLoggerTests
                 StepUpLevel = "Information",
                 DurationSeconds = 10,
                 TrustForwardedHeaders = trustForwardedHeaders,
-                RedactionRegexes = redactionRegexes ?? []
+                RedactionRegexes = redactionRegexes ?? [],
+                NeverStepUpCategories = neverStepUpCategories ?? []
             };
 
             Controller = new StepUpLoggingController(options);
 
             var gatedInner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(GatedOutput).CreateLogger();
             var bypassLogger = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(BypassOutput).CreateLogger();
-            _stepUpSink = new StepUpSink(gatedInner, Controller.LevelSwitch, Controller.BaseLevel, []);
+            _stepUpSink = new StepUpSink(gatedInner, Controller.LevelSwitch, Controller.BaseLevel, options.NeverStepUpCategories);
             _immediateSink = new ImmediateSink(bypassLogger);
 
             var root = new LoggerConfiguration()
@@ -144,9 +149,11 @@ public class AuditLoggerTests
             var patterns = new CompiledRedactionPatterns(
                 options.RedactionRegexes.Select(StepUpLoggingExtensions.CompilePattern).ToArray());
 
+            AuditCategoryLogger = _loggerFactory.CreateLogger<AuditLoggerTests>();
+
             AuditLogger = new AuditLogger<AuditLoggerTests>(
                 sink,
-                _loggerFactory.CreateLogger<AuditLoggerTests>(),
+                AuditCategoryLogger,
                 new HttpContextAccessor { HttpContext = httpContext },
                 Options.Create(options),
                 patterns);
@@ -387,6 +394,32 @@ public class AuditLoggerTests
         var logged = Assert.Single(harness.BypassOutput.Events);
         Assert.Equal(LogEventLevel.Information, logged.Level);
         Assert.True(logged.Properties.ContainsKey(LogProperties.IsImmediate));
+    }
+
+    [Fact]
+    public async Task AuditAsync_ReachesTheSinkAndExportsTheCompanionLog_WhenItsOwnCategoryNeverStepsUp()
+    {
+        var sink = new RecordingAuditSink();
+        using var harness = new Harness(sink, neverStepUpCategories: [typeof(AuditLoggerTests).FullName!]);
+
+        harness.Controller.Trigger();
+
+        harness.AuditCategoryLogger.LogInformation("ordinary event from the audited category");
+
+        await harness.AuditLogger.AuditAsync(
+            AuditEvent.Success("order.cancel", "user-42"),
+            log => log.LogInformation("order {OrderId} cancelled", "order-7"));
+
+        // The empty gated output proves the deny-list is live: it pins this category to Warning
+        // even while stepped up, so the ordinary Information event above is dropped. It still
+        // suppresses neither audit path — the audit write never enters Serilog at all, and the
+        // companion log, which StepUpSink drops on that very same pinned gate, is carried out by
+        // ImmediateSink instead, because the audit logger marks it IsImmediate.
+        Assert.Empty(harness.GatedOutput.Events);
+        Assert.Single(sink.Written);
+        var exported = Assert.Single(harness.BypassOutput.Events);
+        Assert.Equal("order {OrderId} cancelled", exported.MessageTemplate.Text);
+        Assert.Equal(LogEventLevel.Information, exported.Level);
     }
 
     [Fact]
