@@ -410,13 +410,14 @@ public class AuditLoggerTests
             AuditEvent.Success("order.cancel", "user-42"),
             log => log.LogInformation("order {OrderId} cancelled", "order-7"));
 
-        // The deny-list is live: it pins this category to Warning even while stepped up, so the
-        // ordinary Information event above is dropped. It cannot reach either audit path — the
-        // audit write never enters Serilog, and the companion log leaves through ImmediateSink,
-        // which StepUpSink (the only sink the deny-list acts in) deliberately never sees.
+        // The empty gated output proves the deny-list is live: it pins this category to Warning
+        // even while stepped up, so the ordinary Information event above is dropped. Neither audit
+        // path can be reached by it — the audit write never enters Serilog, and the companion log
+        // leaves through ImmediateSink, which StepUpSink (the deny-list's only site) never sees.
         Assert.Empty(harness.GatedOutput.Events);
         Assert.Single(sink.Written);
-        Assert.Equal(LogEventLevel.Information, Assert.Single(harness.BypassOutput.Events).Level);
+        var logged = Assert.Single(harness.BypassOutput.Events);
+        Assert.Equal(LogEventLevel.Information, logged.Level);
     }
 
     [Fact]

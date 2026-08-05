@@ -682,7 +682,7 @@ The optional `log` parameter lets you emit a log event alongside the audit recor
 Every `AuditEvent` has:
 
 - **Caller-supplied:** `Action` (string, e.g., `"order.cancel"`), `ActorId`, `Outcome` (Success/Failure/Denied), and optional `TargetType`, `TargetId`, `Reason`, `Data`, `ActorType`, `OnBehalfOfId`, `TenantId`.
-- **Library-filled:** `TimestampUtc` (UTC), `TraceId`, `SpanId` (from OpenTelemetry), `SourceIp`, `UserAgent` (redacted; see [Security](#security)).
+- **Library-filled:** `TimestampUtc` (UTC), `TraceId`, `SpanId` (from OpenTelemetry), `SourceIp` (redacted on only one of its two branches — see below), `UserAgent` (always redacted; see [Security](#security)).
 
 `SourceIp` is redacted asymmetrically, by where the address came from: an address read from `X-Forwarded-For` (only when `TrustForwardedHeaders = true`) is client-supplied and goes through redaction, while an address read from the connection is supplied by the network layer, cannot be forged, and reaches your sink bare. This is the same client-IP rule request logging uses (ADR 0008), reused rather than restated.
 

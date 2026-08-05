@@ -52,6 +52,6 @@ The decision to admit audit logging here is conditional on a boundary: the libra
 
 The library emits two counters under the meter `StepUpLogging.Audit`:
 - `audit_events_total{outcome}` — number of records written, tagged by outcome (Success, Failure, Denied, Unknown). Cardinality is 3 (or 4 with edge cases); never a free string.
-- `audit_write_failures_total` — number of writes for which the sink's `WriteAsync` threw. The exception is counted and rethrown; the record did not reach the consumer's store.
+- `audit_write_failures_total` — number of writes for which the consumer's sink threw from `WriteAsync`; the exception is counted and rethrown unchanged. It counts failures *inside* the sink, so what the store did before the throw is the sink's own business.
 
 Zero audit events over an observation window is itself an alarm that audit stopped working — alert on the rate of `audit_events_total`.
