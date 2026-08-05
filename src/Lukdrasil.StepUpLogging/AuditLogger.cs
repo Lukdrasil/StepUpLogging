@@ -24,12 +24,6 @@ internal sealed class AuditLogger<T>(
     IOptions<StepUpLoggingOptions> options,
     CompiledRedactionPatterns redactionPatterns) : IAuditLogger<T>
 {
-    // Static so the meter and its instruments are created once for the process: IAuditLogger<T> is
-    // registered Scoped, so per-instance instruments would leak one set per request.
-    private static readonly Meter Meter = new("StepUpLogging.Audit", "1.0.0");
-    private static readonly Counter<long> EventsCounter = Meter.CreateCounter<long>("audit_events_total", "count", "Number of audit records written, by outcome");
-    private static readonly Counter<long> WriteFailuresCounter = Meter.CreateCounter<long>("audit_write_failures_total", "count", "Number of audit record writes that failed");
-
     /// <inheritdoc />
     public ValueTask AuditAsync(AuditEvent auditEvent)
     {
@@ -51,17 +45,17 @@ internal sealed class AuditLogger<T>(
 
         try
         {
-            await sink.WriteAsync(record);
+            await sink.WriteAsync(record).ConfigureAwait(false);
         }
         catch
         {
             // Observed only long enough to count it: a consumer wanting continue-on-failure puts
             // that try/catch in their own sink, where it is visible in review.
-            WriteFailuresCounter.Add(1);
+            AuditMetrics.WriteFailuresCounter.Add(1);
             throw;
         }
 
-        EventsCounter.Add(1, new KeyValuePair<string, object?>("outcome", OutcomeTag(record.Outcome)));
+        AuditMetrics.EventsCounter.Add(1, new KeyValuePair<string, object?>("outcome", OutcomeTag(record.Outcome)));
 
         if (companionLog is null) return;
 
@@ -101,7 +95,8 @@ internal sealed class AuditLogger<T>(
         var rawUserAgent = StepUpLoggingExtensions.ExtractUserAgent(httpContext.Request);
 
         // Redaction follows the origin of the value: the User-Agent is client-supplied and is
-        // redacted as it is everywhere else in the package, while the connection address is not.
+        // redacted as it is everywhere else in the package. So is the client IP, but only on the
+        // branch that took it from X-Forwarded-For — a connection address reaches the sink bare.
         return (clientIp, rawUserAgent is null ? null : redactionPatterns.Redact(rawUserAgent));
     }
 
@@ -113,4 +108,21 @@ internal sealed class AuditLogger<T>(
         AuditOutcome.Denied => nameof(AuditOutcome.Denied),
         _ => "Unknown"
     };
+}
+
+/// <summary>The audit meter and its instruments, created once for the process.</summary>
+/// <remarks>
+/// Deliberately not held by <see cref="AuditLogger{T}"/>: a static inside an open generic exists
+/// once per closed generic, so an app auditing from three services would create three undisposed
+/// meters — the leak <c>ImmediateSink</c> already had to fix once.
+/// </remarks>
+internal static class AuditMetrics
+{
+    private static readonly Meter Meter = new("StepUpLogging.Audit", "1.0.0");
+
+    internal static readonly Counter<long> EventsCounter =
+        Meter.CreateCounter<long>("audit_events_total", "count", "Number of audit records written, by outcome");
+
+    internal static readonly Counter<long> WriteFailuresCounter =
+        Meter.CreateCounter<long>("audit_write_failures_total", "count", "Number of audit record writes that failed");
 }

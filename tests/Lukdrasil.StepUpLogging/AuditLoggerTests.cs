@@ -292,6 +292,24 @@ public class AuditLoggerTests
     }
 
     [Fact]
+    public async Task AuditAsync_RedactsSourceIpTakenFromForwardedFor()
+    {
+        var sink = new RecordingAuditSink();
+        using var harness = new Harness(
+            sink,
+            HttpContextWith(forwardedFor: "203.0.113.42"),
+            redactionRegexes: [@"203\.0\.113\.\d+"],
+            trustForwardedHeaders: true);
+
+        await harness.AuditLogger.AuditAsync(AuditEvent.Success("order.cancel", "user-42"));
+
+        // Redaction inside SourceIp is asymmetric by origin, not by field: a forwarded address is
+        // client-supplied and is redacted, whereas the connection address above is not. Inherited
+        // from ExtractClientAddresses (ADR 0008) rather than decided here.
+        Assert.Equal("[REDACTED]", Assert.Single(sink.Written).SourceIp);
+    }
+
+    [Fact]
     public async Task AuditAsync_IgnoresForwardedFor_WhenForwardedHeadersAreNotTrusted()
     {
         var sink = new RecordingAuditSink();

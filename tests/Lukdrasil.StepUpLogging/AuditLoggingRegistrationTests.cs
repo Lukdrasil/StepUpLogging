@@ -116,9 +116,11 @@ public class AuditLoggingRegistrationTests : IDisposable
         using var firstScope = host.Services.CreateScope();
         using var secondScope = host.Services.CreateScope();
 
-        Assert.NotSame(
-            firstScope.ServiceProvider.GetRequiredService<IAuditLogger<AuditLoggingRegistrationTests>>(),
-            secondScope.ServiceProvider.GetRequiredService<IAuditLogger<AuditLoggingRegistrationTests>>());
+        var first = firstScope.ServiceProvider.GetRequiredService<IAuditLogger<AuditLoggingRegistrationTests>>();
+
+        // Both halves are needed: "different across scopes" alone is equally true of Transient.
+        Assert.Same(first, firstScope.ServiceProvider.GetRequiredService<IAuditLogger<AuditLoggingRegistrationTests>>());
+        Assert.NotSame(first, secondScope.ServiceProvider.GetRequiredService<IAuditLogger<AuditLoggingRegistrationTests>>());
     }
 
     [Fact]
