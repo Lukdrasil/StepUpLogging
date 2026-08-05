@@ -580,6 +580,162 @@ Immediate-routed events are tracked by the `StepUpLogging.Immediate` meter:
 
 - `immediate_processed_total` — number of events forwarded via `ImmediateSink`
 
+## Audit Logging
+
+Audit trails answer "who did what, to what, and with what outcome?" in response to regulatory investigations and security incidents. StepUpLogging provides facilities to emit audit records to your own durable store, guaranteeing they are never dropped by step-up gating.
+
+### Setup
+
+Implement `IAuditEventSink` (one line in most cases) and wire it via `AddAuditLogging`:
+
+```csharp
+using Lukdrasil.StepUpLogging;
+
+// Implement the sink — here, an in-memory example for testing
+public sealed class RecordingAuditSink : IAuditEventSink
+{
+    public List<AuditEvent> Records { get; } = [];
+
+    public ValueTask WriteAsync(AuditEvent auditEvent)
+    {
+        Records.Add(auditEvent);
+        return default;
+    }
+}
+
+// In Program.cs
+builder.AddStepUpLogging();  // Required: audit uses its client-IP rules
+builder.AddAuditLogging<RecordingAuditSink>();
+```
+
+**`AddAuditLogging` requires `AddStepUpLogging`** — audit logging derives client IP via the same `TrustForwardedHeaders` policy as request logging, so it must come after step-up is registered. If you call only `AddAuditLogging` without `AddStepUpLogging`, the first audit will fail at DI resolution with a clear message.
+
+To disable audit logging in an environment (e.g., development), simply do not call `AddAuditLogging`. There is no configuration flag:
+
+```csharp
+if (!builder.Environment.IsDevelopment())
+{
+    builder.AddAuditLogging<MyProductionAuditSink>();
+}
+```
+
+### Recording Audit Events
+
+Inject `IAuditLogger<T>` (scoped) and call `AuditAsync`:
+
+```csharp
+public sealed class OrderService(IAuditLogger<OrderService> audit)
+{
+    public async Task CancelOrderAsync(string orderId, string userId)
+    {
+        try
+        {
+            // Business logic
+            await _db.CancelOrderAsync(orderId);
+            
+            // Record success with companion log
+            var evt = AuditEvent.Success("order.cancel", userId) with
+            {
+                TargetType = "order",
+                TargetId = orderId,
+                Data = new Dictionary<string, object?> { { "reason", "customer requested" } }
+            };
+            
+            await audit.AuditAsync(evt, log =>
+                log.LogInformation("Order {OrderId} cancelled by {UserId}", orderId, userId)
+            );
+        }
+        catch (NotFoundException)
+        {
+            await audit.AuditAsync(AuditEvent.Denied("order.cancel", userId) with
+            {
+                TargetType = "order",
+                TargetId = orderId,
+                Reason = "order not found"
+            });
+            throw;
+        }
+    }
+}
+```
+
+### Understanding the Companion Log
+
+The optional `log` parameter lets you emit a log event alongside the audit record:
+
+- **The companion log is written exactly as given and is never redacted** — the same as every other application log the library emits. The redaction you see in the audit's `UserAgent` or `SourceIp` comes from the library's extraction logic, not from redacting the template itself.
+- **Only use the log for a summary.** Put identifiers (order ID, user ID) and structured context (outcome, reason) in the audit `Action`, required fields, and `Data`. Put the human-readable narrative in the log. Example:
+  ```csharp
+  var evt = AuditEvent.Failure("user.login", userId) with
+  {
+      Data = new Dictionary<string, object?> { { "attempt", 3 } }
+  };
+  
+  await audit.AuditAsync(evt, log =>
+      log.LogWarning("User login failed after {Attempts} attempts", 3)
+  );
+  ```
+  The audit record carries the count (3) as structured data in the consumer's store; the log carries the narrative (failed after N attempts) in telemetry where it helps operators understand the incident.
+
+### What the Sink Receives
+
+Every `AuditEvent` has:
+
+- **Caller-supplied:** `Action` (string, e.g., `"order.cancel"`), `ActorId`, `Outcome` (Success/Failure/Denied), and optional `TargetType`, `TargetId`, `Reason`, `Data`, `ActorType`, `OnBehalfOfId`, `TenantId`.
+- **Library-filled:** `TimestampUtc` (UTC), `TraceId`, `SpanId` (from OpenTelemetry), `SourceIp`, `UserAgent` (redacted; see [Security](#security)).
+
+The library does **not** copy the `Data` dictionary — if your sink buffers the event and your code mutates the dictionary afterwards, the audit record sees the mutations. Pass a snapshot if you need to mutate it: `Data = new Dictionary<string, object?>(myDict)`.
+
+### Metrics and Alerting
+
+The audit meter `StepUpLogging.Audit` provides:
+- `audit_events_total{outcome}` — count of records written, grouped by outcome (Success, Failure, Denied).
+- `audit_write_failures_total` — count of sink writes that threw.
+
+**Zero audit events over a period is itself an alarm** — it indicates your audit stopped working. Query for the *rate* of `audit_events_total` over a rolling window:
+
+```promql
+# Alert if no audit events in the last hour
+rate(audit_events_total[1h]) == 0
+```
+
+### Example Production Sink
+
+This example writes to Entity Framework Core with transactional consistency:
+
+```csharp
+public sealed class DbAuditSink(MyDbContext db) : IAuditEventSink
+{
+    public async ValueTask WriteAsync(AuditEvent auditEvent)
+    {
+        db.AuditLogs.Add(new AuditLogEntity
+        {
+            Action = auditEvent.Action,
+            ActorId = auditEvent.ActorId,
+            ActorType = auditEvent.ActorType,
+            TargetType = auditEvent.TargetType,
+            TargetId = auditEvent.TargetId,
+            Outcome = auditEvent.Outcome,
+            Reason = auditEvent.Reason,
+            SourceIp = auditEvent.SourceIp,
+            UserAgent = auditEvent.UserAgent,
+            TraceId = auditEvent.TraceId,
+            TimestampUtc = auditEvent.TimestampUtc,
+            Data = JsonSerializer.Serialize(auditEvent.Data)
+        });
+        
+        // Writes in the same transaction as the business operation
+        await db.SaveChangesAsync();
+    }
+}
+
+// In Program.cs
+builder.Services.AddScoped<DbAuditSink>();
+builder.AddAuditLogging<DbAuditSink>(ServiceLifetime.Scoped);
+```
+
+**Note:** This is a working example, not a shipped type. The package deliberately ships no `IAuditEventSink` implementation — the one you implement is yours, suited to your store and transaction model.
+
 ## Common Scenarios
 
 ### Production with Auto Step-Up
