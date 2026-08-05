@@ -8,6 +8,18 @@ Tags before 1.8.0 predate this file.
 
 ## [Unreleased]
 
+## [3.5.0] - 2026-08-05
+
+Audit logging: the records that answer "who did what, to what, and with what outcome" get a path step-up gating can never drop. Nothing changes for consumers who do not call `AddAuditLogging`. No public API break.
+
+### Added
+- `AddAuditLogging<TSink>()`, `IAuditLogger<T>` (`AuditAsync(AuditEvent)`, plus an overload taking a companion log written only after the audit write succeeds), the `AuditEvent` record, and `IAuditEventSink`. Audit writes bypass Serilog entirely and go straight to the sink, so the write is awaited and a sink failure propagates to the business call site instead of vanishing into Serilog's void return (ADR 0016).
+- Counters under the `StepUpLogging.Audit` meter: `audit_events_total{outcome}` and `audit_write_failures_total`. Zero events over an observation window is itself the alarm that audit stopped working.
+
+### Notes
+- The package ships no `IAuditEventSink` implementation, by design: a default that mirrors to logs or silently swallows records manufactures false confidence in a trail nobody checked. The README carries a database-backed sink to copy. Audit is turned off by not calling `AddAuditLogging`; there is no configuration flag.
+- `AddAuditLogging` requires `AddStepUpLogging` — audit resolves the client IP by the same rule as request logging (ADR 0008) rather than adding a second, weaker one. A host missing it refuses to start with a message naming both methods; the two calls are valid in either order. Fixes #19.
+
 ## [3.4.0] - 2026-07-27
 
 Request logging no longer reports Error for failures that are not the application's. No public API break.

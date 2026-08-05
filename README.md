@@ -586,29 +586,19 @@ Audit trails answer "who did what, to what, and with what outcome?" in response 
 
 ### Setup
 
-Implement `IAuditEventSink` (one line in most cases) and wire it via `AddAuditLogging`:
+Implement `IAuditEventSink` over your durable store — see [Example Production Sink](#example-production-sink) for a database-backed one — and wire it via `AddAuditLogging`:
 
 ```csharp
 using Lukdrasil.StepUpLogging;
 
-// Implement the sink — here, an in-memory example for testing
-public sealed class RecordingAuditSink : IAuditEventSink
-{
-    public List<AuditEvent> Records { get; } = [];
-
-    public ValueTask WriteAsync(AuditEvent auditEvent)
-    {
-        Records.Add(auditEvent);
-        return default;
-    }
-}
-
-// In Program.cs
+// In Program.cs — DbAuditSink is the sink from "Example Production Sink" below
 builder.AddStepUpLogging();  // Required: audit uses its client-IP rules
-builder.AddAuditLogging<RecordingAuditSink>();
+builder.AddAuditLogging<DbAuditSink>();
 ```
 
-**`AddAuditLogging` requires `AddStepUpLogging`** — audit logging derives client IP via the same `TrustForwardedHeaders` policy as request logging. Both calls are registration-only, so their order does not matter; what matters is that `AddStepUpLogging` is called at all. If it is not, the failure surfaces at the first resolution of `IAuditLogger<T>` — not at host start — with a clear message naming `CompiledRedactionPatterns`.
+The sink must write somewhere the records survive: audit records that go to memory or to nowhere are worse than no audit at all, because they are relied upon. The package ships no `IAuditEventSink` implementation for exactly that reason.
+
+**`AddAuditLogging` requires `AddStepUpLogging`** — audit logging derives client IP via the same `TrustForwardedHeaders` policy as request logging. Both calls are registration-only, so their order does not matter; what matters is that `AddStepUpLogging` is called at all. If it is not, **the host refuses to start** with a message naming both methods — the app never serves a request that should have been audited.
 
 To disable audit logging in an environment (e.g., development), simply do not call `AddAuditLogging`. There is no configuration flag:
 
@@ -737,6 +727,40 @@ builder.AddAuditLogging<DbAuditSink>(ServiceLifetime.Scoped);
 ```
 
 **Note:** This is a working example, not a shipped type. The package deliberately ships no `IAuditEventSink` implementation — the one you implement is yours, suited to your store and transaction model.
+
+### Testing Your Audit Trail
+
+Because nothing in the package writes audit records for you, the assertion that they *are* written is yours to make. In tests, substitute an in-memory test double for the production sink and assert on what it recorded:
+
+```csharp
+using System.Collections.Concurrent;
+
+// Test double only — never wire this in Program.cs; it discards every record on shutdown
+public sealed class RecordingAuditSink : IAuditEventSink
+{
+    // Concurrent, not List<T>: as a singleton this instance is shared by every request the test
+    // drives, and each writes on its own thread
+    public ConcurrentQueue<AuditEvent> Records { get; } = new();
+
+    public ValueTask WriteAsync(AuditEvent auditEvent)
+    {
+        Records.Enqueue(auditEvent);
+        return default;
+    }
+}
+
+builder.AddStepUpLogging();
+// Singleton so one instance outlives the request scope the assertions run outside of
+builder.AddAuditLogging<RecordingAuditSink>(ServiceLifetime.Singleton);
+
+// ... exercise the operation, then:
+var sink = (RecordingAuditSink)host.Services.GetRequiredService<IAuditEventSink>();
+var recorded = Assert.Single(sink.Records);
+Assert.Equal("order.cancel", recorded.Action);
+Assert.Equal(AuditOutcome.Success, recorded.Outcome);
+```
+
+Cover the failure path too: a sink that throws must abort the business operation (exceptions propagate unchanged), and an operation that was denied must still leave a `Denied` record.
 
 ## Common Scenarios
 
