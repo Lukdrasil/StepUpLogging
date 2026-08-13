@@ -205,6 +205,39 @@ public class EncryptedSpoolRegistrationTests : IDisposable
         Assert.Same(first, second);
     }
 
+    /// <summary>A record of its own, so every write lands on a spool file of its own.</summary>
+    private static AuditEvent SpoolableEvent() =>
+        AuditEvent.Success("order.cancel", "user-42", "user") with
+        {
+            EventId = Guid.CreateVersion7(),
+            TimestampUtc = DateTimeOffset.UtcNow
+        };
+
+    [Fact]
+    public async Task AddEncryptedSpoolAuditSink_SpoolDepthAndBytesGauges_ReflectWrites()
+    {
+        using var spool = new TempSpoolDirectory();
+        using var host = ValidHostBuilder(spool).Build();
+
+        await host.StartAsync(TestContext.Current.CancellationToken);
+        try
+        {
+            var sink = host.Services.GetRequiredService<IAuditEventSink>();
+            await sink.WriteAsync(SpoolableEvent());
+            await sink.WriteAsync(SpoolableEvent());
+
+            using var meter = new AuditMeterTotals();
+            meter.RecordObservableInstruments();
+
+            Assert.Equal(2, meter.Total("audit_spool_depth"));
+            Assert.True(meter.Total("audit_spool_bytes") > 0);
+        }
+        finally
+        {
+            await host.StopAsync(TestContext.Current.CancellationToken);
+        }
+    }
+
     [Fact]
     public void EncryptedSpoolOptions_RequiredMembers_AreEndpointCredentialsModuleNameVersion_NoKeyOptions()
     {

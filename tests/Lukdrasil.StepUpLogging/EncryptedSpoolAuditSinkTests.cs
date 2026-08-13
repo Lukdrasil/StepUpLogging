@@ -96,7 +96,12 @@ public class EncryptedSpoolAuditSinkTests
         EncryptedSpoolOptions options,
         IAuditPayloadEncryptor encryptor,
         ILogger<EncryptedSpoolAuditSink>? logger = null) =>
-        new(Options.Create(options), new SpoolWriter(options.SpoolDirectory), encryptor, logger ?? NullLogger<EncryptedSpoolAuditSink>.Instance);
+        new(
+            Options.Create(options),
+            new SpoolWriter(options.SpoolDirectory),
+            new SpoolUsageTracker(new SpoolCapacity(options)),
+            encryptor,
+            logger ?? NullLogger<EncryptedSpoolAuditSink>.Instance);
 
     private static EncryptedSpoolHealthCheck CreateHealthCheck(EncryptedSpoolOptions options) =>
         new(Options.Create(options), new DeadLetterBox(Options.Create(options)), new EndpointReachability());
@@ -376,8 +381,11 @@ public class EncryptedSpoolAuditSinkTests
     public async Task WriteAsync_PortThrows_PropagatesThatExceptionUnchangedAndSpoolsNothing()
     {
         using var spool = new TempSpoolDirectory();
+        using var meter = new AuditMeterTotals();
         var failure = new InvalidOperationException("the consumer's encryptor could not reach its key store");
         using var sink = CreateSink(OptionsFor(spool), new ThrowingAuditPayloadEncryptor(failure));
+
+        var failuresBefore = meter.Total("audit_encryption_failures_total");
 
         // A port failure is never a spool-cap condition: turning it into Dropped would erase the
         // record and the operator's only signal that encryption is broken (ADR 0016 D2).
@@ -385,6 +393,7 @@ public class EncryptedSpoolAuditSinkTests
 
         Assert.Same(failure, thrown);
         Assert.Equal(0, SpooledRecordCount(spool));
+        Assert.Equal(failuresBefore + 1, meter.Total("audit_encryption_failures_total"));
     }
 
     [Fact]

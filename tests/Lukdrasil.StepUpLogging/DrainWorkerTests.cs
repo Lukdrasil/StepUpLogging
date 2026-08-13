@@ -103,7 +103,12 @@ public class DrainWorkerTests
 
             Receiver = receiver;
             _client = new HttpClient(receiver);
-            _sink = new EncryptedSpoolAuditSink(Options.Create(SpoolOptions), new SpoolWriter(SpoolOptions.SpoolDirectory), Encryptor, NullLogger<EncryptedSpoolAuditSink>.Instance);
+            _sink = new EncryptedSpoolAuditSink(
+                Options.Create(SpoolOptions),
+                new SpoolWriter(SpoolOptions.SpoolDirectory),
+                new SpoolUsageTracker(new SpoolCapacity(SpoolOptions)),
+                Encryptor,
+                NullLogger<EncryptedSpoolAuditSink>.Instance);
             DeadLetter = new DeadLetterBox(Options.Create(SpoolOptions));
             Reachability = new EndpointReachability();
             Worker = StartedOver();

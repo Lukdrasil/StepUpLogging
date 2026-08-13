@@ -57,9 +57,12 @@ public static class StepUpLoggingEncryptedSpoolExtensions
         // health check's dead-letter/endpoint signals have to see what the worker actually wrote.
         builder.Services.AddSingleton(sp =>
             new SpoolWriter(sp.GetRequiredService<IOptions<EncryptedSpoolOptions>>().Value.SpoolDirectory));
+        builder.Services.AddSingleton(sp =>
+            new SpoolUsageTracker(new SpoolCapacity(sp.GetRequiredService<IOptions<EncryptedSpoolOptions>>().Value)));
         builder.Services.AddSingleton<DeadLetterBox>();
         builder.Services.AddSingleton<EndpointReachability>();
         builder.Services.AddSingleton(TimeProvider.System);
+        builder.Services.AddSingleton<EncryptedSpoolGauges>();
 
         builder.Services.AddHttpClient(DrainWorker.HttpClientName)
             .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
@@ -83,7 +86,9 @@ public static class StepUpLoggingEncryptedSpoolExtensions
 
         // Forces the sink — and the SpoolWriter whose constructor runs the crash-recovery sweep —
         // to resolve at host start, so an unwritable SpoolDirectory surfaces there instead of on
-        // the first audited business operation (B07 hand-off).
+        // the first audited business operation (B07 hand-off). The gauges resolve alongside it so
+        // their ObservableGauge instruments exist from host start rather than only once something
+        // else happens to touch them.
         builder.Services.AddOptions<EncryptedSpoolAuditSinkPrerequisites>()
             .Validate<IServiceProvider>(
                 ResolvesSuccessfully,
@@ -110,6 +115,7 @@ public static class StepUpLoggingEncryptedSpoolExtensions
         }
 
         services.GetRequiredService<IAuditEventSink>();
+        services.GetRequiredService<EncryptedSpoolGauges>();
         return true;
     }
 }

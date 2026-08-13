@@ -60,10 +60,14 @@ internal sealed class SpoolCapacity(EncryptedSpoolOptions options)
 /// depth on the business path — tens of milliseconds once a stalled receiver has let it grow.
 /// </summary>
 /// <remarks>
-/// Not thread-safe: the sink reads and updates it under the gate that serializes its writes.
+/// The write path still owns correctness — the sink reads and updates this under the gate that
+/// serializes its writes, exactly as before. The one addition is <see cref="Snapshot"/>: a gauge
+/// observes it from a different thread, so the field itself is guarded by a lock to rule out a
+/// torn read, even though nothing beyond that field needs the lock's protection.
 /// </remarks>
 internal sealed class SpoolUsageTracker(SpoolCapacity capacity)
 {
+    private readonly object _gate = new();
     private SpoolUsage? _addedUp;
 
     /// <summary>
@@ -81,19 +85,49 @@ internal sealed class SpoolUsageTracker(SpoolCapacity capacity)
             usage = capacity.Measure();
         }
 
-        _addedUp = usage;
+        lock (_gate)
+        {
+            _addedUp = usage;
+        }
+
         return usage;
     }
 
     /// <summary>Adds a record of <paramref name="recordBytes"/> that reached the spool.</summary>
     public void Recorded(long recordBytes)
     {
-        if (_addedUp is { } usage)
+        lock (_gate)
         {
-            _addedUp = capacity.Grown(usage, recordBytes);
+            if (_addedUp is { } usage)
+            {
+                _addedUp = capacity.Grown(usage, recordBytes);
+            }
         }
     }
 
     /// <summary>Drops what was added up, so the next read comes from the disk again.</summary>
-    public void Invalidate() => _addedUp = null;
+    public void Invalidate()
+    {
+        lock (_gate)
+        {
+            _addedUp = null;
+        }
+    }
+
+    /// <summary>
+    /// The tally as it stands, without ever touching disk — for cheap, frequent observation (an
+    /// OTel gauge), where re-scanning the spool on every collection interval would be wasteful.
+    /// Same tolerance as <see cref="Read"/>: only ever too high, never too low. Zero before the
+    /// first <see cref="Read"/> has established a baseline.
+    /// </summary>
+    public SpoolUsage Snapshot
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _addedUp ?? default;
+            }
+        }
+    }
 }

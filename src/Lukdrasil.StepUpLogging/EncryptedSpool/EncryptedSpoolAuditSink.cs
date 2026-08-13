@@ -15,11 +15,11 @@ namespace Lukdrasil.StepUpLogging.Audit.EncryptedSpool;
 internal sealed class EncryptedSpoolAuditSink(
     IOptions<EncryptedSpoolOptions> options,
     SpoolWriter writer,
+    SpoolUsageTracker usageTracker,
     IAuditPayloadEncryptor encryptor,
     ILogger<EncryptedSpoolAuditSink> logger) : IAuditEventSink, IDisposable
 {
     private readonly EncryptedSpoolOptions _options = options.Value;
-    private readonly SpoolUsageTracker _usage = new(new SpoolCapacity(options.Value));
 
     // A semaphore rather than a lock: the section it guards awaits the spool write, and no lock
     // can be held across an await.
@@ -37,7 +37,7 @@ internal sealed class EncryptedSpoolAuditSink(
         // then turns out to be dropped. The other order costs audit records: the verdict would be
         // taken outside the gate, or the gate would be held across a consumer's port call, and a
         // record dropped for room the drain worker freed a microsecond later is gone for good.
-        var encryptedPayload = await encryptor.EncryptAsync(payload).ConfigureAwait(false);
+        var encryptedPayload = await EncryptAsync(payload).ConfigureAwait(false);
         var envelope = new SpoolEnvelope
         {
             EventId = auditEvent.EventId,
@@ -52,7 +52,7 @@ internal sealed class EncryptedSpoolAuditSink(
         await _spoolGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            var usage = _usage.Read();
+            var usage = usageTracker.Read();
             ReportReachingWarnThreshold(usage);
 
             if (usage.IsFull)
@@ -60,7 +60,7 @@ internal sealed class EncryptedSpoolAuditSink(
                 return Drop(auditEvent, usage);
             }
 
-            _usage.Recorded(await WriteToSpoolAsync(envelope).ConfigureAwait(false));
+            usageTracker.Recorded(await WriteToSpoolAsync(envelope).ConfigureAwait(false));
             return AuditWriteResult.Stored;
         }
         finally
@@ -72,6 +72,21 @@ internal sealed class EncryptedSpoolAuditSink(
     /// <inheritdoc />
     public void Dispose() => _spoolGate.Dispose();
 
+    private async ValueTask<byte[]> EncryptAsync(byte[] payload)
+    {
+        try
+        {
+            return await encryptor.EncryptAsync(payload).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Observed only long enough to count it, same pattern as AuditLogger.WriteFailuresCounter:
+            // the port's exception propagates unchanged (ADR 0016 D2), never turned into Dropped.
+            EncryptedSpoolMetrics.EncryptionFailureCounter.Add(1);
+            throw;
+        }
+    }
+
     private async Task<long> WriteToSpoolAsync(SpoolEnvelope envelope)
     {
         try
@@ -82,7 +97,7 @@ internal sealed class EncryptedSpoolAuditSink(
         {
             // A write that failed part-way leaves a `.tmp` occupying the spool until the next
             // start-up sweep, so what is on disk is no longer what this sink has added up.
-            _usage.Invalidate();
+            usageTracker.Invalidate();
             throw;
         }
     }
@@ -165,4 +180,9 @@ internal static class EncryptedSpoolMetrics
         "audit_spool_dead_lettered_total",
         "count",
         "Number of audit records moved to dead-letter/ because no retry can deliver them; every one of them is an audit record that never reached the audit store");
+
+    internal static readonly Counter<long> EncryptionFailureCounter = AuditMetrics.Meter.CreateCounter<long>(
+        "audit_encryption_failures_total",
+        "count",
+        "Number of audit records whose IAuditPayloadEncryptor call threw; the exception still propagates unchanged (ADR 0016 D2) — this only counts that it happened");
 }
