@@ -19,6 +19,15 @@ public sealed class EncryptedSpoolOptions
     public string SpoolDirectory { get; set; } = string.Empty;
 
     /// <summary>
+    /// The absolute base URL of the audit endpoint spooled records are delivered to, without a
+    /// default. The drain worker posts one record per request to <c>{EndpointBaseUrl}/audit</c>.
+    /// Whatever credentials the endpoint requires are configured on the named
+    /// <see cref="HttpClient"/> the worker resolves, not here: the worker sends what it is given and
+    /// never handles a credential itself.
+    /// </summary>
+    public string EndpointBaseUrl { get; set; } = string.Empty;
+
+    /// <summary>
     /// The name of the module producing these audit records. It travels inside the encrypted
     /// payload because the receiving audit store carries it as a column of its own, and these
     /// options are its only source — it is not an <see cref="AuditEvent"/> field. There is no
@@ -70,4 +79,44 @@ public sealed class EncryptedSpoolOptions
     /// chosen for "the spool is filling up".
     /// </summary>
     public HealthStatus SpoolFullStatus { get; set; } = HealthStatus.Unhealthy;
+
+    /// <summary>
+    /// How often the drain worker looks for spooled records to deliver, and the wait it starts
+    /// backing off from when delivery fails. Defaults to 5 seconds: records sit on disk until they
+    /// are delivered, and a host that is compromised or destroyed takes whatever is still there
+    /// with it (ADR 0020 D8).
+    /// </summary>
+    public TimeSpan DrainInterval { get; set; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// The longest the drain worker waits between attempts while the audit endpoint keeps failing.
+    /// The wait doubles from <see cref="DrainInterval"/> after each failed attempt and stops
+    /// growing here, so an endpoint that is down for hours is retried at a fixed, modest rate
+    /// instead of being hammered. Defaults to 5 minutes.
+    /// </summary>
+    public TimeSpan MaxDrainBackoff { get; set; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// How long a stopping host waits for the drain worker to deliver what is still spooled.
+    /// Defaults to 5 seconds, and has to stay well inside the host's own shutdown timeout. Nothing
+    /// is lost when it runs out: the records stay on disk and the next start delivers them.
+    /// </summary>
+    public TimeSpan ShutdownDrainTimeout { get; set; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// How many consecutive drain cycles a spool file may fail to even be opened (a sharing
+    /// violation, a broken ACL, a bad sector) before it is dead-lettered as unreadable. Without a
+    /// limit a fault that never clears would block the queue behind it forever, growing the spool
+    /// to its cap; the record is still never lost — dead-lettering only ever moves it, never
+    /// deletes it. Defaults to 10.
+    /// </summary>
+    public int UnreadableRetryLimit { get; set; } = 10;
+
+    /// <summary>
+    /// The status the health check reports once three of the drain worker's delivery attempts have
+    /// failed in a row, until one gets through. Degraded by default, and deliberately milder than
+    /// the spool's own statuses: no audit record has been lost yet — they are on disk, and delivery
+    /// resumes on its own once the endpoint is back (ADR 0019 D4).
+    /// </summary>
+    public HealthStatus UnreachableStatus { get; set; } = HealthStatus.Degraded;
 }
