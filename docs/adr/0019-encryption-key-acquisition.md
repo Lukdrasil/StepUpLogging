@@ -1,12 +1,14 @@
 # ADR 0019 — The public key is fetched from the receiver at runtime and used past its TTL
 
-- Status: **Advisory** (withdrawn as a build decision, 2026-08-13 PLAN GATE adjustment) — the
-  developer narrowed the package to spool-and-deliver logic only. Encryption **including key
-  acquisition** lives entirely behind the `IAuditPayloadEncryptor` port, i.e. in the client
-  application's implementation. Everything below is preserved as advisory input for whoever writes
-  that implementation (and for the Ogham session); none of it is built by this task.
+- Status: Advisory (withdrawn as a build decision, 2026-08-13)
 - Date: 2026-08-13
-- Task: T260812h-encrypted-spool
+- Issue: #22 (Part B)
+
+> **Withdrawn as a build decision:** during planning the developer narrowed the package to
+> spool-and-deliver logic only. Encryption **including key acquisition** lives entirely behind the
+> `IAuditPayloadEncryptor` port (ADR 0017 D3), i.e. in the client application's implementation.
+> Nothing below is built by this library; it is preserved as advisory input for whoever writes
+> that implementation.
 
 ## Context
 
@@ -56,10 +58,10 @@ section below.
 
 - An app2 outage does not stop a **running** application, and does not stop one that has fetched a
   key at least once on this host. It does stop a **first** deployment, by decision 5 — there is no
-  key anywhere on that path, and the alternative would be running unencrypted. Without decision 4, a failed refresh would make
-  `WriteAsync` throw, that exception would propagate to the business call site under ADR 0016 D2,
-  and a key-service blip would take down every audited operation in the application — a far worse
-  failure than the one being guarded against.
+  key anywhere on that path, and the alternative would be running unencrypted. Without decision 4,
+  a failed refresh would make `WriteAsync` throw, that exception would propagate to the business
+  call site under ADR 0016 D2, and a key-service blip would take down every audited operation in
+  the application — a far worse failure than the one being guarded against.
 - A key withdrawn from circulation keeps being used indefinitely by a producer that cannot reach
   app2, and the disk cache can be overwritten by anyone with write access to the host. Both are
   accepted, and both are the same class of risk as decision 6.

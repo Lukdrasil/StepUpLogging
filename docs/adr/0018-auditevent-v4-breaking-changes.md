@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-13
-- Task: T260812h-encrypted-spool · Issue #22 Part A
+- Issue: #22 (Part A)
 
 ## Context
 
@@ -88,7 +88,7 @@ every consumer then agrees on by convention.
 
 7. **A third counter, `audit_events_dropped_total`**, joins the two ADR 0016 enumerates.
    **This supersedes ADR 0016's Metrics section**, which states there are two — an amendment note
-   goes into `docs/adr/0016-audit-logging.md` itself, because a metric name is a contract that
+   is recorded in `docs/adr/0016-audit-logging.md` itself, because a metric name is a contract that
    consumers alert on, exactly as `AuditEvent.cs:3-7` argues for the outcome enum's numeric values.
    The README's operator guidance changes with it: `rate(audit_events_total[1h]) == 0` remains the
    "audit stopped working" alarm and is now trustworthy, and `audit_events_dropped_total > 0`

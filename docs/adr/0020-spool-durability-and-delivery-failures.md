@@ -2,14 +2,14 @@
 
 - Status: Accepted
 - Date: 2026-08-13
-- Task: T260812h-encrypted-spool
+- Issue: #22 (Part B)
 
 ## Context
 
-Every audit record is written to disk encrypted before it is sent, and deleted only once app2
-confirms it is durably stored. That ordering is the point of the package: a record that exists only
-in memory is lost on a crash, and a spool path that runs only on failure never runs in normal
-operation and therefore rots unnoticed.
+Every audit record is written to disk encrypted before it is sent, and deleted only once the
+receiving service that holds the private key (app2) confirms it is durably stored. That ordering
+is the point of the package: a record that exists only in memory is lost on a crash, and a spool
+path that runs only on failure never runs in normal operation and therefore rots unnoticed.
 
 The design's failure modes all share one property — each has a cheap variant that keeps the
 application running by losing audit silently. This ADR rejects every one of them.
@@ -42,19 +42,20 @@ application running by losing audit silently. This ADR rejects every one of them
    This package is not carving out an exception — ADR 0018 D6 made "I did not store this" part of
    the core contract, and this is the one condition under which this sink uses it.
    **Why dropping is the right answer here rather than throwing:** throwing would mean a long app2
-   outage fills the spool and from that moment *every audited operation in the application fails* — the service
-   outage that issue #22's cap section exists to prevent. The trade it describes is "bounded, loud,
-   visible loss" of records, not loss of the service. The loss is not silent: the health check has
-   already been Unhealthy since 50 %, every drop logs Critical, and a counter tracks it.
+   outage fills the spool and from that moment *every audited operation in the application fails*
+   — the service outage that issue #22's cap section exists to prevent. The trade it describes is
+   "bounded, loud, visible loss" of records, not loss of the service. The loss is not silent: the
+   health check has already been Unhealthy since 50 %, every drop logs Critical, and a counter
+   tracks it.
 
 7. **A permanently rejected record is dead-lettered, loudly.** The delivery contract is ours to
    define (app2 conforms to it): `POST {base}/audit` with one envelope per request; **2xx** means
    the record is durably stored; **any 4xx except 408 and 429** is a permanent rejection — the
    request itself is defective (unknown `kid`, unreadable format, oversized payload) and retrying
    cannot fix it; **everything else** (5xx, 408, 429, network faults, timeouts) is transient and
-   stays in the spool for retry with backoff. On a permanent failure the
-   record is moved to `dead-letter/` beside the spool — never deleted — logged at **Critical**, and
-   counted. The queue then continues. A non-empty `dead-letter/` makes the health check
+   stays in the spool for retry with backoff. On a permanent failure the record is moved to
+   `dead-letter/` beside the spool — never deleted — logged at **Critical**, and counted. The
+   queue then continues. A non-empty `dead-letter/` makes the health check
    **Unhealthy, including the overall status**.
 
 8. **Deletion of spool files by a compromised host is an accepted risk.** Encryption does nothing

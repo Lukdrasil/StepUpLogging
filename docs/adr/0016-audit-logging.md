@@ -9,7 +9,7 @@ Audit trails are a compliance requirement for many applications — they answer 
 
 The decision to admit audit logging here is conditional on a boundary: the library remains "controls log volume — down via step-up, up for what must not be lost" and ships no retention policy, hash chaining, or query API. The moment audit grows any of those, it becomes a separate package. Without this boundary, every future request has no line to be measured against.
 
-> **Amended by ADR 0017 (2026-08-13):** this is the sentence issue #22 originally cited to justify a second package for the encrypted spooling sink. The developer's PLAN GATE decision supersedes it: the growth in question — retry, spooling, a health check — carries no crypto dependency once encryption moves entirely behind a port the consumer implements, so it does not cross the boundary this sentence describes. The sink ships inside this package. See ADR 0017 for the full analysis.
+> **Amended by ADR 0017 (2026-08-13):** this is the sentence issue #22 originally cited to justify a second package for the encrypted spooling sink. The developer's planning decision supersedes it: the growth in question — retry, spooling, a health check — carries no crypto dependency once encryption moves entirely behind a port the consumer implements, so it does not cross the boundary this sentence describes. The sink ships inside this package. See ADR 0017 for the full analysis.
 
 ## Decision
 

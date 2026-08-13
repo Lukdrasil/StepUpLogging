@@ -1,8 +1,8 @@
 # ADR 0017 — The encrypted spooling audit sink ships inside the core package, behind an encryption port
 
 - Status: Accepted
-- Date: 2026-08-13 (rewritten at PLAN GATE v2 — originally proposed as a separate package)
-- Task: T260812h-encrypted-spool · Issue #22
+- Date: 2026-08-13 (rewritten during planning — originally proposed as a separate package)
+- Issue: #22
 
 ## Context
 
@@ -11,16 +11,17 @@ ADR 0016's boundary: *"The moment audit grows any of those [retry, spooling, hea
 becomes a separate package."* That boundary was drawn when the sink was expected to carry
 encryption — keys, algorithms, crypto dependencies — inside itself.
 
-Two PLAN GATE adjustments changed the facts underneath it. First, encryption **including all key
-handling** moved behind a port the client application implements; the sink carries no crypto code
-and no dependency beyond the BCL. Second, with that gone, the sink shrank to a handful of files:
-options, an envelope wrapper, a spool writer, a drain worker, a health check, one DI extension.
+Two decisions taken during planning changed the facts underneath it. First, encryption
+**including all key handling** moved behind a port the client application implements; the sink
+carries no crypto code and no dependency beyond the BCL. Second, with that gone, the sink shrank
+to a handful of files: options, an envelope wrapper, a spool writer, a drain worker, a health
+check, one DI extension.
 
 What a separate package would still buy: an independent release cadence, and core's API surface
 staying free of spool types. What it costs, permanently: a second csproj with its own metadata and
 `InternalsVisibleTo`, a second test project, a rewritten two-path `publish.yml` with distinct tag
 prefixes, a compatibility matrix in the README, and a forced release ordering. The developer
-weighed this at the gate and chose one package.
+weighed this during planning and chose one package.
 
 ## Decision
 
@@ -40,7 +41,7 @@ weighed this at the gate and chose one package.
    `IAuditPayloadEncryptor`: take the serialized payload plus its context, return an opaque
    encrypted blob — and the host registers its implementation in `Program.cs`. The package never
    sees a key, an algorithm or an envelope format, and it never acquires keys (advisory analysis
-   preserved in the withdrawn ADR 0019). Its own responsibilities are exactly: serialize → hand to
+   preserved in ADR 0019). Its own responsibilities are exactly: serialize → hand to
    the port → spool to disk → deliver to the configured endpoint (URL and producer credentials in
    configuration) → delete after 2xx.
 
