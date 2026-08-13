@@ -285,6 +285,15 @@ public static class StepUpLoggingExtensions
             lc.WriteTo.Sink(new ImmediateSink(bypassLogger));
 
             configure?.Invoke(services, lc);
+
+            // Registered last, after the consumer hook above and the library's own enrichers, so a
+            // property a consumer's own enricher just added is swept too (ADR 0022 D5). Root-only:
+            // enrichment here precedes every sink, so PreErrorBufferSink already buffers redacted
+            // events and needs no second pass.
+            if (opts.RedactLogEventProperties)
+            {
+                lc.Enrich.With(new RedactionEnricher(services.GetRequiredService<CompiledRedactionPatterns>()));
+            }
         }, writeToProviders: false);
 
         return builder;

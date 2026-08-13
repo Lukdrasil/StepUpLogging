@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 using System.Threading;
 using Serilog;
 using Serilog.Core;
@@ -514,5 +515,33 @@ public class PreErrorBufferSinkTests
 
         Assert.Single(collector.Events);
         Assert.Equal("global-1", collector.Events[0].MessageTemplate.Text);
+    }
+
+    [Fact]
+    public void Buffer_PreErrorEvent_FlushedToBypass_CarriesRedactedValueExactlyOnce()
+    {
+        var collector = new CollectingSink();
+        var bypass = new LoggerConfiguration()
+            .MinimumLevel.Verbose()
+            .WriteTo.Sink(collector)
+            .CreateLogger();
+
+        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 10, maxContexts: 16, minimumLevel: LogEventLevel.Verbose);
+        var parser = new MessageTemplateParser();
+
+        // RedactionEnricher runs once at root enrichment, before the event ever reaches this sink
+        // (ADR 0022 D4). PreErrorBufferSink re-emits the same LogEvent reference on flush rather
+        // than re-enriching it, so root-only registration must be enough: the flushed value must be
+        // redacted exactly once, neither double-redacted nor left as the original secret.
+        var enricher = new RedactionEnricher(new CompiledRedactionPatterns(new[] { new Regex("token=[^&]+", RegexOptions.Compiled) }));
+        var preErrorEvent = new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Information, null, parser.Parse("checkout"),
+            new[] { new LogEventProperty("Token", new ScalarValue("token=secret123")) });
+        enricher.Enrich(preErrorEvent, new SimpleLogEventPropertyFactory());
+
+        sink.Emit(preErrorEvent);
+        sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Error, null, parser.Parse("err"), Array.Empty<LogEventProperty>()));
+
+        var flushed = Assert.Single(collector.Events);
+        Assert.Equal("[REDACTED]", ((ScalarValue)flushed.Properties["Token"]).Value);
     }
 }

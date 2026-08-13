@@ -57,6 +57,18 @@ public sealed class StepUpLoggingOptions
     public string[] RedactionRegexes { get; set; } = [];
 
     /// <summary>
+    /// When true, applies <see cref="RedactionRegexes"/> to every string-valued scalar property of
+    /// every log event on the root pipeline — not just the request-metadata fields the always-on
+    /// redaction covers — so a secret a consumer logs through <c>ILogger</c>, <c>LogImmediate*</c>,
+    /// or a <c>[LoggerMessage]</c> method is masked too. Out of scope: message-template text (e.g.
+    /// an interpolated <c>$"token={t}"</c>, which bakes the value into the template and produces no
+    /// property), exception messages, and structured/sequence/dictionary property values. Default:
+    /// false — enabling this is opt-in so an existing <see cref="RedactionRegexes"/> configuration
+    /// does not change behavior on upgrade.
+    /// </summary>
+    public bool RedactLogEventProperties { get; set; } = false;
+
+    /// <summary>
     /// Enables capture of request bodies (POST, PUT, PATCH) in logs when logging is stepped-up.
     /// Default: false (to avoid performance impact in normal operation)
     /// </summary>
