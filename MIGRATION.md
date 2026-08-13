@@ -3,9 +3,10 @@
 v4.0.0 is a **breaking** release. It bundles four breaking changes to the audit logging contract
 introduced in v3.5.0, plus three additive fields and a new opt-in sink. This guide takes one break
 per section, with the exact code needed for each. Breaks 1, 2 and 4 stop the build at your call
-sites; break 3 compiles and throws at host start instead, and break 4 has a corner the compiler
-waves through — read it even if your build is already green. If you have not adopted audit
-logging, none of this applies to you.
+sites; break 3 compiles, and instead throws where the registration call itself runs — not at host
+start, which is where the unrelated missing-`AddStepUpLogging` prerequisite surfaces. Break 4 also
+has a corner the compiler waves through — read it even if your build is already green. If you have
+not adopted audit logging, none of this applies to you.
 
 ## 1. `ActorType` is now `required`
 
@@ -68,10 +69,13 @@ cannot catch a transposition, and the resulting record is permanent.
 ## 3. `AddAuditLogging` throws on a second sink registration
 
 **What changed.** Calling `AddAuditLogging<TSink>()` while an `IAuditEventSink` is already
-registered — by an earlier `AddAuditLogging`, or by a direct
-`services.AddSingleton<IAuditEventSink, …>()` — now throws an `InvalidOperationException` naming
-both sink types, in either call order. Previously the second registration silently won, and the
-first sink was never audited through.
+registered ahead of it — by an earlier `AddAuditLogging`, or by a direct
+`services.AddSingleton<IAuditEventSink, …>()` — now throws an `InvalidOperationException`, at the
+point the second registration call runs, naming the sink being added and, where known, the one
+already registered. Previously the second registration silently won, and the first sink was never
+audited through. The guard only sees registrations that ran before it: a direct
+`AddSingleton<IAuditEventSink, …>()` called *after* `AddAuditLogging` still silently wins today,
+unchanged from v3.5.0.
 
 **Why.** A consumer following the README's own example and also calling a package's registration
 method (e.g. `AddEncryptedSpoolAuditSink`) would lose one sink without a word.
@@ -135,15 +139,18 @@ If your sink intentionally discards a record (e.g. a full write-ahead spool), re
 - **`OldValues`/`NewValues`** on `AuditEvent` (`IReadOnlyDictionary<string, object?>?`). Optional,
   caller-supplied, and — like `Data` — never redacted.
 - **`EventId`** on `AuditEvent`, owned by the library: a UUIDv7 (`Guid.CreateVersion7()`) is
-  stamped in `AuditLogger.Enrich` on every `AuditAsync` call, alongside
-  `TimestampUtc`/`TraceId`/`SpanId`, and a value set through a `with` expression is overwritten
-  before the record reaches your sink. Delivery to an audit store is at-least-once — retries and
-  spooling produce duplicates that only a producer-generated identifier lets the receiver
-  deduplicate on. No source change is required, but every record now carries an identifier your
-  sink and its store did not see before; take it as the deduplication key. Caller-controlled
+  stamped on every `AuditAsync` call, alongside `TimestampUtc`/`TraceId`/`SpanId`, and a value set
+  through a `with` expression is overwritten before the record reaches your sink. A retrying or
+  spooling sink can deliver a record more than once; `EventId` is what lets the receiver
+  deduplicate. No source change is required, but every record now carries an identifier your sink
+  and its store did not see before; take it as the deduplication key. Caller-controlled
   idempotency (a retried business operation deliberately reusing one `EventId`) is not
   expressible, by design: it would let a receiver silently discard a repeated record as a
   duplicate, which is the same silent audit loss the library exists to prevent.
+- **`audit_events_dropped_total`** counter under the `StepUpLogging.Audit` meter. It moves only
+  when a sink returns `AuditWriteResult.Dropped` (break 4); `rate(audit_events_dropped_total[1h])
+  > 0` is an alarm in its own right, separate from the existing `audit_events_total`/
+  `audit_write_failures_total` pair.
 - **`EncryptedSpoolAuditSink`**, an opt-in sink registered via `AddEncryptedSpoolAuditSink`. It
   spools audit records to disk write-ahead and drains them to a configured endpoint, encrypting
   each payload through an `IAuditPayloadEncryptor` port your application implements and supplies.
