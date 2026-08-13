@@ -150,4 +150,19 @@ internal static class EncryptedSpoolMetrics
         "audit_spool_rejected_full_total",
         "count",
         "Number of audit records dropped because the spool was at its cap; untagged, as the outcome of each dropped record is already on audit_events_dropped_total");
+
+    internal static readonly Counter<long> DrainedCounter = AuditMetrics.Meter.CreateCounter<long>(
+        "audit_spool_drained_total",
+        "count",
+        "Number of spooled audit records the audit endpoint confirmed it stored, after which the spool file is deleted");
+
+    internal static readonly Counter<long> DrainFailureCounter = AuditMetrics.Meter.CreateCounter<long>(
+        "audit_spool_drain_failures_total",
+        "count",
+        "Number of delivery attempts that did not get a spooled audit record through — a server error, a refused connection, a timeout — after which it stays spooled and is retried");
+
+    internal static readonly Counter<long> DeadLetteredCounter = AuditMetrics.Meter.CreateCounter<long>(
+        "audit_spool_dead_lettered_total",
+        "count",
+        "Number of audit records moved to dead-letter/ because no retry can deliver them; every one of them is an audit record that never reached the audit store");
 }

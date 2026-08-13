@@ -1,4 +1,3 @@
-using System.Diagnostics.Metrics;
 using System.Text;
 using System.Text.Json;
 using Lukdrasil.StepUpLogging.Audit.EncryptedSpool;
@@ -81,58 +80,6 @@ public class EncryptedSpoolAuditSinkTests
         public SelfReferencingValue Itself => this;
     }
 
-    private sealed class RecordingLogger<T> : ILogger<T>
-    {
-        public List<(LogLevel Level, string Message)> Entries { get; } = [];
-
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        IDisposable? ILogger.BeginScope<TState>(TState state) => null;
-
-        public void Log<TState>(
-            LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
-            Entries.Add((logLevel, formatter(state, exception)));
-
-        public IEnumerable<string> MessagesAt(LogLevel level) =>
-            Entries.Where(entry => entry.Level == level).Select(entry => entry.Message);
-    }
-
-    /// <summary>Sums the measurements of the <c>StepUpLogging.Audit</c> meter's counters, by instrument.</summary>
-    private sealed class AuditMeterTotals : IDisposable
-    {
-        private readonly MeterListener _listener = new();
-        private readonly Dictionary<string, long> _totals = [];
-
-        public AuditMeterTotals()
-        {
-            _listener.InstrumentPublished = (instrument, listener) =>
-            {
-                if (instrument.Meter.Name == "StepUpLogging.Audit")
-                {
-                    listener.EnableMeasurementEvents(instrument);
-                }
-            };
-            _listener.SetMeasurementEventCallback<long>((instrument, measurement, _, _) =>
-            {
-                lock (_totals)
-                {
-                    _totals[instrument.Name] = _totals.TryGetValue(instrument.Name, out var total) ? total + measurement : measurement;
-                }
-            });
-            _listener.Start();
-        }
-
-        public long Total(string instrumentName)
-        {
-            lock (_totals)
-            {
-                return _totals.TryGetValue(instrumentName, out var total) ? total : 0;
-            }
-        }
-
-        public void Dispose() => _listener.Dispose();
-    }
-
     private static EncryptedSpoolOptions OptionsFor(TempSpoolDirectory spool, Action<EncryptedSpoolOptions>? configure = null)
     {
         var options = new EncryptedSpoolOptions
@@ -150,6 +97,9 @@ public class EncryptedSpoolAuditSinkTests
         IAuditPayloadEncryptor encryptor,
         ILogger<EncryptedSpoolAuditSink>? logger = null) =>
         new(Options.Create(options), encryptor, logger ?? NullLogger<EncryptedSpoolAuditSink>.Instance);
+
+    private static SpoolCapHealthCheck CreateHealthCheck(EncryptedSpoolOptions options) =>
+        new(Options.Create(options), new DeadLetterBox(Options.Create(options)), new EndpointReachability());
 
     /// <summary>A record of its own, so every write lands on a spool file of its own.</summary>
     private static AuditEvent SpoolableEvent() =>
@@ -266,7 +216,7 @@ public class EncryptedSpoolAuditSinkTests
             if (configuredStatus is not null) options.SpoolWarnStatus = configuredStatus.Value;
         });
         using var sink = CreateSink(options, new FakeAuditPayloadEncryptor());
-        var healthCheck = new SpoolCapHealthCheck(Options.Create(options));
+        var healthCheck = CreateHealthCheck(options);
 
         Assert.Equal(AuditWriteResult.Stored, await sink.WriteAsync(SpoolableEvent()));
         Assert.Equal(HealthStatus.Healthy, (await healthCheck.CheckHealthAsync(new HealthCheckContext(), TestContext.Current.CancellationToken)).Status);
@@ -286,7 +236,7 @@ public class EncryptedSpoolAuditSinkTests
             options.SpoolWarnStatus = HealthStatus.Degraded;
         });
         using var sink = CreateSink(options, new FakeAuditPayloadEncryptor());
-        var healthCheck = new SpoolCapHealthCheck(Options.Create(options));
+        var healthCheck = CreateHealthCheck(options);
 
         await sink.WriteAsync(SpoolableEvent());
         Assert.Equal(HealthStatus.Degraded, (await healthCheck.CheckHealthAsync(new HealthCheckContext(), TestContext.Current.CancellationToken)).Status);
@@ -302,7 +252,7 @@ public class EncryptedSpoolAuditSinkTests
     public async Task CheckHealthAsync_CancelledProbe_StopsInsteadOfScanningTheSpool()
     {
         using var spool = new TempSpoolDirectory();
-        var healthCheck = new SpoolCapHealthCheck(Options.Create(OptionsFor(spool)));
+        var healthCheck = CreateHealthCheck(OptionsFor(spool));
         using var cancelled = new CancellationTokenSource();
         await cancelled.CancelAsync();
 
