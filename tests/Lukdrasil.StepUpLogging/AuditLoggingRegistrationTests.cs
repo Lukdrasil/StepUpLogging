@@ -26,10 +26,10 @@ public class AuditLoggingRegistrationTests : IDisposable
     {
         public List<AuditEvent> Written { get; } = [];
 
-        public ValueTask WriteAsync(AuditEvent auditEvent)
+        public ValueTask<AuditWriteResult> WriteAsync(AuditEvent auditEvent)
         {
             Written.Add(auditEvent);
-            return ValueTask.CompletedTask;
+            return ValueTask.FromResult(AuditWriteResult.Stored);
         }
     }
 
@@ -80,7 +80,7 @@ public class AuditLoggingRegistrationTests : IDisposable
         using var scope = host.Services.CreateScope();
 
         var auditLogger = scope.ServiceProvider.GetRequiredService<IAuditLogger<AuditLoggingRegistrationTests>>();
-        await auditLogger.AuditAsync(AuditEvent.Success("order.cancel", "user-42"));
+        await auditLogger.AuditAsync(AuditEvent.Success("order.cancel", "user-42", "user"));
 
         var sink = (TestAuditSink)scope.ServiceProvider.GetRequiredService<IAuditEventSink>();
         Assert.Equal("order.cancel", Assert.Single(sink.Written).Action);
