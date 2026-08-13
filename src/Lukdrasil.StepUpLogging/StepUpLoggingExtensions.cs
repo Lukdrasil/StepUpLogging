@@ -116,10 +116,12 @@ public static class StepUpLoggingExtensions
     /// fall back on, because an audit trail that silently goes nowhere is worse than none at all.
     /// Auditing is turned off by not calling this method — there is no configuration flag for it.
     /// <para>
-    /// The double-registration guard only sees registrations made through this method. A consumer who
-    /// bypasses it — <c>services.AddSingleton&lt;IAuditEventSink, MySink&gt;()</c> directly — still
-    /// silently keeps only the last one registered (ADR 0018 D5's consequences); closing that would mean
-    /// this method policing registrations it does not own, so it is documented rather than chased.
+    /// The guard catches anything already registered when this method runs, however it got there —
+    /// including a prior direct <c>services.AddSingleton&lt;IAuditEventSink, MySink&gt;()</c>. What it
+    /// cannot see is a registration added <em>after</em> this method returns: a later direct
+    /// <c>AddSingleton</c> still silently keeps only the last sink (ADR 0018 D5's consequences).
+    /// Policing registrations this method does not own would mean inspecting the container on every
+    /// resolve, not just here, so that case is documented rather than chased.
     /// </para>
     /// </remarks>
     /// <typeparam name="TSink">The consumer's sink, which owns the audit store and its transaction.</typeparam>
