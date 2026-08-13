@@ -22,8 +22,7 @@ public class DrainWorkerTests
     /// <summary>The audit receiver, faked at the HTTP boundary: it records what was posted and answers as the test lined up.</summary>
     private sealed class FakeAuditReceiver(Func<int, CancellationToken, Task<HttpResponseMessage>> respond) : HttpMessageHandler
     {
-        private readonly List<SpoolEnvelope> _received = [];
-        private readonly List<Uri> _requestedUris = [];
+        private readonly List<(Uri Uri, SpoolEnvelope Envelope)> _requests = [];
 
         /// <summary>Answers every request with <paramref name="statuses"/> in turn, the last one repeating.</summary>
         public static FakeAuditReceiver Responding(params HttpStatusCode[] statuses) =>
@@ -43,23 +42,22 @@ public class DrainWorkerTests
 
         public IReadOnlyList<SpoolEnvelope> Received
         {
-            get { lock (_received) { return [.. _received]; } }
+            get { lock (_requests) { return [.. _requests.Select(request => request.Envelope)]; } }
         }
 
         public IReadOnlyList<Uri> RequestedUris
         {
-            get { lock (_received) { return [.. _requestedUris]; } }
+            get { lock (_requests) { return [.. _requests.Select(request => request.Uri)]; } }
         }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var body = await request.Content!.ReadAsByteArrayAsync(cancellationToken);
             int requestIndex;
-            lock (_received)
+            lock (_requests)
             {
-                _received.Add(JsonSerializer.Deserialize<SpoolEnvelope>(body)!);
-                _requestedUris.Add(request.RequestUri!);
-                requestIndex = _received.Count - 1;
+                _requests.Add((request.RequestUri!, JsonSerializer.Deserialize<SpoolEnvelope>(body)!));
+                requestIndex = _requests.Count - 1;
             }
 
             return await respond(requestIndex, cancellationToken);

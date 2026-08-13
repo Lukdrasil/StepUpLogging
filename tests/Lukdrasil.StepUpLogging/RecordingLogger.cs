@@ -8,7 +8,8 @@ namespace Lukdrasil.StepUpLogging.Tests;
 /// </summary>
 internal sealed class RecordingLogger<T> : ILogger<T>
 {
-    public List<(LogLevel Level, string Message)> Entries { get; } = [];
+    // Locked on every side: the drain worker logs from its own thread while the test reads.
+    private readonly List<(LogLevel Level, string Message)> _entries = [];
 
     public bool IsEnabled(LogLevel logLevel) => true;
 
@@ -17,17 +18,17 @@ internal sealed class RecordingLogger<T> : ILogger<T>
     public void Log<TState>(
         LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
     {
-        lock (Entries)
+        lock (_entries)
         {
-            Entries.Add((logLevel, formatter(state, exception)));
+            _entries.Add((logLevel, formatter(state, exception)));
         }
     }
 
-    public IEnumerable<string> MessagesAt(LogLevel level)
+    public IReadOnlyList<string> MessagesAt(LogLevel level)
     {
-        lock (Entries)
+        lock (_entries)
         {
-            return Entries.Where(entry => entry.Level == level).Select(entry => entry.Message).ToList();
+            return [.. _entries.Where(entry => entry.Level == level).Select(entry => entry.Message)];
         }
     }
 }

@@ -119,6 +119,11 @@ internal sealed class DrainWorker(
             {
                 case DeliveryOutcome.Stored:
                     reachability.EndpointAnswered();
+
+                    // Nothing tells the sink's SpoolUsageTracker that a record left: it is not
+                    // thread-safe and is only ever touched under the sink's write gate. Its tally
+                    // is then only ever too high, which is the direction it already covers — it
+                    // re-measures the disk before it reports the spool full.
                     File.Delete(entry.FilePath);
                     EncryptedSpoolMetrics.DrainedCounter.Add(1);
                     break;
