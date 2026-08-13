@@ -104,6 +104,15 @@ public sealed class EncryptedSpoolOptions
     public TimeSpan ShutdownDrainTimeout { get; set; } = TimeSpan.FromSeconds(5);
 
     /// <summary>
+    /// How many consecutive drain cycles a spool file may fail to even be opened (a sharing
+    /// violation, a broken ACL, a bad sector) before it is dead-lettered as unreadable. Without a
+    /// limit a fault that never clears would block the queue behind it forever, growing the spool
+    /// to its cap; the record is still never lost — dead-lettering only ever moves it, never
+    /// deletes it. Defaults to 10.
+    /// </summary>
+    public int UnreadableRetryLimit { get; set; } = 10;
+
+    /// <summary>
     /// The status the health check reports once three of the drain worker's delivery attempts have
     /// failed in a row, until one gets through. Degraded by default, and deliberately milder than
     /// the spool's own statuses: no audit record has been lost yet — they are on disk, and delivery

@@ -40,6 +40,14 @@ public class DrainWorkerTests
                 return new HttpResponseMessage(HttpStatusCode.OK);
             });
 
+        /// <summary>
+        /// Answers as though a redirect had already been followed to <paramref name="finalUri"/>:
+        /// the response names a request URI other than the one the worker actually posted to,
+        /// which is what an auto-following handler would leave behind.
+        /// </summary>
+        public static FakeAuditReceiver RespondingFromADifferentUri(Uri finalUri, HttpStatusCode status) =>
+            new((_, _) => Task.FromResult(new HttpResponseMessage(status) { RequestMessage = new HttpRequestMessage(HttpMethod.Get, finalUri) }));
+
         public IReadOnlyList<SpoolEnvelope> Received
         {
             get { lock (_requests) { return [.. _requests.Select(request => request.Envelope)]; } }
@@ -300,6 +308,37 @@ public class DrainWorkerTests
         Assert.Empty(harness.SpooledFileNames());
     }
 
+    [Fact]
+    public async Task DrainWorker_SpoolFileStaysUnreadablePastTheRetryLimit_DeadLettersItWithoutTouchingEndpointReachability()
+    {
+        using var harness = new DrainHarness(
+            FakeAuditReceiver.Responding(HttpStatusCode.OK),
+            options => options.UnreadableRetryLimit = 2);
+        var locked = await harness.SpoolAsync(AuditedOperation(at: Noon));
+        var lockedFileName = harness.SpooledFileNames()[0];
+        var lockedPath = Path.Combine(harness.SpoolOptions.SpoolDirectory, lockedFileName);
+        using var meter = new AuditMeterTotals();
+
+        // A fault that never clears (a bad sector, a broken ACL) must not block the queue forever
+        // (ADR 0020's own rejected alternative), and the endpoint was never contacted for it, so it
+        // must not count against EndpointReachability — that would blame the receiver for a local
+        // disk fault. FileShare.Delete (not None): the dead-letter move needs directory rights, not
+        // read access to the file, exactly as ADR 0020 D7's rationale for a permission fault says —
+        // a lock that also blocked the move would never let this test's own dead-letter succeed.
+        using (new FileStream(lockedPath, FileMode.Open, FileAccess.Read, FileShare.Delete))
+        {
+            await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+            await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+        }
+
+        Assert.Empty(harness.Receiver.Received);
+        Assert.Empty(harness.SpooledFileNames());
+        Assert.Equal([lockedFileName], harness.DeadLetteredFileNames());
+        Assert.Contains(harness.Logger.MessagesAt(LogLevel.Critical), message => message.Contains(lockedFileName));
+        Assert.Equal(0, harness.Reachability.ConsecutiveFailures);
+        Assert.Equal(1, meter.Total("audit_spool_dead_lettered_total"));
+    }
+
     /// <summary>The receiver behaviours ADR 0020 D7 calls transient: retry, never dead-letter.</summary>
     private static FakeAuditReceiver TransientlyFailing(string failure) => failure switch
     {
@@ -345,6 +384,23 @@ public class DrainWorkerTests
         Assert.Equal([spooledFileName], harness.SpooledFileNames());
         Assert.Empty(harness.DeadLetteredFileNames());
         Assert.Equal(2, meter.Total("audit_spool_drain_failures_total"));
+    }
+
+    [Fact]
+    public async Task DrainWorker_ResponseCameFromADifferentUriThanTheEndpoint_TreatsItAsUndeliveredEvenOnA2xx()
+    {
+        // Defence in depth for the B09 AllowAutoRedirect=false obligation: if a redirect were
+        // followed anyway, a 2xx from wherever it led must not read as "the record is stored" —
+        // this worker never posted to that URI.
+        using var harness = new DrainHarness(
+            FakeAuditReceiver.RespondingFromADifferentUri(new Uri("https://audit.example/elsewhere"), HttpStatusCode.OK));
+        await harness.SpoolAsync(AuditedOperation(at: Noon));
+        var spooledFileName = harness.SpooledFileNames()[0];
+
+        await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal([spooledFileName], harness.SpooledFileNames());
+        Assert.Empty(harness.DeadLetteredFileNames());
     }
 
     [Fact]
@@ -513,6 +569,11 @@ public class DrainWorkerTests
         await harness.Worker.StartAsync(TestContext.Current.CancellationToken);
         await Until(() => harness.Receiver.Received.Count == 1);
 
+        // Until(...) returns as soon as the request is recorded, which can be before the worker has
+        // classified the failure and registered its Task.Delay on the fake clock. Give it a beat so
+        // the first Advance below lands after the timer exists, not before.
+        await Task.Delay(20, TestContext.Current.CancellationToken);
+
         // One failure backs the wait off to DrainInterval * 2 = 10s: one DrainInterval of clock is
         // not enough to trigger the retry.
         harness.Time.Advance(harness.SpoolOptions.DrainInterval);
@@ -583,5 +644,28 @@ public class DrainWorkerTests
         // failing every cycle is something an alert can catch without matching log strings.
         Assert.True(meter.Total("audit_spool_drain_failures_total") >= 1);
         await harness.Worker.StopAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task DrainWorker_Running_WithANonPositiveDrainInterval_LogsInsteadOfFaultingTheHost()
+    {
+        // Nothing validates DrainInterval/MaxDrainBackoff as positive yet (B09's job); until it
+        // does, a bad value must not escape ExecuteAsync and take the whole application down with
+        // it, the same guarantee the class already gives every delivery-path exception.
+        using var harness = new DrainHarness(
+            FakeAuditReceiver.Responding(HttpStatusCode.OK),
+            options =>
+            {
+                options.DrainInterval = TimeSpan.FromSeconds(-1);
+                options.MaxDrainBackoff = TimeSpan.FromSeconds(-1);
+            });
+
+        await harness.Worker.StartAsync(TestContext.Current.CancellationToken);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+        await harness.Worker.StopAsync(TestContext.Current.CancellationToken);
+
+        Assert.NotEmpty(harness.Logger.MessagesAt(LogLevel.Error));
+        Assert.NotNull(harness.Worker.ExecuteTask);
+        Assert.False(harness.Worker.ExecuteTask.IsFaulted);
     }
 }

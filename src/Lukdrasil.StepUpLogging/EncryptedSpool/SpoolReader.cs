@@ -3,13 +3,14 @@ using System.Text.Json;
 namespace Lukdrasil.StepUpLogging.Audit.EncryptedSpool;
 
 /// <summary>
-/// One <c>.env</c> file found in the spool directory. <see cref="Envelope"/> is <see langword="null"/>
-/// when the file exists but could not be read as a record, and <see cref="ReadFault"/> says why:
-/// <see cref="SpoolReadFault.Corrupt"/> (malformed JSON — the writer only ever renames a file whole,
-/// so this is a disk fault, not an in-flight write) is unrecoverable, but
-/// <see cref="SpoolReadFault.Unreadable"/> (a sharing violation, a permission fault) is not — the
-/// same file may well be readable on the next attempt. The caller dead-letters the former and
-/// retries the latter, rather than losing either silently.
+/// One <c>.env</c> file found in the spool directory. <see cref="Envelope"/> is
+/// <see langword="null"/> if and only if <see cref="ReadFault"/> is not <see langword="null"/>, and
+/// it says why: <see cref="SpoolReadFault.Corrupt"/> (malformed JSON, or valid JSON that is not an
+/// envelope — the writer only ever renames a file whole, so this is a disk fault, not an in-flight
+/// write) will read the same way on every attempt, but <see cref="SpoolReadFault.Unreadable"/> (a
+/// sharing violation, a permission fault) may not — the same file may well be readable on the next
+/// attempt. The caller dead-letters the former outright and the latter only after enough attempts
+/// have failed, rather than losing either silently.
 /// </summary>
 internal sealed record SpoolEntry(string FilePath, SpoolEnvelope? Envelope, SpoolReadFault? ReadFault = null)
 {
@@ -28,7 +29,8 @@ internal enum SpoolReadFault
 
     /// <summary>
     /// The file exists but could not be opened — a sharing violation, a permission fault, a disk
-    /// read error. Not a defect in the record itself, so worth retrying.
+    /// read error. Not a defect in the record itself, so worth retrying, though not forever: a
+    /// fault that never clears (a bad sector, a broken ACL) still has to be bounded by the caller.
     /// </summary>
     Unreadable
 }
@@ -87,13 +89,22 @@ internal sealed class SpoolReader(string spoolDirectory)
             return new SpoolEntry(path, Envelope: null, SpoolReadFault.Unreadable);
         }
 
+        SpoolEnvelope? envelope;
         try
         {
-            return new SpoolEntry(path, JsonSerializer.Deserialize<SpoolEnvelope>(bytes));
+            envelope = JsonSerializer.Deserialize<SpoolEnvelope>(bytes);
         }
         catch (JsonException)
         {
             return new SpoolEntry(path, Envelope: null, SpoolReadFault.Corrupt);
         }
+
+        // Valid JSON that deserializes to null (the literal `null`) throws nothing above, but is
+        // exactly as permanently unreadable as malformed JSON: this content will never parse into
+        // an envelope on a later attempt either, so it must not be classified as a recoverable
+        // fault (keeps "Envelope is null implies ReadFault is not null" total for callers).
+        return envelope is null
+            ? new SpoolEntry(path, Envelope: null, SpoolReadFault.Corrupt)
+            : new SpoolEntry(path, envelope);
     }
 }

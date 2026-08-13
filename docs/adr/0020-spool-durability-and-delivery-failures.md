@@ -62,6 +62,10 @@ application running by losing audit silently. This ADR rejects every one of them
    produced during it. On a permanent failure the record is moved to `dead-letter/` beside the
    spool — never deleted — logged at **Critical**, and counted. The queue then continues. A
    non-empty `dead-letter/` makes the health check **Unhealthy, including the overall status**.
+   This is a receiver verdict about a record it was actually sent; a record that cannot be read
+   from disk after bounded retries is dead-lettered as unreadable — distinct from receiver
+   rejection: the endpoint is never contacted, so it never counts against the endpoint's own
+   reachability signal, only against the drain worker's own failure counter.
 
 8. **Deletion of spool files by a compromised host is an accepted risk.** Encryption does nothing
    against it. The mitigation is to shorten the window: a short `DrainInterval`, so records sit on

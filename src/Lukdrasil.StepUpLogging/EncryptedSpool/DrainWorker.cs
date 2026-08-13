@@ -45,6 +45,13 @@ internal sealed class DrainWorker(
     private readonly SpoolReader _reader = new(options.Value.SpoolDirectory);
     private readonly Uri _auditEndpoint = new($"{options.Value.EndpointBaseUrl.TrimEnd('/')}/audit");
 
+    /// <summary>
+    /// Consecutive <see cref="SpoolReadFault.Unreadable"/> reads, by path, since the worker last
+    /// managed to read that file (or gave up on it). Cycles run one at a time on this worker, so a
+    /// plain dictionary is enough — nothing else touches it concurrently.
+    /// </summary>
+    private readonly Dictionary<string, int> _unreadableAttempts = [];
+
     /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -60,6 +67,15 @@ internal sealed class DrainWorker(
             catch (OperationCanceledException)
             {
                 return;
+            }
+            catch (Exception ex)
+            {
+                // A non-positive DrainInterval/MaxDrainBackoff — nothing validates them yet, that
+                // is B09's job — makes Task.Delay throw here instead of in a delivery path; caught
+                // for the same reason DrainWithoutEndingTheWorkerAsync catches broadly: a config
+                // mistake must not fault ExecuteAsync and stop the host over an audit delivery worker.
+                EncryptedSpoolMetrics.DrainFailureCounter.Add(1);
+                logger.LogError(ex, "The audit drain worker could not wait before its next cycle over {SpoolDirectory}.", _options.SpoolDirectory);
             }
         }
     }
@@ -120,17 +136,23 @@ internal sealed class DrainWorker(
             {
                 if (entry.IsCorrupt)
                 {
+                    _unreadableAttempts.Remove(entry.FilePath);
                     DeadLetter(entry.FilePath, "the spool file could not be parsed as an audit envelope");
                     continue;
                 }
 
-                // A sharing violation or permission fault, not a bad record: leave it spooled and
-                // stop here exactly as a transient delivery failure would, so a lock that clears
-                // gets retried instead of losing the record to dead-letter.
-                ReportUndelivered(entry.FilePath, "the spool file could not be read");
+                if (DeadLetterIfUnreadableTooLong(entry.FilePath))
+                {
+                    continue;
+                }
+
+                // A sharing violation or permission fault, not yet given up on: leave it spooled
+                // and stop here exactly as a transient delivery failure would, so a lock that
+                // clears gets retried instead of reordering the records behind it.
                 return;
             }
 
+            _unreadableAttempts.Remove(entry.FilePath);
             var attempt = await DeliverAsync(client, envelope, cancellationToken).ConfigureAwait(false);
             switch (attempt.Outcome)
             {
@@ -195,6 +217,12 @@ internal sealed class DrainWorker(
 
             return response switch
             {
+                // Defence in depth for the AllowAutoRedirect = false obligation on the named
+                // client (see the class remarks): if a redirect were followed anyway, a 2xx from
+                // wherever it led must not read as "this record is stored" — nothing was ever
+                // posted to that URI.
+                _ when response.RequestMessage?.RequestUri is { } answeredFrom && answeredFrom != _auditEndpoint =>
+                    new(DeliveryOutcome.Undelivered, $"the response came from {answeredFrom} instead of {_auditEndpoint} — a redirect was followed when it should not have been"),
                 { IsSuccessStatusCode: true } => new(DeliveryOutcome.Stored, answer),
                 _ when IsPermanentRejection(response.StatusCode) => new(DeliveryOutcome.Rejected, $"{answer}, which says the request itself is defective, so no retry can change it"),
                 _ => new(DeliveryOutcome.Undelivered, answer)
@@ -246,6 +274,32 @@ internal sealed class DrainWorker(
         logger.LogWarning(
             "Audit record {SpoolFile} is still waiting to be delivered: {Reason}. It stays in the spool, as does everything behind it, and the next attempt follows in {RetryDelay} — {ConsecutiveFailures} attempts in a row have failed now.",
             Path.GetFileName(spoolFilePath), reason, RetryDelayFor(reachability.ConsecutiveFailures, _options), reachability.ConsecutiveFailures);
+    }
+
+    /// <summary>
+    /// Counts one more failed read of <paramref name="spoolFilePath"/> and dead-letters it once
+    /// <see cref="EncryptedSpoolOptions.UnreadableRetryLimit"/> is reached, returning whether it
+    /// did. The endpoint was never contacted for a file that cannot even be opened, so this counts
+    /// on <see cref="EncryptedSpoolMetrics.DrainFailureCounter"/> like any other read fault but
+    /// never touches <see cref="EndpointReachability"/> — that would blame the receiver for a local
+    /// disk fault.
+    /// </summary>
+    private bool DeadLetterIfUnreadableTooLong(string spoolFilePath)
+    {
+        var attempts = _unreadableAttempts.GetValueOrDefault(spoolFilePath) + 1;
+        if (attempts < _options.UnreadableRetryLimit)
+        {
+            _unreadableAttempts[spoolFilePath] = attempts;
+            EncryptedSpoolMetrics.DrainFailureCounter.Add(1);
+            logger.LogWarning(
+                "Audit record {SpoolFile} could not be read from disk (attempt {Attempt} of {Limit}). It stays in the spool, as does everything behind it, until it can be read or the limit is reached.",
+                Path.GetFileName(spoolFilePath), attempts, _options.UnreadableRetryLimit);
+            return false;
+        }
+
+        _unreadableAttempts.Remove(spoolFilePath);
+        DeadLetter(spoolFilePath, $"the spool file could not be read from disk after {_options.UnreadableRetryLimit} attempts");
+        return true;
     }
 
     /// <summary>What the audit endpoint made of one record, and the words for it.</summary>

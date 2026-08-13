@@ -115,6 +115,25 @@ public class SpoolFormatTests
     }
 
     [Fact]
+    public async Task ReadOldestFirst_OneEnvelopeFileContainsTheJsonLiteralNull_ClassifiesAsCorruptNotUnreadable()
+    {
+        using var spool = new TempSpoolDirectory();
+        await new SpoolWriter(spool.FullPath).WriteAsync(GoldenSpoolEnvelope.Create());
+        // Valid JSON that deserializes to a null envelope without throwing: unlike a locked file or
+        // a permission fault, this content will never read differently, so it must dead-letter
+        // rather than stall a drain worker retrying it forever.
+        var nullPath = Path.Combine(spool.FullPath, "20260813T1200003000000Z-11111111-1111-7111-8111-111111111111.env");
+        File.WriteAllText(nullPath, "null");
+
+        var entries = new SpoolReader(spool.FullPath).ReadOldestFirst().ToList();
+
+        var nullEntry = Assert.Single(entries, entry => entry.FilePath == nullPath);
+        Assert.True(nullEntry.IsCorrupt);
+        Assert.False(nullEntry.IsUnreadable);
+        Assert.Null(nullEntry.Envelope);
+    }
+
+    [Fact]
     public async Task ReadOldestFirst_AFileVanishesAfterTheDirectoryIsListedButBeforeItIsOpened_SkipsItAndReturnsTheRest()
     {
         using var spool = new TempSpoolDirectory();
