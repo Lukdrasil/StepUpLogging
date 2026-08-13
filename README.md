@@ -1149,6 +1149,18 @@ reason for each). And it never sees the two events the library writes straight t
 logger — the request summary and the startup level-ordering warning — which do not pass root
 enrichment. Do not log secrets in interpolated message templates.
 
+The flag has a running cost worth sizing before you enable it. The sweep is registered on the
+root logger, and the root deliberately runs at `Verbose` so the pre-error buffer and the trigger
+sink see every event — so the sweep runs on every event your application **emits**, not on the
+smaller set that is actually exported. A `Debug` event that the level switch drops and that never
+leaves the process is swept on the way in all the same. Per event the work is one regex replace per
+configured pattern per string-valued scalar property, so it grows with the number of patterns,
+the number of string properties on the event, and the length of their values. No figure is
+published here: a measurement taken against the sample patterns in this README would not transfer
+to yours. The levers are the ones you control — keep `RedactionRegexes` short, and each pattern
+narrow and anchored rather than open-ended. With the flag off, or on with no patterns configured,
+the enricher is not registered at all and there is no per-event cost.
+
 ### Sustained-error cost amplification
 
 Step-up raises verbosity on errors, which raises telemetry cost. `MaxContinuousStepUpSeconds`
