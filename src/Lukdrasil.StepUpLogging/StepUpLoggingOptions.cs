@@ -46,13 +46,18 @@ public sealed class StepUpLoggingOptions
 
     /// <summary>
     /// Regular expression patterns for redacting sensitive data in logs.
-    /// Patterns are applied to query strings, headers, route parameters, and request bodies.
+    /// Patterns are applied to query strings, headers, route parameters, and request bodies, and,
+    /// when <see cref="RedactLogEventProperties"/> is also set, to the string-valued scalar
+    /// properties of application log events as well.
     /// </summary>
     /// <remarks>
-    /// SCOPE: redaction covers request metadata (query string, headers, route values, request body) only.
-    /// It does NOT scan the rendered text of arbitrary log messages — e.g. a secret passed as a message
-    /// template argument (<c>logger.LogInformation("token={T}", secret)</c>) is not redacted. Do not log
-    /// secrets in message templates.
+    /// SCOPE: on its own, this covers request metadata (query string, headers, route values, request
+    /// body) only — it does NOT scan the rendered text of arbitrary log messages, so e.g. a secret
+    /// passed as a message template argument (<c>logger.LogInformation("token={T}", secret)</c>) is
+    /// not redacted. Set <see cref="RedactLogEventProperties"/> to cover that case too; see its own
+    /// doc for exactly what it does and does not reach. An interpolated template
+    /// (<c>logger.LogInformation($"token={t}")</c>) is never redacted by either setting — it produces
+    /// no property. Do not log secrets in interpolated message templates.
     /// </remarks>
     public string[] RedactionRegexes { get; set; } = [];
 
@@ -62,8 +67,10 @@ public sealed class StepUpLoggingOptions
     /// redaction covers — so a secret a consumer logs through <c>ILogger</c>, <c>LogImmediate*</c>,
     /// or a <c>[LoggerMessage]</c> method is masked too. Properties added by your own enrichers are
     /// swept as well; the sweep runs after them. A value whose redaction fails — a pattern that
-    /// times out, for example — is replaced by <c>[REDACTION-ERROR]</c> rather than let through.
-    /// Default: false — enabling this is opt-in so an existing <see cref="RedactionRegexes"/>
+    /// times out, for example — has the original replaced with <c>[REDACTION-ERROR]</c>; with more
+    /// than one pattern configured, a later pattern can still match against that sentinel and rewrite
+    /// part of it, so the final text is not always the sentinel verbatim, but it is never the
+    /// original value either way. Default: false — enabling this is opt-in so an existing <see cref="RedactionRegexes"/>
     /// configuration does not change behavior on upgrade; with no patterns configured the flag has
     /// no effect either.
     /// </summary>
@@ -230,7 +237,8 @@ public sealed class StepUpLoggingOptions
     /// pre-error buffer is never filtered by it — buffered events still flush on error. Set
     /// this to <c>[]</c> to restore pre-3.1.0 behaviour (no category is exempt from step-up).
     /// The default suppresses the Entity Framework Core SQL command log, which would otherwise
-    /// flood the export — and carry unredacted SQL — during a step-up window.
+    /// flood the export during a step-up window — and, unless <see cref="RedactLogEventProperties"/>
+    /// is also set, carry unredacted SQL.
     /// </remarks>
     public string[] NeverStepUpCategories { get; set; } = ["Microsoft.EntityFrameworkCore.Database.Command"];
 }
