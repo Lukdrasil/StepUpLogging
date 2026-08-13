@@ -14,11 +14,11 @@ namespace Lukdrasil.StepUpLogging.Audit.EncryptedSpool;
 /// </summary>
 internal sealed class EncryptedSpoolAuditSink(
     IOptions<EncryptedSpoolOptions> options,
+    SpoolWriter writer,
     IAuditPayloadEncryptor encryptor,
     ILogger<EncryptedSpoolAuditSink> logger) : IAuditEventSink, IDisposable
 {
     private readonly EncryptedSpoolOptions _options = options.Value;
-    private readonly SpoolWriter _writer = new(options.Value.SpoolDirectory);
     private readonly SpoolUsageTracker _usage = new(new SpoolCapacity(options.Value));
 
     // A semaphore rather than a lock: the section it guards awaits the spool write, and no lock
@@ -76,7 +76,7 @@ internal sealed class EncryptedSpoolAuditSink(
     {
         try
         {
-            return await _writer.WriteAsync(envelope).ConfigureAwait(false);
+            return await writer.WriteAsync(envelope).ConfigureAwait(false);
         }
         catch
         {

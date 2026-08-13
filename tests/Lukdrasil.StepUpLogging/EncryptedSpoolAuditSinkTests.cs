@@ -96,9 +96,9 @@ public class EncryptedSpoolAuditSinkTests
         EncryptedSpoolOptions options,
         IAuditPayloadEncryptor encryptor,
         ILogger<EncryptedSpoolAuditSink>? logger = null) =>
-        new(Options.Create(options), encryptor, logger ?? NullLogger<EncryptedSpoolAuditSink>.Instance);
+        new(Options.Create(options), new SpoolWriter(options.SpoolDirectory), encryptor, logger ?? NullLogger<EncryptedSpoolAuditSink>.Instance);
 
-    private static SpoolCapHealthCheck CreateHealthCheck(EncryptedSpoolOptions options) =>
+    private static EncryptedSpoolHealthCheck CreateHealthCheck(EncryptedSpoolOptions options) =>
         new(Options.Create(options), new DeadLetterBox(Options.Create(options)), new EndpointReachability());
 
     /// <summary>A record of its own, so every write lands on a spool file of its own.</summary>
