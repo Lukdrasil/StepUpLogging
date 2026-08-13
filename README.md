@@ -1149,17 +1149,16 @@ reason for each). And it never sees the two events the library writes straight t
 logger — the request summary and the startup level-ordering warning — which do not pass root
 enrichment. Do not log secrets in interpolated message templates.
 
-The flag has a running cost worth sizing before you enable it. The sweep is registered on the
-root logger, and the root deliberately runs at `Verbose` so the pre-error buffer and the trigger
-sink see every event — so the sweep runs on every event your application **emits**, not on the
-smaller set that is actually exported. A `Debug` event that the level switch drops and that never
-leaves the process is swept on the way in all the same. Per event the work is one regex replace per
-configured pattern per string-valued scalar property, so it grows with the number of patterns,
-the number of string properties on the event, and the length of their values. No figure is
-published here: a measurement taken against the sample patterns in this README would not transfer
-to yours. The levers are the ones you control — keep `RedactionRegexes` short, and each pattern
-narrow and anchored rather than open-ended. With the flag off, or on with no patterns configured,
-the enricher is not registered at all and there is no per-event cost.
+The flag has a running cost worth sizing before you enable it. The sweep sits on the root pipeline,
+which deliberately runs at `Verbose` so the pre-error buffer and trigger sinks see everything, so it
+runs on every event that **reaches the root**, not on the smaller set that is actually exported: a
+`Debug` event the level switch drops is swept before it is dropped. (Events filtered out by a
+`Serilog:MinimumLevel:Override` never reach the root and are never swept.) Per event the work is one
+regex replace per configured pattern per string-valued scalar property, each scaling with the length
+of the value. No figure is published here: a measurement taken against this README's sample patterns
+would not transfer to yours. The lever is the pattern list — keep `RedactionRegexes` short and each
+pattern narrow rather than open-ended. With the flag off, or with no patterns configured, the
+enricher is not registered at all and there is no per-event cost.
 
 ### Sustained-error cost amplification
 
