@@ -55,7 +55,25 @@ public class SpoolCrashRestartTests
         Assert.Empty(Directory.GetFiles(spool.FullPath, "*.tmp"));
         Assert.Equal(
             spooled.Select(envelope => envelope.EventId),
-            new SpoolReader(spool.FullPath).ReadOldestFirst().Select(entry => entry.Envelope.EventId));
+            new SpoolReader(spool.FullPath).ReadOldestFirst().Select(entry => entry.Envelope!.EventId));
+    }
+
+    [Fact]
+    public void Restart_AfterACrashRightAfterFsyncButBeforeTheRename_PromotesTheCompleteOrphanToAReadableRecord()
+    {
+        using var spool = new TempSpoolDirectory();
+        var envelope = GoldenSpoolEnvelope.Create();
+        var orphanPath = Path.ChangeExtension(
+            Path.Combine(spool.FullPath, GoldenSpoolEnvelope.FileName), SpoolFile.TemporaryExtension);
+        File.WriteAllText(orphanPath, GoldenSpoolEnvelope.Json);
+
+        _ = new SpoolWriter(spool.FullPath);
+
+        Assert.Empty(Directory.GetFiles(spool.FullPath, "*.tmp"));
+        var entry = Assert.Single(new SpoolReader(spool.FullPath).ReadOldestFirst());
+        Assert.False(entry.IsCorrupt);
+        Assert.Equal(envelope.EventId, entry.Envelope!.EventId);
+        Assert.Equal(GoldenSpoolEnvelope.FileName, Path.GetFileName(entry.FilePath));
     }
 
     [Fact]

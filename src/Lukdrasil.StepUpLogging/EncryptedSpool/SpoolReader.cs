@@ -2,8 +2,17 @@ using System.Text.Json;
 
 namespace Lukdrasil.StepUpLogging.Audit.EncryptedSpool;
 
-/// <summary>One complete spool file: where it lives, and what it holds.</summary>
-internal sealed record SpoolEntry(string FilePath, SpoolEnvelope Envelope);
+/// <summary>
+/// One <c>.env</c> file found in the spool directory. <see cref="Envelope"/> is <see langword="null"/>
+/// when the file exists but could not be read as a record — malformed JSON, most likely from a
+/// disk fault, since the writer only ever renames a file whole. The caller dead-letters these
+/// (<see cref="IsCorrupt"/>) rather than losing them silently.
+/// </summary>
+internal sealed record SpoolEntry(string FilePath, SpoolEnvelope? Envelope)
+{
+    /// <summary>True when the file at <see cref="FilePath"/> exists but is not a valid envelope.</summary>
+    public bool IsCorrupt => Envelope is null;
+}
 
 /// <summary>
 /// Reads the spool directory oldest first. Files still being written carry the <c>.tmp</c>
@@ -13,22 +22,51 @@ internal sealed class SpoolReader(string spoolDirectory)
 {
     /// <summary>
     /// Returns the spooled records in creation order, oldest first — the order the file names sort
-    /// in (ADR 0020 D3). Envelopes are deserialized lazily, one file at a time.
+    /// in (ADR 0020 D3). Envelopes are deserialized lazily, one file at a time. A file that fails to
+    /// parse is skipped but still yielded, as a corrupt <see cref="SpoolEntry"/>, so the caller can
+    /// dead-letter it; a file that vanishes between the directory listing and the read — another
+    /// drainer deleted it concurrently — is skipped with nothing left to act on.
     /// </summary>
     public IEnumerable<SpoolEntry> ReadOldestFirst()
     {
         if (!Directory.Exists(spoolDirectory))
         {
-            return [];
+            yield break;
         }
 
-        return Directory
+        var paths = Directory
             .EnumerateFiles(spoolDirectory, $"*{SpoolFile.EnvelopeExtension}")
-            .OrderBy(Path.GetFileName, StringComparer.Ordinal)
-            .Select(path => new SpoolEntry(path, ReadEnvelope(path)));
+            .OrderBy(Path.GetFileName, StringComparer.Ordinal);
+
+        foreach (var path in paths)
+        {
+            var entry = ReadEntryOrNull(path);
+            if (entry is not null)
+            {
+                yield return entry;
+            }
+        }
     }
 
-    private static SpoolEnvelope ReadEnvelope(string path) =>
-        JsonSerializer.Deserialize<SpoolEnvelope>(File.ReadAllBytes(path))
-        ?? throw new InvalidDataException($"Spool file '{path}' does not contain an audit envelope.");
+    private static SpoolEntry? ReadEntryOrNull(string path)
+    {
+        byte[] bytes;
+        try
+        {
+            bytes = File.ReadAllBytes(path);
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+
+        try
+        {
+            return new SpoolEntry(path, JsonSerializer.Deserialize<SpoolEnvelope>(bytes));
+        }
+        catch (JsonException)
+        {
+            return new SpoolEntry(path, Envelope: null);
+        }
+    }
 }

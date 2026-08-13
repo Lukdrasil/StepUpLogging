@@ -15,14 +15,18 @@ internal sealed class SpoolWriter
     private readonly string _spoolDirectory;
 
     /// <summary>
-    /// Prepares the spool directory, deleting any <c>.tmp</c> file left behind by a crash
-    /// mid-write: its record was never acknowledged to a caller, and its content may be truncated.
+    /// Prepares the spool directory and recovers any <c>.tmp</c> file left behind by a crash. Its
+    /// bytes were already fsynced before the crash (<see cref="WriteAsync"/>), so a <c>.tmp</c>
+    /// that still parses as a whole envelope is a record that <em>was</em> acknowledged to a
+    /// caller — only its rename into place did not survive — and is promoted to its <c>.env</c>
+    /// name rather than discarded. Only a <c>.tmp</c> that fails to parse, i.e. one truncated
+    /// mid-write, is deleted.
     /// </summary>
     public SpoolWriter(string spoolDirectory)
     {
         _spoolDirectory = spoolDirectory;
         Directory.CreateDirectory(spoolDirectory);
-        DeleteOrphanedTemporaryFiles();
+        RecoverOrphanedTemporaryFiles();
     }
 
     /// <summary>
@@ -40,7 +44,8 @@ internal sealed class SpoolWriter
 
         // The rename is atomic on one volume, so a reader sees the record whole or not at all. The
         // directory entry itself is not fsynced — .NET has no portable API for that — so a power
-        // loss right here can cost the rename, never the record's bytes (ADR 0020 D1).
+        // loss right here can cost the rename, never the record's bytes (ADR 0020 D1): the next
+        // start-up's recovery sweep re-attempts exactly this rename for a `.tmp` that survived.
         File.Move(temporaryPath, envelopePath);
     }
 
@@ -63,11 +68,41 @@ internal sealed class SpoolWriter
         stream.Flush(flushToDisk: true);
     }
 
-    private void DeleteOrphanedTemporaryFiles()
+    private void RecoverOrphanedTemporaryFiles()
     {
         foreach (var orphan in Directory.EnumerateFiles(_spoolDirectory, $"*{SpoolFile.TemporaryExtension}"))
         {
-            File.Delete(orphan);
+            try
+            {
+                RecoverOrphan(orphan);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // A leftover this instance cannot move or delete (a peer writer's in-flight
+                // `.tmp`, an AV lock, a permissions issue) must not take the host down at
+                // start-up; it is picked up again on the next restart.
+            }
         }
+    }
+
+    private void RecoverOrphan(string temporaryPath)
+    {
+        SpoolEnvelope? envelope;
+        try
+        {
+            envelope = JsonSerializer.Deserialize<SpoolEnvelope>(File.ReadAllBytes(temporaryPath));
+        }
+        catch (JsonException)
+        {
+            envelope = null;
+        }
+
+        if (envelope is null)
+        {
+            File.Delete(temporaryPath);
+            return;
+        }
+
+        File.Move(temporaryPath, Path.Combine(_spoolDirectory, SpoolFile.NameFor(envelope)));
     }
 }
