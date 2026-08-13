@@ -30,15 +30,15 @@ public sealed record AuditEvent
     /// <summary>The identifier of the actor who performed the action.</summary>
     public required string ActorId { get; init; }
 
-    /// <summary>The outcome of the action.</summary>
-    public required AuditOutcome Outcome { get; init; }
-
     /// <summary>
     /// The kind of actor identified by <see cref="ActorId"/>, e.g. <c>"user"</c>, <c>"service"</c>,
     /// or <c>"api-key"</c>. Required, and deliberately without a default: an audit record is
     /// append-only, so a guessed actor kind is a permanent false assertion about who acted.
     /// </summary>
     public required string ActorType { get; init; }
+
+    /// <summary>The outcome of the action.</summary>
+    public required AuditOutcome Outcome { get; init; }
 
     /// <summary>The identifier of the party the actor was acting on behalf of, if any.</summary>
     public string? OnBehalfOfId { get; init; }

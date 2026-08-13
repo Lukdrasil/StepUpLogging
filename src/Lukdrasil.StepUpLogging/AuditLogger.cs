@@ -58,18 +58,22 @@ internal sealed class AuditLogger<T>(
             throw;
         }
 
-        if (writeResult is AuditWriteResult.Dropped)
+        switch (writeResult)
         {
-            AuditMetrics.EventsDroppedCounter.Add(1);
-            return;
+            case AuditWriteResult.Stored:
+                AuditMetrics.EventsCounter.Add(1, new KeyValuePair<string, object?>("outcome", OutcomeTag(record.Outcome)));
+                break;
+
+            case AuditWriteResult.Dropped:
+                AuditMetrics.EventsDroppedCounter.Add(1);
+                return;
+
+            // Thrown outside the catch above on purpose: audit_write_failures_total means the sink
+            // threw while writing, and a sink answering with something no member names may well
+            // have written the record. That is a contract violation, not a write failure.
+            default:
+                throw UnrecognizedWriteResult(writeResult);
         }
-
-        // Thrown outside the catch above on purpose: audit_write_failures_total means the sink threw
-        // while writing, and a sink answering with something no member names may well have written
-        // the record. That is a contract violation, not a write failure.
-        if (writeResult is not AuditWriteResult.Stored) throw UnrecognizedWriteResult(writeResult);
-
-        AuditMetrics.EventsCounter.Add(1, new KeyValuePair<string, object?>("outcome", OutcomeTag(record.Outcome)));
 
         if (companionLog is null) return;
 
