@@ -37,6 +37,12 @@ dotnet pack src/Lukdrasil.StepUpLogging/Lukdrasil.StepUpLogging.csproj --configu
 | `ActivityContextEnricher` | Adds `ParentSpanId`, `TraceFlags`, `TraceState` from `Activity.Current` — fields not provided by `Serilog.Enrichers.OpenTelemetry`. |
 | `StepUpLoggingExtensions` | Public static class. Exposes `AddStepUpLogging()` and `UseStepUpRequestLogging()`, all three `ActivitySource` instances, `AddStepUpLoggingMeters()`, and `CompiledRedactionPatterns`. All Serilog pipeline wiring happens here. |
 | `StepUpLoggingOptions` | All configuration knobs with defaults. Bound from `"SerilogStepUp"` appsettings section. |
+| `IAuditPayloadEncryptor` | Public port (`EncryptedSpool/`). Owns all crypto and key handling — algorithm, acquisition, caching, rotation. The sink calls `EncryptAsync` and never sees a key; the consumer implements and registers it themselves. |
+| `EncryptedSpoolAuditSink` | Internal `IAuditEventSink` (`EncryptedSpool/`). Serializes each record, encrypts it via the port, and write-aheads it to the spool before returning `Stored`. A full spool is the only case that returns `Dropped`; every other failure (encryptor throws, serialization fails) propagates unchanged. |
+| `SpoolWriter` / `SpoolReader` | Internal (`EncryptedSpool/`). `SpoolWriter` writes each envelope to `.tmp`, fsyncs, then atomically renames it to `{createdUtc}-{eventId}.env`; a `.tmp` surviving a crash is promoted to `.env` (not deleted) if it still parses whole. `SpoolReader` reads the spool directory oldest-first, skipping in-flight `.tmp` files. |
+| `DrainWorker` | Internal `BackgroundService` (`EncryptedSpool/`). Delivers spooled records oldest-first to the configured endpoint, deletes each on 2xx, retries transient failures (5xx/408/429/network/timeout) with backoff, and moves permanent rejections to `dead-letter/`. |
+| `EncryptedSpoolHealthCheck` | Internal `IHealthCheck` (`EncryptedSpool/`). Reports the worst of three signals: spool fill (warn/full thresholds), a non-empty `dead-letter/`, and endpoint reachability. |
+| `StepUpLoggingEncryptedSpoolExtensions` | Public static class (`EncryptedSpool/`). Exposes `AddEncryptedSpoolAuditSink()`, which registers the sink, `DrainWorker`, and health check, and calls `AddAuditLogging<EncryptedSpoolAuditSink>` internally — do not also call `AddAuditLogging` directly for this sink. |
 
 ### Serilog pipeline (wired in `AddStepUpLoggingInternal`)
 
@@ -51,6 +57,10 @@ Root (Verbose)
 ```
 
 **Bypass logger**: created directly inside the `AddSerilog` callback (not via DI) to avoid a circular deadlock. `AddSerilog` registers `Serilog.ILogger` as a factory that depends on `ILoggerFactory`, which in turn depends on this very callback, so calling `GetRequiredService<Serilog.ILogger>()` inside the callback deadlocks.
+
+### Audit pipeline
+
+Audit writes bypass Serilog entirely (ADR 0016 D1): `IAuditLogger<T>.AuditAsync()` calls `IAuditEventSink.WriteAsync()` directly. `EncryptedSpoolAuditSink` → spool (write-ahead, fsync, atomic rename) → `DrainWorker` → configured endpoint; the delivery contract (which status codes are durable, permanent, or transient) is defined in ADR 0020 D7.
 
 ### OTLP configuration
 
