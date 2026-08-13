@@ -145,7 +145,7 @@ internal sealed class AuditLogger<T>(
 /// </remarks>
 internal static class AuditMetrics
 {
-    private static readonly Meter Meter = new("StepUpLogging.Audit", "1.0.0");
+    internal static readonly Meter Meter = new("StepUpLogging.Audit", "1.0.0");
 
     internal static readonly Counter<long> EventsCounter =
         Meter.CreateCounter<long>("audit_events_total", "count", "Number of audit records written, by outcome");
