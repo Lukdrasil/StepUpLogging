@@ -813,12 +813,33 @@ builder.Services.AddSingleton<IAuditPayloadEncryptor, MyAeadEncryptor>();
 
 Do not call `AddAuditLogging` yourself for this sink — `AddEncryptedSpoolAuditSink` does that
 internally, alongside registering the drain worker as a hosted service and a combined health
-check. There is no `Enabled` flag: not calling this method is how the sink stays off.
-`SpoolDirectory`, `EndpointBaseUrl`, `ModuleName`, and `Version` are all required — the host
-refuses to start naming whichever is missing. Whatever credentials the endpoint needs (a bearer
-token, a client certificate) go on the delivery `HttpClient` via
+check. There is no `Enabled` flag: not calling this method is how the sink stays off. A required
+option left unset is a host that refuses to start, naming it. Whatever credentials the endpoint
+needs (a bearer token, a client certificate) go on the delivery `HttpClient` via
 `options.ConfigureProducerCredentials`, not on the port and not in `EncryptedSpoolOptions` as a
 key — the drain worker sends what that client is set up to send and never inspects it.
+
+### Options
+
+`EncryptedSpoolOptions` is set in the `AddEncryptedSpoolAuditSink` lambda; unlike
+`StepUpLoggingOptions`, it is not bound from `appsettings.json`.
+
+| Option | Default | What it does |
+|---|---|---|
+| `SpoolDirectory` | *required* | Where spooled records are kept, one file per record. Must outlive the process. |
+| `EndpointBaseUrl` | *required* | Absolute base URL of the audit endpoint; records are posted to `{EndpointBaseUrl}/audit`. |
+| `ModuleName` | *required* | Name of the producing module, carried inside the encrypted payload. |
+| `Version` | *required* | Version of the producing module, alongside `ModuleName`. |
+| `MaxPayloadBytes` | 64 KB | Largest serialized record accepted. Over it, `AuditAsync` throws at the call site — nothing is encrypted or spooled. |
+| `SpoolMaxBytes` | 256 MB | Spool size cap. Reaching either this or `SpoolMaxEntries` starts dropping new records. |
+| `SpoolMaxEntries` | 100 000 | Spool record-count cap. |
+| `DrainInterval` | 5 s | How often the drain worker looks for records, and the first wait it backs off from. |
+| `MaxDrainBackoff` | 5 min | Ceiling the wait doubles up to while the endpoint keeps failing. |
+| `DeliveryTimeout` | 30 s | Timeout for one delivery attempt. A timeout is transient — retried, never dead-lettered. |
+| `ShutdownDrainTimeout` | 5 s | How long a stopping host waits for the drain worker. Nothing is lost when it runs out; the next start delivers. |
+| `UnreadableRetryLimit` | 10 | Drain cycles a spool file may fail to even be opened before it is dead-lettered as unreadable. |
+| `SpoolWarnStatus`, `SpoolFullStatus`, `UnreachableStatus` | see [Health check](#health-check) | The statuses the health check reports. |
+| `ConfigureProducerCredentials` | none | Sets credentials on the delivery `HttpClient`, as above. |
 
 ### The encryption port
 
@@ -858,14 +879,14 @@ manual, investigated action.
 
 ### Health check
 
-One combined health check (registered under the `audit` tag) reports the worst of four signals:
+One combined health check (registered under the `audit` tag) reports the worst of four conditions:
 
-| Signal | Status | Configurable via |
+| Condition | Status | Configurable via |
 |---|---|---|
 | Spool at ≥ 50% of cap (writes still succeed) | `SpoolWarnStatus` (default `Unhealthy`) | `EncryptedSpoolOptions.SpoolWarnStatus` |
 | Spool at 100% of cap (new records are being dropped) | `SpoolFullStatus` (default `Unhealthy`) | `EncryptedSpoolOptions.SpoolFullStatus` |
 | `dead-letter/` holds any record | `Unhealthy`, not configurable | — |
-| The endpoint has failed enough consecutive deliveries in a row | `UnreachableStatus` (default `Degraded`) | `EncryptedSpoolOptions.UnreachableStatus` |
+| Three delivery attempts in a row have failed (the run ends on the first that gets through) | `UnreachableStatus` (default `Degraded`) | `EncryptedSpoolOptions.UnreachableStatus` — the count of three is fixed |
 
 ### Metrics
 
