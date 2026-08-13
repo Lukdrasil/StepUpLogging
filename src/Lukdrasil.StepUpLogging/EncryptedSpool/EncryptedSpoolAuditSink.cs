@@ -20,6 +20,9 @@ internal sealed class EncryptedSpoolAuditSink(
     private readonly EncryptedSpoolOptions _options = options.Value;
     private readonly SpoolWriter _writer = new(options.Value.SpoolDirectory);
     private readonly SpoolCapacity _capacity = new(options.Value);
+
+    // A semaphore rather than a lock: the section it guards awaits the spool write, and no lock
+    // can be held across an await.
     private readonly SemaphoreSlim _spoolGate = new(1, 1);
 
     /// <summary>Guarded by <see cref="_spoolGate"/>, so the warning is logged on crossing the threshold, once.</summary>
@@ -29,12 +32,12 @@ internal sealed class EncryptedSpoolAuditSink(
     public async ValueTask<AuditWriteResult> WriteAsync(AuditEvent auditEvent)
     {
         var payload = SerializeWithinCap(auditEvent);
-        var blob = await encryptor.EncryptAsync(payload).ConfigureAwait(false);
+        var encryptedPayload = await encryptor.EncryptAsync(payload).ConfigureAwait(false);
         var envelope = new SpoolEnvelope
         {
             EventId = auditEvent.EventId,
             CreatedUtc = auditEvent.TimestampUtc,
-            Payload = blob
+            Payload = encryptedPayload
         };
 
         // Measuring and writing under one gate is what makes the cap hold: concurrent writers that

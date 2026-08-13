@@ -26,6 +26,9 @@ internal sealed class SpoolCapacity(EncryptedSpoolOptions options)
     /// <summary>Reads what the spool directory holds right now.</summary>
     public SpoolUsage Measure()
     {
+        // Counted off the disk on every call rather than tracked in memory: the drain worker and a
+        // restart's recovery sweep add and remove spool files without telling anyone, so an
+        // in-process counter would drift and end up rejecting writes into a spool that has room.
         var directory = new DirectoryInfo(options.SpoolDirectory);
         if (!directory.Exists)
         {
