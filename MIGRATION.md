@@ -1,3 +1,163 @@
+# Migrating to v4.0.0
+
+v4.0.0 is a **breaking** release. It bundles four breaking changes to the audit logging contract
+introduced in v3.5.0, plus three additive fields and a new opt-in sink. This guide takes one break
+per section, with the exact code needed for each. Breaks 1, 2 and 4 stop the build at your call
+sites; break 3 compiles, and instead throws where the registration call itself runs — not at host
+start, which is where the unrelated missing-`AddStepUpLogging` prerequisite surfaces. Break 4 also
+has a corner the compiler waves through — read it even if your build is already green. If you have
+not adopted audit logging, none of this applies to you.
+
+## 1. `ActorType` is now `required`
+
+**What changed.** `AuditEvent.ActorType` defaulted to `"user"` when omitted. It is now `required`,
+so every object initializer that builds an `AuditEvent` must set it.
+
+**Why.** A default of `"user"` on an append-only record is a permanent, plausible-looking lie about
+who acted whenever the actor was actually a service, an API key, or anonymous. Making it required
+forces every call site to state the real actor kind once, at the only place that knows it.
+
+**Migrate.** Supply the actor kind the call site actually knows — `"service"`, `"api-key"`,
+`"anonymous"` — rather than pasting `"user"` everywhere, which would carry the old lie forward
+under a new spelling:
+
+```csharp
+// Before (v3.5.0)
+var evt = new AuditEvent
+{
+    Action = "order.cancel",
+    ActorId = actorId,
+    Outcome = AuditOutcome.Success
+};
+
+// After (v4.0.0)
+var evt = new AuditEvent
+{
+    Action = "order.cancel",
+    ActorId = actorId,
+    ActorType = "service",
+    Outcome = AuditOutcome.Success
+};
+```
+
+A `with` expression over an event a factory already built needs no change — the factory sets
+`ActorType`.
+
+## 2. `Success`/`Failure`/`Denied` take `actorType` as a third parameter
+
+**What changed.** The two-argument factories are gone; the signature is
+`Success(action, actorId, actorType)`, and the same for `Failure` and `Denied`.
+
+**Why.** Forced by break 1: with `ActorType` required, a two-argument factory could not compile
+inside the library itself. It also puts the actor kind where the compiler can demand it, at the
+shortest path to building an event.
+
+**Migrate:**
+
+```csharp
+// Before (v3.5.0)
+var evt = AuditEvent.Success("order.cancel", actorId);
+
+// After (v4.0.0)
+var evt = AuditEvent.Success("order.cancel", actorId, "user");
+```
+
+Read the argument order back at every migrated site — `action, actorId, actorType` is three
+strings in a row, and nothing but that order stops two of them being transposed. The compiler
+cannot catch a transposition, and the resulting record is permanent.
+
+## 3. `AddAuditLogging` throws on a second sink registration
+
+**What changed.** Calling `AddAuditLogging<TSink>()` while an `IAuditEventSink` is already
+registered ahead of it — by an earlier `AddAuditLogging`, or by a direct
+`services.AddSingleton<IAuditEventSink, …>()` — now throws an `InvalidOperationException`, at the
+point the second registration call runs, naming the sink being added and, where known, the one
+already registered. Previously the second registration silently won, and the first sink was never
+audited through. The guard only sees registrations that ran before it: a direct
+`AddSingleton<IAuditEventSink, …>()` called *after* `AddAuditLogging` still silently wins today,
+unchanged from v3.5.0.
+
+**Why.** A consumer following the README's own example and also calling a package's registration
+method (e.g. `AddEncryptedSpoolAuditSink`) would lose one sink without a word.
+
+**Migrate.** Register a sink exactly once. Where a test host substitutes a double for the sink
+`Program.cs` already registered, drop the existing registration first:
+
+```csharp
+using Microsoft.Extensions.DependencyInjection.Extensions; // RemoveAll
+
+// Before (v3.5.0)
+builder.AddAuditLogging<RecordingAuditSink>(ServiceLifetime.Singleton);
+
+// After (v4.0.0)
+builder.Services.RemoveAll<IAuditEventSink>();
+builder.AddAuditLogging<RecordingAuditSink>(ServiceLifetime.Singleton);
+```
+
+From `ConfigureTestServices`, where only the `IServiceCollection` is in reach, do the same with
+`services.RemoveAll<IAuditEventSink>()` and then register the double directly — `AddAuditLogging`
+is an `IHostApplicationBuilder` extension and its other registrations already ran in `Program.cs`.
+
+## 4. `IAuditEventSink.WriteAsync` returns `AuditWriteResult`
+
+**What changed.** `WriteAsync` returned a bare `ValueTask`; it now returns
+`ValueTask<AuditWriteResult>`, an enum with `Stored` and `Dropped` (no zero member).
+
+**Why.** A sink that deliberately discards a record under back-pressure had no way to say so: the
+old contract could only express "stored" (normal return) or "failed" (exception), so a discarded
+record was still counted in `audit_events_total` and still wrote a companion log — the
+`rate(audit_events_total[1h]) == 0` alarm read healthy exactly while audit was being lost.
+
+**Migrate.** End every `WriteAsync` implementation with an explicit result. This is the one break
+the compiler only half-guides you through: the signature change is a compile error, but a body
+ending in `return default;` compiles straight through it. `AuditWriteResult` has no zero member by
+design, so that `default` throws `InvalidOperationException` naming your sink type at the first
+audit write — check every implementation by eye:
+
+```csharp
+// Before (v3.5.0)
+public ValueTask WriteAsync(AuditEvent auditEvent)
+{
+    _store.Insert(auditEvent);
+    return ValueTask.CompletedTask;
+}
+
+// After (v4.0.0)
+public ValueTask<AuditWriteResult> WriteAsync(AuditEvent auditEvent)
+{
+    _store.Insert(auditEvent);
+    return ValueTask.FromResult(AuditWriteResult.Stored);
+}
+```
+
+If your sink intentionally discards a record (e.g. a full write-ahead spool), return
+`AuditWriteResult.Dropped` instead — this skips the companion log and moves
+`audit_events_dropped_total` rather than `audit_events_total`, keeping both counters honest.
+
+## Non-breaking additions in v4.0.0
+
+- **`OldValues`/`NewValues`** on `AuditEvent` (`IReadOnlyDictionary<string, object?>?`). Optional,
+  caller-supplied, and — like `Data` — never redacted.
+- **`EventId`** on `AuditEvent`, owned by the library: a UUIDv7 (`Guid.CreateVersion7()`) is
+  stamped on every `AuditAsync` call, alongside `TimestampUtc`/`TraceId`/`SpanId`, and a value set
+  through a `with` expression is overwritten before the record reaches your sink. A retrying or
+  spooling sink can deliver a record more than once; `EventId` is what lets the receiver
+  deduplicate. No source change is required, but every record now carries an identifier your sink
+  and its store did not see before; take it as the deduplication key. Caller-controlled
+  idempotency (a retried business operation deliberately reusing one `EventId`) is not
+  expressible, by design: it would let a receiver silently discard a repeated record as a
+  duplicate, which is the same silent audit loss the library exists to prevent.
+- **`audit_events_dropped_total`** counter under the `StepUpLogging.Audit` meter. It moves only
+  when a sink returns `AuditWriteResult.Dropped` (break 4); `rate(audit_events_dropped_total[1h])
+  > 0` is an alarm in its own right, separate from the existing `audit_events_total`/
+  `audit_write_failures_total` pair.
+- **`EncryptedSpoolAuditSink`**, an opt-in sink registered via `AddEncryptedSpoolAuditSink`. It
+  spools audit records to disk write-ahead and drains them to a configured endpoint, encrypting
+  each payload through an `IAuditPayloadEncryptor` port your application implements and supplies.
+  Nothing changes if you do not call it.
+
+---
+
 # Migrating to v3.0.0
 
 v3.0.0 is a **breaking** release. It bundles five breaking behavior changes plus several

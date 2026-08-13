@@ -52,6 +52,21 @@ Root (Verbose)
 
 **Bypass logger**: created directly inside the `AddSerilog` callback (not via DI) to avoid a circular deadlock. `AddSerilog` registers `Serilog.ILogger` as a factory that depends on `ILoggerFactory`, which in turn depends on this very callback, so calling `GetRequiredService<Serilog.ILogger>()` inside the callback deadlocks.
 
+### Audit pipeline
+
+Audit writes bypass Serilog entirely (ADR 0016 D1): `IAuditLogger<T>.AuditAsync()` calls `IAuditEventSink.WriteAsync()` directly. `EncryptedSpoolAuditSink` → spool (write-ahead, fsync, atomic rename) → `DrainWorker` → configured endpoint; the delivery contract (which status codes are durable, permanent, or transient) is defined in ADR 0020 D7.
+
+### Encrypted spool sink (`src/Lukdrasil.StepUpLogging/EncryptedSpool/`)
+
+| File | Role |
+|---|---|
+| `IAuditPayloadEncryptor` | Public port. Owns all crypto and key handling — algorithm, acquisition, caching, rotation. The sink calls `EncryptAsync` and never sees a key; the consumer implements and registers it. |
+| `EncryptedSpoolAuditSink` | Internal `IAuditEventSink`. Serializes each record, encrypts it via the port, and spools it durably before returning `Stored`. A full spool is the only case that returns `Dropped`; every other failure (encryptor throws, serialization fails) propagates unchanged. |
+| `SpoolWriter` / `SpoolReader` | Internal. `SpoolWriter` writes each envelope to `.tmp`, fsyncs, then atomically renames it to `{createdUtc}-{eventId}.env`; a `.tmp` surviving a crash is promoted to `.env` (not deleted) if it still parses whole, deleted only if truncated. `SpoolReader` reads the spool directory oldest-first, skipping in-flight `.tmp` files. |
+| `DrainWorker` | Internal `BackgroundService`. Delivers spooled records oldest-first to the configured endpoint and deletes each on 2xx. Three routes to `dead-letter/`: a permanent rejection (`400`/`409`/`413`/`415`/`422`), a corrupt (unparseable) spool file, or a file unreadable past `UnreadableRetryLimit`. **Everything else** (3xx, 401/403/407, 404/405, 408, 429, 5xx, network faults, timeouts, an unreadable file within the limit) is transient and retried with backoff, so one expired credential cannot walk the spool into `dead-letter/`. |
+| `EncryptedSpoolHealthCheck` | Internal `IHealthCheck`. Reports the worst of three signals: spool fill (warn/full thresholds), a non-empty `dead-letter/`, and endpoint reachability. |
+| `StepUpLoggingEncryptedSpoolExtensions` | Public static class. Exposes `AddEncryptedSpoolAuditSink()`, which registers the sink, `DrainWorker`, and health check, and calls `AddAuditLogging<EncryptedSpoolAuditSink>` internally — do not also call `AddAuditLogging` directly for this sink. |
+
 ### OTLP configuration
 
 OTLP endpoint, protocol, and headers are read **from environment variables only** (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_RESOURCE_ATTRIBUTES`). They are not configurable via `StepUpLoggingOptions`.

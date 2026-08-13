@@ -19,7 +19,10 @@ public interface IAuditLogger<T>
     /// <summary>
     /// Enriches and writes <paramref name="auditEvent"/> to the configured sink, then invokes
     /// <paramref name="log"/> with a companion <see cref="ILogger"/> whose event bypasses the
-    /// step-up level switch. <paramref name="log"/> is only invoked after the write succeeds.
+    /// step-up level switch. <paramref name="log"/> is invoked only when the sink reports
+    /// <see cref="AuditWriteResult.Stored"/>: a sink that throws, or that reports
+    /// <see cref="AuditWriteResult.Dropped"/> because it discarded the record, gets no companion
+    /// log — by design, so a log line can never assert an action no audit record backs.
     /// </summary>
     /// <remarks>
     /// The companion log is handed over as an <see cref="Action{T}"/> over <see cref="ILogger"/>

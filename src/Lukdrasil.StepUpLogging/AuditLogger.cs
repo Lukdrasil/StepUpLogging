@@ -44,10 +44,11 @@ internal sealed class AuditLogger<T>(
     private async ValueTask WriteThenLogAsync(AuditEvent auditEvent, Action<ILogger>? companionLog)
     {
         var record = Enrich(auditEvent);
+        AuditWriteResult writeResult;
 
         try
         {
-            await sink.WriteAsync(record).ConfigureAwait(false);
+            writeResult = await sink.WriteAsync(record).ConfigureAwait(false);
         }
         catch
         {
@@ -57,17 +58,40 @@ internal sealed class AuditLogger<T>(
             throw;
         }
 
-        AuditMetrics.EventsCounter.Add(1, new KeyValuePair<string, object?>("outcome", OutcomeTag(record.Outcome)));
+        var outcomeTag = new KeyValuePair<string, object?>("outcome", OutcomeTag(record.Outcome));
+
+        switch (writeResult)
+        {
+            case AuditWriteResult.Stored:
+                AuditMetrics.EventsCounter.Add(1, outcomeTag);
+                break;
+
+            case AuditWriteResult.Dropped:
+                AuditMetrics.EventsDroppedCounter.Add(1, outcomeTag);
+                return;
+
+            // Thrown outside the catch above on purpose: audit_write_failures_total means the sink
+            // threw while writing, and a sink answering with something no member names may well
+            // have written the record. That is a contract violation, not a write failure.
+            default:
+                throw UnrecognizedWriteResult(writeResult);
+        }
 
         if (companionLog is null) return;
 
-        // Written last and only on success, so that a companion log can never assert an action for
-        // which no audit record exists.
+        // Written last and only after a Stored write, so that a companion log can never assert an
+        // action for which no audit record exists.
         using (logger.BeginImmediateScope())
         {
             companionLog(logger);
         }
     }
+
+    private InvalidOperationException UnrecognizedWriteResult(AuditWriteResult writeResult) =>
+        new($"{sink.GetType()} returned {writeResult} from {nameof(IAuditEventSink.WriteAsync)}, which is neither " +
+            $"{nameof(AuditWriteResult)}.{nameof(AuditWriteResult.Stored)} nor " +
+            $"{nameof(AuditWriteResult)}.{nameof(AuditWriteResult.Dropped)}. Whether the record exists is now " +
+            "unknowable, so no counter is moved and no companion log is written.");
 
     private AuditEvent Enrich(AuditEvent auditEvent)
     {
@@ -76,6 +100,7 @@ internal sealed class AuditLogger<T>(
 
         return auditEvent with
         {
+            EventId = Guid.CreateVersion7(),
             TimestampUtc = DateTimeOffset.UtcNow,
             TraceId = activity?.TraceId.ToString(),
             SpanId = activity?.SpanId.ToString(),
@@ -120,10 +145,13 @@ internal sealed class AuditLogger<T>(
 /// </remarks>
 internal static class AuditMetrics
 {
-    private static readonly Meter Meter = new("StepUpLogging.Audit", "1.0.0");
+    internal static readonly Meter Meter = new("StepUpLogging.Audit", "1.0.0");
 
     internal static readonly Counter<long> EventsCounter =
         Meter.CreateCounter<long>("audit_events_total", "count", "Number of audit records written, by outcome");
+
+    internal static readonly Counter<long> EventsDroppedCounter =
+        Meter.CreateCounter<long>("audit_events_dropped_total", "count", "Number of audit records a sink deliberately discarded, by outcome");
 
     internal static readonly Counter<long> WriteFailuresCounter =
         Meter.CreateCounter<long>("audit_write_failures_total", "count", "Number of audit record writes that failed");
