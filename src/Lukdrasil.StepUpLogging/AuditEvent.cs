@@ -60,13 +60,17 @@ public sealed record AuditEvent
 
     /// <summary>
     /// The state of the target before the action, if the call site records it. Caller-supplied and,
-    /// like <see cref="Data"/>, opaque to the library and never redacted.
+    /// like <see cref="Data"/>, opaque to the library and never redacted — so dumping a whole
+    /// entity in here writes its secrets and personal data verbatim into an append-only store that
+    /// cannot be edited afterwards. Supply the fields that changed, and nothing else.
     /// </summary>
     public IReadOnlyDictionary<string, object?>? OldValues { get; init; }
 
     /// <summary>
     /// The state of the target after the action, if the call site records it. Caller-supplied and,
-    /// like <see cref="Data"/>, opaque to the library and never redacted.
+    /// like <see cref="Data"/>, opaque to the library and never redacted — so dumping a whole
+    /// entity in here writes its secrets and personal data verbatim into an append-only store that
+    /// cannot be edited afterwards. Supply the fields that changed, and nothing else.
     /// </summary>
     public IReadOnlyDictionary<string, object?>? NewValues { get; init; }
 

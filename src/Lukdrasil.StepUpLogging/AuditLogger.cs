@@ -58,14 +58,16 @@ internal sealed class AuditLogger<T>(
             throw;
         }
 
+        var outcomeTag = new KeyValuePair<string, object?>("outcome", OutcomeTag(record.Outcome));
+
         switch (writeResult)
         {
             case AuditWriteResult.Stored:
-                AuditMetrics.EventsCounter.Add(1, new KeyValuePair<string, object?>("outcome", OutcomeTag(record.Outcome)));
+                AuditMetrics.EventsCounter.Add(1, outcomeTag);
                 break;
 
             case AuditWriteResult.Dropped:
-                AuditMetrics.EventsDroppedCounter.Add(1);
+                AuditMetrics.EventsDroppedCounter.Add(1, outcomeTag);
                 return;
 
             // Thrown outside the catch above on purpose: audit_write_failures_total means the sink
@@ -149,7 +151,7 @@ internal static class AuditMetrics
         Meter.CreateCounter<long>("audit_events_total", "count", "Number of audit records written, by outcome");
 
     internal static readonly Counter<long> EventsDroppedCounter =
-        Meter.CreateCounter<long>("audit_events_dropped_total", "count", "Number of audit records a sink deliberately discarded");
+        Meter.CreateCounter<long>("audit_events_dropped_total", "count", "Number of audit records a sink deliberately discarded, by outcome");
 
     internal static readonly Counter<long> WriteFailuresCounter =
         Meter.CreateCounter<long>("audit_write_failures_total", "count", "Number of audit record writes that failed");

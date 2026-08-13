@@ -541,20 +541,24 @@ public class AuditLoggerTests
     }
 
     [Fact]
-    public async Task AuditAsync_WhenSinkDropsTheRecord_CountsTheDrop_WithoutCountingTheEvent()
+    public async Task AuditAsync_WhenSinkDropsTheRecord_CountsTheDropTaggedWithTheOutcome_WithoutCountingTheEvent()
     {
         using var recorder = new AuditMeterRecorder();
         using var harness = new Harness(new ResultReportingAuditSink(AuditWriteResult.Dropped));
 
-        var droppedBefore = recorder.Total("audit_events_dropped_total");
-        var writtenBefore = recorder.Total("audit_events_total", nameof(AuditOutcome.Success));
+        var droppedBefore = recorder.Total("audit_events_dropped_total", nameof(AuditOutcome.Denied));
+        var writtenBefore = recorder.Total("audit_events_total", nameof(AuditOutcome.Denied));
 
-        await harness.AuditLogger.AuditAsync(SuccessEvent());
+        await harness.AuditLogger.AuditAsync(AuditEvent.Denied("order.cancel", "user-42", "user"));
+
+        // Tagged as the events counter is: a wave of discarded denials and a wave of discarded
+        // successes are not the same incident, and the drop counter is all the operator has left.
+        Assert.Equal(droppedBefore + 1, recorder.Total("audit_events_dropped_total", nameof(AuditOutcome.Denied)));
+        Assert.Equal(0, recorder.Total("audit_events_dropped_total"));
 
         // audit_events_total means records written, and the operator's "audit stopped" alarm reads
         // it: counting a dropped record there would make the alarm healthiest while audit is lost.
-        Assert.Equal(droppedBefore + 1, recorder.Total("audit_events_dropped_total"));
-        Assert.Equal(writtenBefore, recorder.Total("audit_events_total", nameof(AuditOutcome.Success)));
+        Assert.Equal(writtenBefore, recorder.Total("audit_events_total", nameof(AuditOutcome.Denied)));
     }
 
     [Fact]
@@ -579,11 +583,11 @@ public class AuditLoggerTests
         using var recorder = new AuditMeterRecorder();
         using var harness = new Harness(new RecordingAuditSink());
 
-        var droppedBefore = recorder.Total("audit_events_dropped_total");
+        var droppedBefore = recorder.Total("audit_events_dropped_total", nameof(AuditOutcome.Success));
 
         await harness.AuditLogger.AuditAsync(SuccessEvent());
 
-        Assert.Equal(droppedBefore, recorder.Total("audit_events_dropped_total"));
+        Assert.Equal(droppedBefore, recorder.Total("audit_events_dropped_total", nameof(AuditOutcome.Success)));
     }
 
     [Theory]
