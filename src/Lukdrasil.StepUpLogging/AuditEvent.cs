@@ -33,8 +33,12 @@ public sealed record AuditEvent
     /// <summary>The outcome of the action.</summary>
     public required AuditOutcome Outcome { get; init; }
 
-    /// <summary>The kind of actor identified by <see cref="ActorId"/>. Defaults to <c>"user"</c>.</summary>
-    public string ActorType { get; init; } = "user";
+    /// <summary>
+    /// The kind of actor identified by <see cref="ActorId"/>, e.g. <c>"user"</c>, <c>"service"</c>,
+    /// or <c>"api-key"</c>. Required, and deliberately without a default: an audit record is
+    /// append-only, so a guessed actor kind is a permanent false assertion about who acted.
+    /// </summary>
+    public required string ActorType { get; init; }
 
     /// <summary>The identifier of the party the actor was acting on behalf of, if any.</summary>
     public string? OnBehalfOfId { get; init; }
@@ -53,6 +57,25 @@ public sealed record AuditEvent
 
     /// <summary>Additional caller-supplied context, opaque to the library.</summary>
     public IReadOnlyDictionary<string, object?>? Data { get; init; }
+
+    /// <summary>
+    /// The state of the target before the action, if the call site records it. Caller-supplied and,
+    /// like <see cref="Data"/>, opaque to the library and never redacted.
+    /// </summary>
+    public IReadOnlyDictionary<string, object?>? OldValues { get; init; }
+
+    /// <summary>
+    /// The state of the target after the action, if the call site records it. Caller-supplied and,
+    /// like <see cref="Data"/>, opaque to the library and never redacted.
+    /// </summary>
+    public IReadOnlyDictionary<string, object?>? NewValues { get; init; }
+
+    /// <summary>
+    /// The identity of this audit record. Owned by the library: a UUIDv7 is stamped on every call,
+    /// so any value a caller sets here is overwritten before the record reaches the sink. Delivery
+    /// to an audit store is at-least-once, and this is what the receiver deduplicates on.
+    /// </summary>
+    public Guid EventId { get; init; }
 
     /// <summary>
     /// The UTC time the action was audited. Owned by the library: stamped on every call, so any
@@ -86,26 +109,59 @@ public sealed record AuditEvent
     public string? UserAgent { get; init; }
 
     /// <summary>
-    /// Creates a <see cref="AuditOutcome.Success"/> event. Everything beyond
-    /// <paramref name="action"/> and <paramref name="actorId"/> stays at its default — add context
-    /// with a <c>with</c> expression.
+    /// Creates a <see cref="AuditOutcome.Success"/> event. Everything beyond the three parameters
+    /// stays at its default — add context with a <c>with</c> expression.
     /// </summary>
-    public static AuditEvent Success(string action, string actorId) =>
-        new() { Action = action, ActorId = actorId, Outcome = AuditOutcome.Success };
+    /// <param name="action">The action performed, e.g. <c>"order.cancel"</c>.</param>
+    /// <param name="actorId">The identifier of the actor who performed the action.</param>
+    /// <param name="actorType">
+    /// The kind of actor <paramref name="actorId"/> identifies, e.g. <c>"user"</c>,
+    /// <c>"service"</c>, or <c>"api-key"</c>.
+    /// </param>
+    /// <remarks>
+    /// All three parameters are strings, so nothing but this order — <c>action, actorId,
+    /// actorType</c> — stops two of them being transposed at a call site: the compiler cannot
+    /// catch it, and the resulting audit record is a permanent, plausible-looking lie about who
+    /// did what. Read the argument order back before moving on.
+    /// </remarks>
+    public static AuditEvent Success(string action, string actorId, string actorType) =>
+        new() { Action = action, ActorId = actorId, ActorType = actorType, Outcome = AuditOutcome.Success };
 
     /// <summary>
-    /// Creates a <see cref="AuditOutcome.Failure"/> event. Everything beyond
-    /// <paramref name="action"/> and <paramref name="actorId"/> stays at its default — add context
-    /// with a <c>with</c> expression.
+    /// Creates a <see cref="AuditOutcome.Failure"/> event. Everything beyond the three parameters
+    /// stays at its default — add context with a <c>with</c> expression.
     /// </summary>
-    public static AuditEvent Failure(string action, string actorId) =>
-        new() { Action = action, ActorId = actorId, Outcome = AuditOutcome.Failure };
+    /// <param name="action">The action attempted, e.g. <c>"payment.capture"</c>.</param>
+    /// <param name="actorId">The identifier of the actor who attempted the action.</param>
+    /// <param name="actorType">
+    /// The kind of actor <paramref name="actorId"/> identifies, e.g. <c>"user"</c>,
+    /// <c>"service"</c>, or <c>"api-key"</c>.
+    /// </param>
+    /// <remarks>
+    /// All three parameters are strings, so nothing but this order — <c>action, actorId,
+    /// actorType</c> — stops two of them being transposed at a call site: the compiler cannot
+    /// catch it, and the resulting audit record is a permanent, plausible-looking lie about who
+    /// did what. Read the argument order back before moving on.
+    /// </remarks>
+    public static AuditEvent Failure(string action, string actorId, string actorType) =>
+        new() { Action = action, ActorId = actorId, ActorType = actorType, Outcome = AuditOutcome.Failure };
 
     /// <summary>
-    /// Creates a <see cref="AuditOutcome.Denied"/> event. Everything beyond
-    /// <paramref name="action"/> and <paramref name="actorId"/> stays at its default — add context
-    /// with a <c>with</c> expression.
+    /// Creates a <see cref="AuditOutcome.Denied"/> event. Everything beyond the three parameters
+    /// stays at its default — add context with a <c>with</c> expression.
     /// </summary>
-    public static AuditEvent Denied(string action, string actorId) =>
-        new() { Action = action, ActorId = actorId, Outcome = AuditOutcome.Denied };
+    /// <param name="action">The action refused, e.g. <c>"report.export"</c>.</param>
+    /// <param name="actorId">The identifier of the actor the action was refused to.</param>
+    /// <param name="actorType">
+    /// The kind of actor <paramref name="actorId"/> identifies — for a denial commonly an
+    /// unauthenticated or non-human caller, e.g. <c>"anonymous"</c> or <c>"service"</c>.
+    /// </param>
+    /// <remarks>
+    /// All three parameters are strings, so nothing but this order — <c>action, actorId,
+    /// actorType</c> — stops two of them being transposed at a call site: the compiler cannot
+    /// catch it, and the resulting audit record is a permanent, plausible-looking lie about who
+    /// did what. Read the argument order back before moving on.
+    /// </remarks>
+    public static AuditEvent Denied(string action, string actorId, string actorType) =>
+        new() { Action = action, ActorId = actorId, ActorType = actorType, Outcome = AuditOutcome.Denied };
 }

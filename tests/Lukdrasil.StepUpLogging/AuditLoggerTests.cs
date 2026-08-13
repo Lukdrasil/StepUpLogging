@@ -185,7 +185,7 @@ public class AuditLoggerTests
 
         Assert.False(harness.Controller.IsSteppedUp);
 
-        await harness.AuditLogger.AuditAsync(AuditEvent.Success("order.cancel", "user-42"));
+        await harness.AuditLogger.AuditAsync(AuditEvent.Success("order.cancel", "user-42", "user"));
 
         var written = Assert.Single(sink.Written);
         Assert.Equal("order.cancel", written.Action);
@@ -201,7 +201,7 @@ public class AuditLoggerTests
         harness.Controller.Trigger();
         Assert.True(harness.Controller.IsSteppedUp);
 
-        await harness.AuditLogger.AuditAsync(AuditEvent.Denied("order.cancel", "user-42"));
+        await harness.AuditLogger.AuditAsync(AuditEvent.Denied("order.cancel", "user-42", "user"));
 
         var written = Assert.Single(sink.Written);
         Assert.Equal(AuditOutcome.Denied, written.Outcome);
@@ -214,7 +214,7 @@ public class AuditLoggerTests
         using var harness = new Harness(sink);
 
         var before = DateTimeOffset.UtcNow;
-        await harness.AuditLogger.AuditAsync(AuditEvent.Success("order.cancel", "user-42"));
+        await harness.AuditLogger.AuditAsync(AuditEvent.Success("order.cancel", "user-42", "user"));
         var after = DateTimeOffset.UtcNow;
 
         var written = Assert.Single(sink.Written);
@@ -230,7 +230,7 @@ public class AuditLoggerTests
         var callerStamp = new DateTimeOffset(2000, 1, 1, 0, 0, 0, TimeSpan.Zero);
 
         await harness.AuditLogger.AuditAsync(
-            AuditEvent.Success("order.cancel", "user-42") with { TimestampUtc = callerStamp });
+            AuditEvent.Success("order.cancel", "user-42", "user") with { TimestampUtc = callerStamp });
 
         Assert.NotEqual(callerStamp, Assert.Single(sink.Written).TimestampUtc);
     }
@@ -252,7 +252,7 @@ public class AuditLoggerTests
         using var activity = activitySource.StartActivity("audited-operation");
         Assert.NotNull(activity);
 
-        await harness.AuditLogger.AuditAsync(AuditEvent.Success("order.cancel", "user-42"));
+        await harness.AuditLogger.AuditAsync(AuditEvent.Success("order.cancel", "user-42", "user"));
 
         var written = Assert.Single(sink.Written);
         Assert.Equal(activity.TraceId.ToString(), written.TraceId);
@@ -265,7 +265,7 @@ public class AuditLoggerTests
         var sink = new RecordingAuditSink();
         using var harness = new Harness(sink);
 
-        await harness.AuditLogger.AuditAsync(AuditEvent.Success("job.run", "system"));
+        await harness.AuditLogger.AuditAsync(AuditEvent.Success("job.run", "system", "service"));
 
         var written = Assert.Single(sink.Written);
         Assert.Null(written.SourceIp);
@@ -279,7 +279,7 @@ public class AuditLoggerTests
         // A pattern that would match the remote address if SourceIp were redacted.
         using var harness = new Harness(sink, HttpContextWith(), redactionRegexes: [@"198\.51\.100\.7"]);
 
-        await harness.AuditLogger.AuditAsync(AuditEvent.Success("order.cancel", "user-42"));
+        await harness.AuditLogger.AuditAsync(AuditEvent.Success("order.cancel", "user-42", "user"));
 
         Assert.Equal(RemoteIp, Assert.Single(sink.Written).SourceIp);
     }
@@ -293,7 +293,7 @@ public class AuditLoggerTests
             HttpContextWith(forwardedFor: "203.0.113.42, 198.51.100.100"),
             trustForwardedHeaders: true);
 
-        await harness.AuditLogger.AuditAsync(AuditEvent.Success("order.cancel", "user-42"));
+        await harness.AuditLogger.AuditAsync(AuditEvent.Success("order.cancel", "user-42", "user"));
 
         Assert.Equal("203.0.113.42", Assert.Single(sink.Written).SourceIp);
     }
@@ -308,7 +308,7 @@ public class AuditLoggerTests
             redactionRegexes: [@"203\.0\.113\.\d+"],
             trustForwardedHeaders: true);
 
-        await harness.AuditLogger.AuditAsync(AuditEvent.Success("order.cancel", "user-42"));
+        await harness.AuditLogger.AuditAsync(AuditEvent.Success("order.cancel", "user-42", "user"));
 
         // Redaction inside SourceIp is asymmetric by origin, not by field: a forwarded address is
         // client-supplied and is redacted, whereas the connection address above is not. Inherited
@@ -322,7 +322,7 @@ public class AuditLoggerTests
         var sink = new RecordingAuditSink();
         using var harness = new Harness(sink, HttpContextWith(forwardedFor: "203.0.113.42"));
 
-        await harness.AuditLogger.AuditAsync(AuditEvent.Success("order.cancel", "user-42"));
+        await harness.AuditLogger.AuditAsync(AuditEvent.Success("order.cancel", "user-42", "user"));
 
         Assert.Equal(RemoteIp, Assert.Single(sink.Written).SourceIp);
     }
@@ -336,7 +336,7 @@ public class AuditLoggerTests
             HttpContextWith(userAgent: "Agent/1.0 token=secret-abc123"),
             redactionRegexes: ["secret-[A-Za-z0-9]+"]);
 
-        await harness.AuditLogger.AuditAsync(AuditEvent.Success("order.cancel", "user-42"));
+        await harness.AuditLogger.AuditAsync(AuditEvent.Success("order.cancel", "user-42", "user"));
 
         var userAgent = Assert.Single(sink.Written).UserAgent;
         Assert.NotNull(userAgent);
@@ -351,7 +351,7 @@ public class AuditLoggerTests
         using var harness = new Harness(sink, HttpContextWith(), redactionRegexes: ["secret-[A-Za-z0-9]+"]);
         var data = new Dictionary<string, object?> { ["note"] = "secret-data99" };
 
-        await harness.AuditLogger.AuditAsync(AuditEvent.Denied("order.cancel", "secret-actor11") with
+        await harness.AuditLogger.AuditAsync(AuditEvent.Denied("order.cancel", "secret-actor11", "secret-kind44") with
         {
             TargetType = "order",
             TargetId = "secret-target22",
@@ -361,6 +361,7 @@ public class AuditLoggerTests
 
         var written = Assert.Single(sink.Written);
         Assert.Equal("secret-actor11", written.ActorId);
+        Assert.Equal("secret-kind44", written.ActorType);
         Assert.Equal("secret-target22", written.TargetId);
         Assert.Equal("secret-reason33", written.Reason);
         Assert.Same(data, written.Data);
@@ -373,7 +374,7 @@ public class AuditLoggerTests
         using var harness = new Harness(new AsyncJournalingAuditSink(journal));
 
         await harness.AuditLogger.AuditAsync(
-            AuditEvent.Success("order.cancel", "user-42"),
+            AuditEvent.Success("order.cancel", "user-42", "user"),
             _ => journal.Add("log"));
 
         Assert.Equal(new[] { "audit", "log" }, journal);
@@ -387,7 +388,7 @@ public class AuditLoggerTests
 
         // Information is below the Warning base level, so an ordinary event would be dropped.
         await harness.AuditLogger.AuditAsync(
-            AuditEvent.Success("order.cancel", "user-42"),
+            AuditEvent.Success("order.cancel", "user-42", "user"),
             log => log.LogInformation("order {OrderId} cancelled", "order-7"));
 
         Assert.Empty(harness.GatedOutput.Events);
@@ -407,7 +408,7 @@ public class AuditLoggerTests
         harness.AuditCategoryLogger.LogInformation("ordinary event from the audited category");
 
         await harness.AuditLogger.AuditAsync(
-            AuditEvent.Success("order.cancel", "user-42"),
+            AuditEvent.Success("order.cancel", "user-42", "user"),
             log => log.LogInformation("order {OrderId} cancelled", "order-7"));
 
         // The empty gated output proves the deny-list is live: it pins this category to Warning
@@ -430,7 +431,7 @@ public class AuditLoggerTests
         Microsoft.Extensions.Logging.ILogger? borrowed = null;
 
         await harness.AuditLogger.AuditAsync(
-            AuditEvent.Success("order.cancel", "user-42"),
+            AuditEvent.Success("order.cancel", "user-42", "user"),
             log =>
             {
                 borrowed = log;
@@ -450,7 +451,7 @@ public class AuditLoggerTests
         using var harness = new Harness(new ThrowingAuditSink(failure));
 
         var thrown = await Assert.ThrowsAsync<InvalidOperationException>(
-            async () => await harness.AuditLogger.AuditAsync(AuditEvent.Success("order.cancel", "user-42")));
+            async () => await harness.AuditLogger.AuditAsync(AuditEvent.Success("order.cancel", "user-42", "user")));
 
         Assert.Same(failure, thrown);
     }
@@ -463,7 +464,7 @@ public class AuditLoggerTests
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             async () => await harness.AuditLogger.AuditAsync(
-                AuditEvent.Success("order.cancel", "user-42"),
+                AuditEvent.Success("order.cancel", "user-42", "user"),
                 _ => logInvoked = true));
 
         Assert.False(logInvoked);
@@ -479,7 +480,7 @@ public class AuditLoggerTests
         var before = recorder.Total("audit_write_failures_total");
 
         await Assert.ThrowsAsync<InvalidOperationException>(
-            async () => await harness.AuditLogger.AuditAsync(AuditEvent.Success("order.cancel", "user-42")));
+            async () => await harness.AuditLogger.AuditAsync(AuditEvent.Success("order.cancel", "user-42", "user")));
 
         Assert.Equal(before + 1, recorder.Total("audit_write_failures_total"));
     }
@@ -493,7 +494,7 @@ public class AuditLoggerTests
         var before = recorder.Total("audit_events_total", nameof(AuditOutcome.Success));
 
         await Assert.ThrowsAsync<InvalidOperationException>(
-            async () => await harness.AuditLogger.AuditAsync(AuditEvent.Success("order.cancel", "user-42")));
+            async () => await harness.AuditLogger.AuditAsync(AuditEvent.Success("order.cancel", "user-42", "user")));
 
         Assert.Equal(before, recorder.Total("audit_events_total", nameof(AuditOutcome.Success)));
     }
@@ -506,7 +507,7 @@ public class AuditLoggerTests
     {
         using var recorder = new AuditMeterRecorder();
         using var harness = new Harness(new RecordingAuditSink());
-        var auditEvent = AuditEvent.Success("order.cancel", "user-42") with { Outcome = outcome };
+        var auditEvent = AuditEvent.Success("order.cancel", "user-42", "user") with { Outcome = outcome };
 
         var before = recorder.Total("audit_events_total", expectedTag);
 
@@ -521,7 +522,7 @@ public class AuditLoggerTests
     {
         using var recorder = new AuditMeterRecorder();
         using var harness = new Harness(new RecordingAuditSink());
-        var auditEvent = AuditEvent.Success("order.cancel", "user-42") with { Outcome = (AuditOutcome)99 };
+        var auditEvent = AuditEvent.Success("order.cancel", "user-42", "user") with { Outcome = (AuditOutcome)99 };
 
         var before = recorder.Total("audit_events_total", "Unknown");
 
@@ -542,7 +543,7 @@ public class AuditLoggerTests
 
         var thrown = await Assert.ThrowsAsync<InvalidOperationException>(
             async () => await harness.AuditLogger.AuditAsync(
-                AuditEvent.Success("order.cancel", "user-42"),
+                AuditEvent.Success("order.cancel", "user-42", "user"),
                 _ => throw failure));
 
         Assert.Same(failure, thrown);
@@ -557,7 +558,7 @@ public class AuditLoggerTests
         using var harness = new Harness(sink);
 
         await Assert.ThrowsAsync<ArgumentNullException>(
-            async () => await harness.AuditLogger.AuditAsync(AuditEvent.Success("order.cancel", "user-42"), null!));
+            async () => await harness.AuditLogger.AuditAsync(AuditEvent.Success("order.cancel", "user-42", "user"), null!));
 
         Assert.Empty(sink.Written);
     }

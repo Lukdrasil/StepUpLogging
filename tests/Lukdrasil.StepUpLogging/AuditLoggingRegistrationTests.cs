@@ -80,7 +80,7 @@ public class AuditLoggingRegistrationTests : IDisposable
         using var scope = host.Services.CreateScope();
 
         var auditLogger = scope.ServiceProvider.GetRequiredService<IAuditLogger<AuditLoggingRegistrationTests>>();
-        await auditLogger.AuditAsync(AuditEvent.Success("order.cancel", "user-42"));
+        await auditLogger.AuditAsync(AuditEvent.Success("order.cancel", "user-42", "user"));
 
         var sink = (TestAuditSink)scope.ServiceProvider.GetRequiredService<IAuditEventSink>();
         Assert.Equal("order.cancel", Assert.Single(sink.Written).Action);
