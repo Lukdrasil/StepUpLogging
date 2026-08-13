@@ -516,7 +516,7 @@ public class PipelineRoutingTests
         Assert.Equal(true, ((ScalarValue)val!).Value);
     }
 
-    // ─── 8. NeverStepUpCategories deny-list wiring (ADR 0008) ──────────────────
+    // ─── 8. NeverStepUpCategories deny-list wiring (ADR 0021) ──────────────────
 
     private const string EfCategory = "Microsoft.EntityFrameworkCore.Database.Command";
 
