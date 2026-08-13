@@ -121,9 +121,25 @@ Three facts about the existing pipeline constrain the answer:
 
 7. **No benchmark project and no new metric.** The flag defaults off and the empty-patterns
    short-circuit means zero regex work unless a consumer deliberately opts in; the existing 100 ms
-   per-pattern regex timeout bounds the worst case. The cost is documented in the README rather
-   than measured, because a measurement taken against the library's own sample regexes does not
-   transfer to a consumer's. No redaction-hit counter is added to the existing meters.
+   per-pattern regex timeout (`StepUpLoggingExtensions.cs:378`, `:382`) bounds the worst case for
+   one who does. What that consumer pays is described rather than measured, because a measurement
+   taken against the library's own sample regexes does not transfer to a consumer's — and
+   describing it means naming its *shape*, which is the part that surprises when the flag goes on
+   (never on upgrade: D3 keeps the flag off). D4 puts the enricher on the root configuration, whose
+   minimum level is `MinimumLevel.Verbose()` (`StepUpLoggingExtensions.cs:229`) so that the buffer
+   and trigger sinks see everything. The sweep therefore runs on every event that **reaches the
+   root** — everything emitted bar what a config `MinimumLevel:Override` already filters — not on
+   the subset exported: a Debug event that `StepUpSink.Emit` drops against the `LevelSwitch`
+   (`StepUpSink.cs:43`) is swept before it is dropped. Per event that is one `Regex.Replace` per
+   pattern (`StepUpLoggingExtensions.cs:977-981`) per non-excluded string-valued scalar property. This
+   is inherent to the coverage D4 and D5 guarantee, not a defect to tune away, so it is documented
+   on both surfaces a consumer reads before flipping the flag — the README's redaction section and
+   the `RedactLogEventProperties` XML doc that ships as IntelliSense — along with the mitigation
+   that exists: few patterns, each narrow rather than open-ended. Anchoring is deliberately not
+   advised: patterns compile `NonBacktracking` where supported (`:378`), so anchoring saves start
+   positions rather than preventing blowup, and a pattern anchored with `^`/`$` would stop matching
+   the mid-value secrets this feature exists to catch. No redaction-hit counter is added to the
+   existing meters.
 
 ## Consequences
 
