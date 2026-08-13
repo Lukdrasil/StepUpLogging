@@ -614,8 +614,10 @@ if (!builder.Environment.IsDevelopment())
 Inject `IAuditLogger<T>` (scoped) and call `AuditAsync`:
 
 ```csharp
-public sealed class OrderService(IAuditLogger<OrderService> audit)
+public sealed class OrderService(IAuditLogger<OrderService> audit, IOrderRepository db)
 {
+    private readonly IOrderRepository _db = db;
+
     public async Task CancelOrderAsync(string orderId, string userId)
     {
         try

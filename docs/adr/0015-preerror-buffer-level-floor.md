@@ -46,5 +46,5 @@ buffer applies a **level floor equal to the resolved `StepUpLevel`**, enforced a
   `StepUpLevel = "Verbose"`.
 - Memory use of the ring buffers drops (sub-floor events are never stored).
 - `NeverStepUpCategories` remains orthogonal: it exempts categories from the
-  *live* step-up window and still does not filter the buffer (ADR 0008 remark
+  *live* step-up window and still does not filter the buffer (ADR 0021 remark
   unchanged) — the buffer floor is by level only.
