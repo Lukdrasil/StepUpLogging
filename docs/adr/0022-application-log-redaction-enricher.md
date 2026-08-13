@@ -100,12 +100,12 @@ Three facts about the existing pipeline constrain the answer:
    `EnrichWithCallStack`, default `false`). `SourceContext` is stamped by no enricher here at all —
    Serilog itself and the `ILogger<T>` category bridge produce it.
 
-   That spread is the trap, and it is why the set was first scoped at eleven: only four of the
-   twelve names are readable at their call site, so enumerating the set from `ApplyCommonEnrichers`
-   drops every property whose name is a fact about a package rather than a literal in this repo —
-   which is exactly how `CallStack` was missed. The set has to be derived from the properties that
-   actually land on an event, not from the registration block; adding an enricher will drift it out
-   of date with nothing but this note to catch that.
+   That spread is the trap. `CallStack` was missed not because its name is unreadable — `MachineName`
+   is equally a package's fact and was scoped from the start — but because `EnrichWithCallStack`
+   defaults to `false`, so it appears on no default event and in no default log dump. Neither
+   derivation is sufficient alone: the registration block (`:390-437`) omits `SourceContext`, and
+   a sample event omits every opt-in enricher. The set must be reviewed against both whenever an
+   enricher is added.
 
    `CallStack` belongs in the set for the same reason as the rest: it is a library-owned diagnostic
    value, never a consumer secret, and redacting it would leave a captured stack trace unreadable
