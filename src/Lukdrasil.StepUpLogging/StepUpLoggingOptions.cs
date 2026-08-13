@@ -77,7 +77,7 @@ public sealed class StepUpLoggingOptions
     /// patterns configured the flag has no effect either.
     ///
     /// The sweep sits on the root pipeline, which runs at <c>Verbose</c>, so it costs one regex
-    /// replace per pattern per string-valued scalar property on every event that reaches the root —
+    /// replace per pattern per non-excluded string-valued scalar property on every event that reaches the root —
     /// including the events the step-up level switch later drops and never exports — which is why
     /// <see cref="RedactionRegexes"/> is best kept short and each pattern narrow.
     ///
