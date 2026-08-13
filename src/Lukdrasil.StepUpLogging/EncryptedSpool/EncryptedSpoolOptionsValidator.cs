@@ -37,25 +37,14 @@ internal sealed class EncryptedSpoolOptionsValidator : IValidateOptions<Encrypte
         }
     }
 
-    private static void RequirePositive(int value, string optionName, List<string> failures)
+    /// <summary>
+    /// One rule for every counted option, whatever it counts in: zero is <c>default</c> for
+    /// <see cref="int"/>, <see cref="long"/> and <see cref="TimeSpan"/> alike.
+    /// </summary>
+    private static void RequirePositive<T>(T value, string optionName, List<string> failures)
+        where T : struct, IComparable<T>
     {
-        if (value <= 0)
-        {
-            failures.Add($"{nameof(EncryptedSpoolOptions)}.{optionName} must be greater than zero.");
-        }
-    }
-
-    private static void RequirePositive(long value, string optionName, List<string> failures)
-    {
-        if (value <= 0)
-        {
-            failures.Add($"{nameof(EncryptedSpoolOptions)}.{optionName} must be greater than zero.");
-        }
-    }
-
-    private static void RequirePositive(TimeSpan value, string optionName, List<string> failures)
-    {
-        if (value <= TimeSpan.Zero)
+        if (value.CompareTo(default) <= 0)
         {
             failures.Add($"{nameof(EncryptedSpoolOptions)}.{optionName} must be greater than zero.");
         }

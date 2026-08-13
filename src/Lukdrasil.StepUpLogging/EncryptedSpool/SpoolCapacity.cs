@@ -61,9 +61,9 @@ internal sealed class SpoolCapacity(EncryptedSpoolOptions options)
 /// </summary>
 /// <remarks>
 /// The write path still owns correctness — the sink reads and updates this under the gate that
-/// serializes its writes, exactly as before. The one addition is <see cref="Snapshot"/>: a gauge
-/// observes it from a different thread, so the field itself is guarded by a lock to rule out a
-/// torn read, even though nothing beyond that field needs the lock's protection.
+/// serializes its writes, so only ever one thread updates the tally. The lock exists for
+/// <see cref="Snapshot"/> alone: a gauge observes the tally from a collection thread, and every
+/// update takes the lock so that observation can never catch a half-written value.
 /// </remarks>
 internal sealed class SpoolUsageTracker(SpoolCapacity capacity)
 {

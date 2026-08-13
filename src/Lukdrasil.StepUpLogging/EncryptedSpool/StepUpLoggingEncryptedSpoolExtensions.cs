@@ -52,33 +52,18 @@ public static class StepUpLoggingEncryptedSpoolExtensions
             .Configure(configureOptions)
             .ValidateOnStart();
 
-        // One instance apiece, shared with the drain worker and the health check through DI: two
-        // SpoolWriters would race two crash-recovery sweeps over the same .tmp files, and the
-        // health check's dead-letter/endpoint signals have to see what the worker actually wrote.
-        builder.Services.AddSingleton(sp =>
-            new SpoolWriter(sp.GetRequiredService<IOptions<EncryptedSpoolOptions>>().Value.SpoolDirectory));
-        builder.Services.AddSingleton(sp =>
-            new SpoolUsageTracker(new SpoolCapacity(sp.GetRequiredService<IOptions<EncryptedSpoolOptions>>().Value)));
+        // Singletons because each is a seam two collaborators must meet on: the sink writes the
+        // tally the gauges observe, the drain worker sets the dead-letter and endpoint signals the
+        // health check reports, and the SpoolWriter's crash-recovery sweep runs in its constructor,
+        // so a second instance would sweep the same .tmp files a second time.
+        builder.Services.AddSingleton(sp => new SpoolWriter(SpoolOptions(sp).SpoolDirectory));
+        builder.Services.AddSingleton(sp => new SpoolUsageTracker(new SpoolCapacity(SpoolOptions(sp))));
         builder.Services.AddSingleton<DeadLetterBox>();
         builder.Services.AddSingleton<EndpointReachability>();
         builder.Services.AddSingleton(TimeProvider.System);
         builder.Services.AddSingleton<EncryptedSpoolGauges>();
 
-        builder.Services.AddHttpClient(DrainWorker.HttpClientName)
-            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
-            {
-                // A followed redirect would turn the drain worker's POST into a body-less GET
-                // before it ever sees the 3xx, and a 2xx on that GET would delete a record that
-                // was never actually sent — the one silent-loss path this sink exists to close
-                // (B08 hand-off, hard requirement).
-                AllowAutoRedirect = false
-            })
-            .ConfigureHttpClient((sp, client) =>
-            {
-                var options = sp.GetRequiredService<IOptions<EncryptedSpoolOptions>>().Value;
-                client.Timeout = options.DeliveryTimeout;
-                options.ConfigureProducerCredentials?.Invoke(client);
-            });
+        AddDeliveryHttpClient(builder.Services);
 
         builder.AddAuditLogging<EncryptedSpoolAuditSink>(ServiceLifetime.Singleton);
         builder.Services.AddHostedService<DrainWorker>();
@@ -91,7 +76,7 @@ public static class StepUpLoggingEncryptedSpoolExtensions
         // else happens to touch them.
         builder.Services.AddOptions<EncryptedSpoolAuditSinkPrerequisites>()
             .Validate<IServiceProvider>(
-                ResolvesSuccessfully,
+                ResolveSinkAtStart,
                 "AddEncryptedSpoolAuditSink could not construct the encrypted spool sink at start-up. " +
                 "Check that SpoolDirectory exists (or can be created) and is writable.")
             .ValidateOnStart();
@@ -99,7 +84,32 @@ public static class StepUpLoggingEncryptedSpoolExtensions
         return builder;
     }
 
-    private static bool ResolvesSuccessfully(EncryptedSpoolAuditSinkPrerequisites prerequisites, IServiceProvider services)
+    private static EncryptedSpoolOptions SpoolOptions(IServiceProvider services) =>
+        services.GetRequiredService<IOptions<EncryptedSpoolOptions>>().Value;
+
+    private static void AddDeliveryHttpClient(IServiceCollection services)
+    {
+        services.AddHttpClient(DrainWorker.HttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+            {
+                // A followed redirect would turn the drain worker's POST into a body-less GET
+                // before it ever sees the 3xx, and a 2xx on that GET would delete a record that
+                // was never actually sent — the one silent-loss path this sink exists to close
+                // (B08 hand-off, hard requirement).
+                AllowAutoRedirect = false
+            })
+            .ConfigureHttpClient((sp, client) =>
+            {
+                var options = SpoolOptions(sp);
+                client.Timeout = options.DeliveryTimeout;
+                options.ConfigureProducerCredentials?.Invoke(client);
+            });
+    }
+
+    // Always true: the check is the resolution itself. A sink that cannot be built throws out of
+    // GetRequiredService — carrying the directory and the reason — rather than handing back a
+    // verdict this predicate could report.
+    private static bool ResolveSinkAtStart(EncryptedSpoolAuditSinkPrerequisites prerequisites, IServiceProvider services)
     {
         try
         {

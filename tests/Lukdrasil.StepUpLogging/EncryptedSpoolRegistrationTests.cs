@@ -79,26 +79,26 @@ public class EncryptedSpoolRegistrationTests : IDisposable
     }
 
     /// <summary>Each case leaves exactly one option invalid, so the assertion isolates that option's own message.</summary>
-    public static IEnumerable<object[]> InvalidOptionCases()
-    {
-        yield return [Invalidate(o => o.SpoolDirectory = ""), nameof(EncryptedSpoolOptions.SpoolDirectory)];
-        yield return [Invalidate(o => o.EndpointBaseUrl = ""), nameof(EncryptedSpoolOptions.EndpointBaseUrl)];
-        yield return [Invalidate(o => o.EndpointBaseUrl = "not-a-url"), nameof(EncryptedSpoolOptions.EndpointBaseUrl)];
-        yield return [Invalidate(o => o.EndpointBaseUrl = "/relative/audit"), nameof(EncryptedSpoolOptions.EndpointBaseUrl)];
-        yield return [Invalidate(o => o.EndpointBaseUrl = "https://audit.example/api?tenant=1"), nameof(EncryptedSpoolOptions.EndpointBaseUrl)];
-        yield return [Invalidate(o => o.EndpointBaseUrl = "https://audit.example/api#section"), nameof(EncryptedSpoolOptions.EndpointBaseUrl)];
-        yield return [Invalidate(o => o.ModuleName = ""), nameof(EncryptedSpoolOptions.ModuleName)];
-        yield return [Invalidate(o => o.Version = ""), nameof(EncryptedSpoolOptions.Version)];
-        yield return [Invalidate(o => o.MaxPayloadBytes = 0), nameof(EncryptedSpoolOptions.MaxPayloadBytes)];
-        yield return [Invalidate(o => o.SpoolMaxBytes = 0), nameof(EncryptedSpoolOptions.SpoolMaxBytes)];
-        yield return [Invalidate(o => o.SpoolMaxEntries = 0), nameof(EncryptedSpoolOptions.SpoolMaxEntries)];
-        yield return [Invalidate(o => o.DrainInterval = TimeSpan.Zero), nameof(EncryptedSpoolOptions.DrainInterval)];
-        yield return [Invalidate(o => o.MaxDrainBackoff = TimeSpan.Zero), nameof(EncryptedSpoolOptions.MaxDrainBackoff)];
-        yield return [Invalidate(o => o.ShutdownDrainTimeout = TimeSpan.Zero), nameof(EncryptedSpoolOptions.ShutdownDrainTimeout)];
-        yield return [Invalidate(o => o.UnreadableRetryLimit = 0), nameof(EncryptedSpoolOptions.UnreadableRetryLimit)];
-    }
+    public static IEnumerable<object[]> InvalidOptionCases() =>
+    [
+        Case(o => o.SpoolDirectory = "", nameof(EncryptedSpoolOptions.SpoolDirectory)),
+        Case(o => o.EndpointBaseUrl = "", nameof(EncryptedSpoolOptions.EndpointBaseUrl)),
+        Case(o => o.EndpointBaseUrl = "not-a-url", nameof(EncryptedSpoolOptions.EndpointBaseUrl)),
+        Case(o => o.EndpointBaseUrl = "/relative/audit", nameof(EncryptedSpoolOptions.EndpointBaseUrl)),
+        Case(o => o.EndpointBaseUrl = "https://audit.example/api?tenant=1", nameof(EncryptedSpoolOptions.EndpointBaseUrl)),
+        Case(o => o.EndpointBaseUrl = "https://audit.example/api#section", nameof(EncryptedSpoolOptions.EndpointBaseUrl)),
+        Case(o => o.ModuleName = "", nameof(EncryptedSpoolOptions.ModuleName)),
+        Case(o => o.Version = "", nameof(EncryptedSpoolOptions.Version)),
+        Case(o => o.MaxPayloadBytes = 0, nameof(EncryptedSpoolOptions.MaxPayloadBytes)),
+        Case(o => o.SpoolMaxBytes = 0, nameof(EncryptedSpoolOptions.SpoolMaxBytes)),
+        Case(o => o.SpoolMaxEntries = 0, nameof(EncryptedSpoolOptions.SpoolMaxEntries)),
+        Case(o => o.DrainInterval = TimeSpan.Zero, nameof(EncryptedSpoolOptions.DrainInterval)),
+        Case(o => o.MaxDrainBackoff = TimeSpan.Zero, nameof(EncryptedSpoolOptions.MaxDrainBackoff)),
+        Case(o => o.ShutdownDrainTimeout = TimeSpan.Zero, nameof(EncryptedSpoolOptions.ShutdownDrainTimeout)),
+        Case(o => o.UnreadableRetryLimit = 0, nameof(EncryptedSpoolOptions.UnreadableRetryLimit)),
+    ];
 
-    private static Action<EncryptedSpoolOptions> Invalidate(Action<EncryptedSpoolOptions> invalidate) => invalidate;
+    private static object[] Case(Action<EncryptedSpoolOptions> invalidate, string optionName) => [invalidate, optionName];
 
     [Theory]
     [MemberData(nameof(InvalidOptionCases))]
