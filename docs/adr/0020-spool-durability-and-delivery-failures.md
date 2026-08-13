@@ -33,8 +33,9 @@ application running by losing audit silently. This ADR rejects every one of them
    ADR 0016 D3 does not let core assume its sink serializes to JSON, and promoting the check to
    core later is additive whereas removing it would be breaking.
 
-5. **Spool caps**, per issue #22 B5: at ≥ 50 % of cap the health check reports Unhealthy including
-   the overall status and logs ERROR. Already-spooled records are never dropped or rotated out.
+5. **Spool caps**, per issue #22 B5: at ≥ 50 % of cap the health check reports the configured
+   `SpoolWarnStatus` (default `Unhealthy`, overridable) including the overall status, and logs
+   ERROR. Already-spooled records are never dropped or rotated out.
 
 6. **At 100 % of cap the new record is dropped**, logged at Critical and counted — `WriteAsync`
    returns `AuditWriteResult.Dropped` (ADR 0018 D6) rather than throwing, so core neither counts it

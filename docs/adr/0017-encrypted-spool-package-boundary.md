@@ -38,10 +38,10 @@ weighed this during planning and chose one package.
    supported as before.
 
 3. **The package depends on no encryption implementation.** It defines a narrow port —
-   `IAuditPayloadEncryptor`: take the serialized payload plus its context, return an opaque
-   encrypted blob — and the host registers its implementation in `Program.cs`. The package never
-   sees a key, an algorithm or an envelope format, and it never acquires keys (advisory analysis
-   preserved in ADR 0019). Its own responsibilities are exactly: serialize → hand to
+   `IAuditPayloadEncryptor`: take the serialized payload — which already carries its context — and
+   return an opaque encrypted blob — and the host registers its implementation in `Program.cs`. The
+   package never sees a key, an algorithm or an envelope format, and it never acquires keys
+   (advisory analysis preserved in ADR 0019). Its own responsibilities are exactly: serialize → hand to
    the port → spool to disk → deliver to the configured endpoint (URL and producer credentials in
    configuration) → delete after 2xx.
 

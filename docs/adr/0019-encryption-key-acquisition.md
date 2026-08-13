@@ -23,8 +23,8 @@ private key destroys the archive rather than merely stopping audit, and app2 mus
 private key it has ever used.
 
 The producer must therefore obtain the public key, choose the right one, and keep working when
-app2 is unreachable. Analysis of the alternatives appears in this ADR's Rejected alternatives
-section below.
+app2 is unreachable. The Rejected alternatives section below weighs the four options considered
+against the decision below.
 
 ## Decision
 

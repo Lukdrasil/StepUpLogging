@@ -47,8 +47,8 @@ every consumer then agrees on by convention.
    A consumer following the README's own example and *also* calling a package's registration
    method would lose one sink without a word. `AddAuditLogging` now throws when an
    `IAuditEventSink` is already registered, naming both. The check belongs in core, where the
-   registration happens, so it holds in either call order and protects consumers who never touch
-   the second package.
+   registration happens, so it holds in either call order and protects consumers who never call
+   `AddEncryptedSpoolAuditSink`.
 
 6. **`IAuditEventSink.WriteAsync` returns `ValueTask<AuditWriteResult>`** — `Stored` or `Dropped`.
    Today the interface can express only "stored" (normal return) or "failed" (exception), and a
@@ -120,8 +120,9 @@ every consumer then agrees on by convention.
   then register — and the guard's message says so, because that is where the developer is standing
   when they hit it.
 - Decision 6 makes every existing sink implementation change signature. That is cheap now and
-  expensive later: ADR 0016 D3 means the package deliberately ships none, so the implementations in
-  existence are the ones consumers wrote, and 4.0.0 is the only release that can absorb this.
+  expensive later: ADR 0016 D3, before its ADR 0017 amendment, meant the package shipped none, so
+  the implementations in existence at the time of this decision are the ones consumers wrote, and
+  4.0.0 is the only release that can absorb this.
 - Decision 6's own hazard, named so it is designed against: a sink author can return `Stored`
   reflexively without thinking, which is the same class of silent wrong answer as the `"user"`
   default this ADR removes. The XML docs must say plainly that `Dropped` means *the record is gone*
