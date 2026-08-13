@@ -1,4 +1,4 @@
-# ADR 0008 — Categories the step-up must never raise
+# ADR 0021 — Categories the step-up must never raise
 
 - Status: Accepted
 - Date: 2026-07-10
