@@ -137,13 +137,13 @@ public static class StepUpLoggingExtensions
         ServiceLifetime sinkLifetime = ServiceLifetime.Scoped)
         where TSink : class, IAuditEventSink
     {
-        var existingSink = builder.Services.FirstOrDefault(sd => sd.ServiceType == typeof(IAuditEventSink));
-        if (existingSink is not null)
+        var existingSinkRegistration = builder.Services.FirstOrDefault(sd => sd.ServiceType == typeof(IAuditEventSink));
+        if (existingSinkRegistration is not null)
         {
-            var existingSinkName = existingSink.ImplementationType?.Name ?? "an existing IAuditEventSink";
+            var existingSinkName = existingSinkRegistration.ImplementationType?.Name ?? "an existing IAuditEventSink";
             throw new InvalidOperationException(
                 $"AddAuditLogging<{typeof(TSink).Name}> failed: {existingSinkName} is already registered as the " +
-                $"IAuditEventSink. AuditLogger<T> resolves a single sink, so registering a second one would " +
+                "IAuditEventSink. AuditLogger<T> resolves a single sink, so registering a second one would " +
                 "silently discard one of them. If this is a test substituting a sink Program.cs already " +
                 $"registered, call services.{nameof(ServiceCollectionDescriptorExtensions.RemoveAll)}<{nameof(IAuditEventSink)}>() before registering the test sink.");
         }

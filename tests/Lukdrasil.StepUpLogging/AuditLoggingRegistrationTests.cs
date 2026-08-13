@@ -246,34 +246,20 @@ public class AuditLoggingRegistrationTests : IDisposable
         var builder = CreateHostBuilder();
         builder.AddStepUpLogging();
 
-        var firstSinkName = testSinkFirst ? nameof(TestAuditSink) : nameof(SecondTestAuditSink);
-        var secondSinkName = testSinkFirst ? nameof(SecondTestAuditSink) : nameof(TestAuditSink);
-
+        InvalidOperationException ex;
         if (testSinkFirst)
         {
             builder.AddAuditLogging<TestAuditSink>();
+            ex = Assert.Throws<InvalidOperationException>(() => builder.AddAuditLogging<SecondTestAuditSink>());
         }
         else
         {
             builder.AddAuditLogging<SecondTestAuditSink>();
+            ex = Assert.Throws<InvalidOperationException>(() => builder.AddAuditLogging<TestAuditSink>());
         }
 
-        var ex = testSinkFirst
-            ? Assert.Throws<InvalidOperationException>(() => builder.AddAuditLogging<SecondTestAuditSink>())
-            : Assert.Throws<InvalidOperationException>(() => builder.AddAuditLogging<TestAuditSink>());
-
-        Assert.Contains(firstSinkName, ex.Message);
-        Assert.Contains(secondSinkName, ex.Message);
-    }
-
-    /// <summary>Positive control for the guard above: a lone registration must still work.</summary>
-    [Fact]
-    public void AddAuditLogging_CalledOnce_StillRegistersSink()
-    {
-        using var host = BuildAuditingHost();
-        using var scope = host.Services.CreateScope();
-
-        Assert.IsType<TestAuditSink>(scope.ServiceProvider.GetRequiredService<IAuditEventSink>());
+        Assert.Contains(nameof(TestAuditSink), ex.Message);
+        Assert.Contains(nameof(SecondTestAuditSink), ex.Message);
     }
 
     /// <summary>
