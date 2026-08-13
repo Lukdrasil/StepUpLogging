@@ -76,6 +76,7 @@ internal sealed class AuditLogger<T>(
 
         return auditEvent with
         {
+            EventId = Guid.CreateVersion7(),
             TimestampUtc = DateTimeOffset.UtcNow,
             TraceId = activity?.TraceId.ToString(),
             SpanId = activity?.SpanId.ToString(),

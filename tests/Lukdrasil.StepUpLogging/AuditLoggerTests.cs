@@ -236,6 +236,35 @@ public class AuditLoggerTests
     }
 
     [Fact]
+    public async Task AuditAsync_StampsAUuidV7EventId_PerCall()
+    {
+        var sink = new RecordingAuditSink();
+        using var harness = new Harness(sink);
+        var auditEvent = AuditEvent.Success("order.cancel", "user-42", "user");
+
+        await harness.AuditLogger.AuditAsync(auditEvent);
+        await harness.AuditLogger.AuditAsync(auditEvent);
+
+        // Version 7 rather than merely "a Guid": the receiver deduplicates on this value and sorts
+        // by it once a drained spool arrives out of order, and only a UUIDv7 is time-ordered.
+        Assert.All(sink.Written, written => Assert.Equal(7, written.EventId.Version));
+        Assert.NotEqual(sink.Written[0].EventId, sink.Written[1].EventId);
+    }
+
+    [Fact]
+    public async Task AuditAsync_OverwritesCallerSuppliedEventId()
+    {
+        var sink = new RecordingAuditSink();
+        using var harness = new Harness(sink);
+        var callerEventId = Guid.Parse("00000000-0000-0000-0000-0000000000ff");
+
+        await harness.AuditLogger.AuditAsync(
+            AuditEvent.Success("order.cancel", "user-42", "user") with { EventId = callerEventId });
+
+        Assert.NotEqual(callerEventId, Assert.Single(sink.Written).EventId);
+    }
+
+    [Fact]
     public async Task AuditAsync_TakesTraceAndSpanIds_FromCurrentActivity()
     {
         var sink = new RecordingAuditSink();
