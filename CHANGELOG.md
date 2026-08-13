@@ -8,6 +8,21 @@ Tags before 1.8.0 predate this file.
 
 ## [Unreleased]
 
+## [4.0.0] - 2026-08-13
+
+BREAKING. See MIGRATION.md for the four breaking changes and their restoration/migration steps.
+
+### Changed (breaking)
+- `AuditEvent.ActorType` is `required`; `Success`/`Failure`/`Denied` take it as a third positional parameter (`action, actorId, actorType`). The old two-argument factories are gone.
+- `AuditEvent.EventId` is now library-owned: stamped with a UUIDv7 in `AuditLogger.Enrich` on every call, overwriting any caller-set value.
+- `AddAuditLogging<TSink>()` now throws when an `IAuditEventSink` is already registered, naming both sink types, in either call order.
+- `IAuditEventSink.WriteAsync` now returns `ValueTask<AuditWriteResult>` (`Stored` or `Dropped`, no zero member) instead of a bare `ValueTask`. A `Dropped` write is counted on the new `audit_events_dropped_total` counter, skips the companion log, and leaves `audit_events_total` unchanged; an unrecognized result (including `default`) throws `InvalidOperationException` naming the sink.
+
+### Added
+- `AuditEvent.OldValues`/`NewValues` (`IReadOnlyDictionary<string, object?>?`, caller-supplied, unredacted — same category as `Data`).
+- `audit_events_dropped_total` counter under the `StepUpLogging.Audit` meter, joining the existing `audit_events_total`/`audit_write_failures_total`.
+- `EncryptedSpoolAuditSink`, registered via `AddEncryptedSpoolAuditSink` — spools audit records to disk write-ahead and drains them to a configured endpoint, encrypting each payload through the `IAuditPayloadEncryptor` port the host implements and supplies. Purely additive: nothing changes for a consumer who does not call it. Fixes #22.
+
 ## [3.5.0] - 2026-08-05
 
 Audit logging: the records that answer "who did what, to what, and with what outcome" get a path step-up gating can never drop. Nothing changes for consumers who do not call `AddAuditLogging`. No public API break.

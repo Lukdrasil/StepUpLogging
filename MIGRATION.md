@@ -1,3 +1,114 @@
+# Migrating to v4.0.0
+
+v4.0.0 is a **breaking** release. It bundles four breaking changes to the audit logging contract
+introduced in v3.5.0, plus two additive fields and a new opt-in sink. This guide covers each break
+with the exact code needed to migrate. If you have not adopted audit logging, none of this applies
+to you.
+
+## 1. `ActorType` is now `required`
+
+**What changed.** `AuditEvent.ActorType` defaulted to `"user"` when omitted. It is now `required`,
+and `Success`/`Failure`/`Denied` take it as a third positional parameter:
+`Success(action, actorId, actorType)`.
+
+**Why.** A default of `"user"` on an append-only record is a permanent, plausible-looking lie about
+who acted whenever the actor was actually a service, an API key, or anonymous. Making it required
+forces every call site to state the real actor kind once, at the only place that knows it.
+
+**Migrate:**
+
+```csharp
+// Before (v3.5.0)
+var evt = AuditEvent.Success("order.cancel", actorId);
+
+// After (v4.0.0)
+var evt = AuditEvent.Success("order.cancel", actorId, "user");
+```
+
+Read the argument order back at every migrated site — `action, actorId, actorType` is three
+strings in a row, and nothing but that order stops two of them being transposed.
+
+## 2. `EventId` is now library-owned
+
+**What changed.** `AuditEvent.EventId` is stamped with a UUIDv7 (`Guid.CreateVersion7()`) in
+`AuditLogger.Enrich` on every `AuditAsync` call, alongside `TimestampUtc`/`TraceId`/`SpanId`. A
+caller-set value is overwritten.
+
+**Why.** At-least-once delivery to a receiver (retries, spooling) can produce duplicates that only
+a producer-generated identifier lets the receiver deduplicate on.
+
+**Migrate.** None required — remove any code that set `EventId` on construction, since it now has
+no effect. If you relied on caller-controlled idempotency (a retried business operation producing
+the same `EventId`), that is no longer expressible: a caller-settable `EventId` would let the
+receiver silently discard a retried record as a duplicate, which is the same silent audit loss the
+library exists to prevent.
+
+## 3. `AddAuditLogging` throws on a second sink registration
+
+**What changed.** Calling `AddAuditLogging<TSink>()` twice with different sink types now throws,
+naming both sink types, in either call order. Previously the second call silently won via `Add`,
+and the first sink was never audited through.
+
+**Why.** A consumer following the README's own example and also calling a package's registration
+method (e.g. `AddEncryptedSpoolAuditSink`) would lose one sink without a word.
+
+**Migrate.** If your test host substitutes a sink in `ConfigureTestServices` while `Program.cs` has
+already registered one, remove the sink registered by `Program.cs` first:
+
+```csharp
+// Before (v3.5.0)
+services.AddAuditLogging<RecordingAuditSink>();
+
+// After (v4.0.0)
+services.RemoveAll<IAuditEventSink>();
+services.AddAuditLogging<RecordingAuditSink>();
+```
+
+## 4. `IAuditEventSink.WriteAsync` returns `AuditWriteResult`
+
+**What changed.** `WriteAsync` returned a bare `ValueTask`; it now returns
+`ValueTask<AuditWriteResult>`, an enum with `Stored` and `Dropped` (no zero member).
+
+**Why.** A sink that deliberately discards a record under back-pressure had no way to say so: the
+old contract could only express "stored" (normal return) or "failed" (exception), so a discarded
+record was still counted in `audit_events_total` and still wrote a companion log — the
+`rate(audit_events_total[1h]) == 0` alarm read healthy exactly while audit was being lost.
+
+**Migrate.** End every `WriteAsync` implementation with an explicit result. Do not return
+`default` — `AuditWriteResult` has no zero member by design, and `default` now throws
+`InvalidOperationException` naming your sink type:
+
+```csharp
+// Before (v3.5.0)
+public ValueTask WriteAsync(AuditEvent auditEvent)
+{
+    _store.Insert(auditEvent);
+    return ValueTask.CompletedTask;
+}
+
+// After (v4.0.0)
+public ValueTask<AuditWriteResult> WriteAsync(AuditEvent auditEvent)
+{
+    _store.Insert(auditEvent);
+    return ValueTask.FromResult(AuditWriteResult.Stored);
+}
+```
+
+If your sink intentionally discards a record (e.g. a full write-ahead spool), return
+`AuditWriteResult.Dropped` instead — this skips the companion log and moves
+`audit_events_dropped_total` rather than `audit_events_total`, keeping both counters honest.
+
+## Non-breaking additions in v4.0.0
+
+- **`OldValues`/`NewValues`** on `AuditEvent` (`IReadOnlyDictionary<string, object?>?`). Optional,
+  caller-supplied, and — like `Data` — never redacted.
+- **`EncryptedSpoolAuditSink`**, an opt-in sink registered via `AddEncryptedSpoolAuditSink`. It
+  spools audit records to disk write-ahead and drains them to a configured endpoint, encrypting
+  each payload through an `IAuditPayloadEncryptor` port your application implements and supplies.
+  Nothing changes if you do not call it.
+
+---
+
 # Migrating to v3.0.0
 
 v3.0.0 is a **breaking** release. It bundles five breaking behavior changes plus several
