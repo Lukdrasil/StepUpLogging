@@ -9,6 +9,8 @@ Audit trails are a compliance requirement for many applications — they answer 
 
 The decision to admit audit logging here is conditional on a boundary: the library remains "controls log volume — down via step-up, up for what must not be lost" and ships no retention policy, hash chaining, or query API. The moment audit grows any of those, it becomes a separate package. Without this boundary, every future request has no line to be measured against.
 
+> **Amended by ADR 0017 (2026-08-13):** this is the sentence issue #22 originally cited to justify a second package for the encrypted spooling sink. The developer's PLAN GATE decision supersedes it: the growth in question — retry, spooling, a health check — carries no crypto dependency once encryption moves entirely behind a port the consumer implements, so it does not cross the boundary this sentence describes. The sink ships inside this package. See ADR 0017 for the full analysis.
+
 ## Decision
 
 1. **Audit writes bypass Serilog entirely.** Call sites invoke `IAuditLogger<T>.AuditAsync()`, which calls `IAuditEventSink.WriteAsync()` directly. Serilog is not involved.
@@ -16,9 +18,11 @@ The decision to admit audit logging here is conditional on a boundary: the libra
 
 2. **Sink exceptions propagate to the call site unchanged.** No `FailureMode` configuration option, no silent retry, no "log and continue."
    - *Rationale:* Silent failure is worse than no audit. An audit trail that silently stops working (configured once, forgotten, audits missing for months) is worse than one never wired. A consumer who wants continue-on-failure writes `try/catch` in their own sink, where it is visible in review and tested explicitly. The library observes failures only long enough to count them, then rethrows. There is no retry or backoff; that belongs in the sink.
+   - > **Amended by ADR 0018 (2026-08-13):** the propagation guarantee stands unchanged, but "no log and continue" is superseded: `IAuditEventSink.WriteAsync` now returns `AuditWriteResult`, and a sink may return `Dropped` to say "I did not store this" without throwing. This is not silent — `Dropped` suppresses the companion log and moves its own counter (`audit_events_dropped_total`) instead of `audit_events_total` — but it is a sanctioned non-throwing outcome that this original wording did not anticipate. See ADR 0018 D6.
 
 3. **The package ships no `IAuditEventSink` implementation.** No default, no no-op, no test double, no sample in the package.
    - *Rationale:* A default mirror-to-log sink manufactures false confidence: audit "works", records appear in OTLP, and a year later the trail turns out to have seven-day retention in a backend with weak ACLs. That is worse than having no audit at all, because it was relied upon. A no-op sink silently swallows records, which is the same trap. Shipping a test double defeats the point of D18 (consumers write their own, suited to their needs). A code snippet in the README is sufficient.
+   - > **Amended by ADR 0017 (2026-08-13):** the package now ships `EncryptedSpoolAuditSink`, an explicit opt-in sink registered only by calling `AddEncryptedSpoolAuditSink`. This does not overrule the rationale above — it forbade a *default* sink that manufactures false confidence, and a no-op that silently swallows records. `EncryptedSpoolAuditSink` is neither: it is dead code until the consumer calls its registration method, and D4 below still holds — the registration call is the switch. See ADR 0017 D2.
 
 4. **Disabling audit means not calling `AddAuditLogging`.** There is no `Enabled` configuration flag.
    - *Rationale:* An `Audit:Enabled: false` setting leaves `IAuditLogger` injectable and silently no-op — the same false confidence as D10. Auditing is a compliance decision that belongs in code, not configuration: an ordinary `if` in `Program.cs` for environment-conditional auditing. Developers and reviewers see the decision explicitly; it is never buried in appsettings.
@@ -33,6 +37,7 @@ The decision to admit audit logging here is conditional on a boundary: the libra
 
 7. **Order: audit write first, companion log second.** The companion log is only invoked after the write succeeds.
    - *Rationale:* Audit-then-log preserves the invariant: "a companion log exists ⇒ an audit record exists." The converse (log-then-audit) would produce an immediate log asserting an action for which no audit record yet exists — and, since sink exceptions propagate, for which the business operation is aborted. The audit timestamp is stamped at entry, before the write, so sink latency does not affect it.
+   - > **Amended by ADR 0018 (2026-08-13):** "succeeds" is no longer the only non-throwing outcome. A `Dropped` write (ADR 0018 D6) also returns without throwing, but it is *not* followed by a companion log — only `Stored` is. The mechanism sentence above should be read as "the companion log is only invoked after a `Stored` write," which is what keeps the invariant "a companion log exists ⇒ an audit record exists" intact for a `Dropped` result too.
 
 8. **`AddAuditLogging<TSink>` requires `AddStepUpLogging`.**
    - *Rationale:* Client IP is derived by the **existing** `ExtractClientAddresses` policy (ADR 0008), honouring `StepUpLoggingOptions.TrustForwardedHeaders`. The dependency is structural — the `AuditLogger<T>` implementation takes `CompiledRedactionPatterns`, which only `AddStepUpLogging` registers — but it is *reported* at host start, in ADR 0007 parity: `AddAuditLogging` registers an options validation that runs under `ValidateOnStart`, so a host missing `AddStepUpLogging` refuses to start with a message naming both methods. Relying on the DI resolution error alone would let the app boot and serve traffic, failing only on the first audited operation — possibly hours later, with the requests that should have been audited already served. The check asks the service provider for `CompiledRedactionPatterns` at start rather than inspecting the service collection at registration time, so the two calls remain valid in either order.
@@ -42,6 +47,7 @@ The decision to admit audit logging here is conditional on a boundary: the libra
 
 - Audit records are written durably (or fail audibly) without flowing through Serilog, removing a class of silent failures but requiring consumers to own the sink implementation.
 - Exceptions during audit write propagate to the business call site, so audit failures are never hidden from error handling. Consumers retain full control over failure handling via their sink's `try/catch`.
+  > **Amended by ADR 0018 (2026-08-13):** this holds for every failure that throws — a `Dropped` write is a distinct, non-throwing outcome (ADR 0018 D6), reported instead through `audit_events_dropped_total` and never a companion log. It is not hidden either, but it does not surface via error handling — it surfaces via that counter.
 - The library provides neither a default sink nor a configuration flag for disabling audit; these omissions prevent false confidence and make compliance decisions explicit in code.
 - The redaction boundary is the *origin* of the value (library-supplied, client-supplied, or caller-supplied), not its data type. This clarifies the CLAUDE.md rule rather than carving an exception into it.
 - No `CancellationToken` closes a semantic trap: a caller reflexively passing `RequestAborted` would erase audit on disconnect, which is worse than being prevented from trying.
@@ -53,5 +59,7 @@ The decision to admit audit logging here is conditional on a boundary: the libra
 The library emits two counters under the meter `StepUpLogging.Audit`:
 - `audit_events_total{outcome}` — number of records written, tagged by outcome (Success, Failure, Denied, Unknown). Cardinality is 3 (or 4 with edge cases); never a free string.
 - `audit_write_failures_total` — number of writes for which the consumer's sink threw from `WriteAsync`; the exception is counted and rethrown unchanged. It counts failures *inside* the sink, so what the store did before the throw is the sink's own business.
+
+> **Amended by ADR 0018 (2026-08-13):** a third counter now exists — `audit_events_dropped_total`, incremented when a sink returns `AuditWriteResult.Dropped` (ADR 0018 D6). `audit_events_total` remains "records written" and is unaffected by a `Dropped` result. `rate(audit_events_total[1h]) == 0` remains the "audit stopped working" alarm; `audit_events_dropped_total > 0` is a second alarm in its own right. See ADR 0018 D7.
 
 Zero audit events over an observation window is itself an alarm that audit stopped working — alert on the rate of `audit_events_total`.
