@@ -35,18 +35,25 @@ internal sealed class SpoolWriter
     /// <c>HttpContext.RequestAborted</c>, which would let a disconnecting client erase its own
     /// audit trail (ADR 0016 D6).
     /// </summary>
-    public async Task WriteAsync(SpoolEnvelope envelope)
+    /// <returns>
+    /// The number of bytes the record now occupies in the spool, so a caller keeping the spool
+    /// within a cap does not have to re-read the directory to learn what its own write cost.
+    /// </returns>
+    public async Task<long> WriteAsync(SpoolEnvelope envelope)
     {
         var envelopePath = Path.Combine(_spoolDirectory, SpoolFile.NameFor(envelope));
         var temporaryPath = Path.ChangeExtension(envelopePath, SpoolFile.TemporaryExtension);
+        var contents = JsonSerializer.SerializeToUtf8Bytes(envelope);
 
-        await WriteDurablyAsync(temporaryPath, JsonSerializer.SerializeToUtf8Bytes(envelope));
+        await WriteDurablyAsync(temporaryPath, contents);
 
         // The rename is atomic on one volume, so a reader sees the record whole or not at all. The
         // directory entry itself is not fsynced — .NET has no portable API for that — so a power
         // loss right here can cost the rename, never the record's bytes (ADR 0020 D1): the next
         // start-up's recovery sweep re-attempts exactly this rename for a `.tmp` that survived.
         File.Move(temporaryPath, envelopePath);
+
+        return contents.Length;
     }
 
     private static async Task WriteDurablyAsync(string path, byte[] contents)

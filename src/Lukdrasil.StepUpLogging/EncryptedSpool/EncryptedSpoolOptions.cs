@@ -10,10 +10,13 @@ public sealed class EncryptedSpoolOptions
 {
     /// <summary>
     /// The directory the write-ahead spool keeps its records in, one file per record, each deleted
-    /// only once the audit endpoint has confirmed it stored it. Defaults to an
-    /// <c>audit-spool</c> folder under the application's base directory.
+    /// only once the audit endpoint has confirmed it stored it. There is no default, and it must be
+    /// storage that outlives the process — a mounted volume, never a path inside the deployment
+    /// artifact: a container's own filesystem is replaced on the next restart or rollout, and it
+    /// would take with it every record <c>WriteAsync</c> already reported durable to the business
+    /// call site.
     /// </summary>
-    public string SpoolDirectory { get; set; } = Path.Combine(AppContext.BaseDirectory, "audit-spool");
+    public string SpoolDirectory { get; set; } = string.Empty;
 
     /// <summary>
     /// The name of the module producing these audit records. It travels inside the encrypted
@@ -47,8 +50,9 @@ public sealed class EncryptedSpoolOptions
     /// <summary>
     /// The number of spooled records that may accumulate before new ones are dropped. Defaults to
     /// 100 000. Must be greater than zero. Reaching either this or <see cref="SpoolMaxBytes"/> is
-    /// enough. Unlike <see cref="SpoolMaxBytes"/> this one is never passed: the count is measured
-    /// before the write that would cross it.
+    /// enough. The count is measured before the write that would cross it, so unlike
+    /// <see cref="SpoolMaxBytes"/> this one is only ever passed by files a failed write left
+    /// behind.
     /// </summary>
     public int SpoolMaxEntries { get; set; } = 100_000;
 
@@ -58,4 +62,12 @@ public sealed class EncryptedSpoolOptions
     /// records, and taking the instance out of rotation is cheaper than that (ADR 0020 D5).
     /// </summary>
     public HealthStatus SpoolWarnStatus { get; set; } = HealthStatus.Unhealthy;
+
+    /// <summary>
+    /// The status the spool's health check reports once the spool is full and audit records are
+    /// being dropped. Separate from <see cref="SpoolWarnStatus"/> and Unhealthy by default: an
+    /// instance that is already losing audit records must not read as whatever milder status was
+    /// chosen for "the spool is filling up".
+    /// </summary>
+    public HealthStatus SpoolFullStatus { get; set; } = HealthStatus.Unhealthy;
 }

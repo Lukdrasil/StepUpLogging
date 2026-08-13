@@ -19,7 +19,7 @@ internal sealed class EncryptedSpoolAuditSink(
 {
     private readonly EncryptedSpoolOptions _options = options.Value;
     private readonly SpoolWriter _writer = new(options.Value.SpoolDirectory);
-    private readonly SpoolCapacity _capacity = new(options.Value);
+    private readonly SpoolUsageTracker _usage = new(new SpoolCapacity(options.Value));
 
     // A semaphore rather than a lock: the section it guards awaits the spool write, and no lock
     // can be held across an await.
@@ -32,6 +32,11 @@ internal sealed class EncryptedSpoolAuditSink(
     public async ValueTask<AuditWriteResult> WriteAsync(AuditEvent auditEvent)
     {
         var payload = SerializeWithinCap(auditEvent);
+
+        // Encrypting before the spool's cap is consulted costs a wasted port call for a record that
+        // then turns out to be dropped. The other order costs audit records: the verdict would be
+        // taken outside the gate, or the gate would be held across a consumer's port call, and a
+        // record dropped for room the drain worker freed a microsecond later is gone for good.
         var encryptedPayload = await encryptor.EncryptAsync(payload).ConfigureAwait(false);
         var envelope = new SpoolEnvelope
         {
@@ -47,7 +52,7 @@ internal sealed class EncryptedSpoolAuditSink(
         await _spoolGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            var usage = _capacity.Measure();
+            var usage = _usage.Read();
             ReportReachingWarnThreshold(usage);
 
             if (usage.IsFull)
@@ -55,7 +60,7 @@ internal sealed class EncryptedSpoolAuditSink(
                 return Drop(auditEvent, usage);
             }
 
-            await _writer.WriteAsync(envelope).ConfigureAwait(false);
+            _usage.Recorded(await WriteToSpoolAsync(envelope).ConfigureAwait(false));
             return AuditWriteResult.Stored;
         }
         finally
@@ -66,6 +71,21 @@ internal sealed class EncryptedSpoolAuditSink(
 
     /// <inheritdoc />
     public void Dispose() => _spoolGate.Dispose();
+
+    private async Task<long> WriteToSpoolAsync(SpoolEnvelope envelope)
+    {
+        try
+        {
+            return await _writer.WriteAsync(envelope).ConfigureAwait(false);
+        }
+        catch
+        {
+            // A write that failed part-way leaves a `.tmp` occupying the spool until the next
+            // start-up sweep, so what is on disk is no longer what this sink has added up.
+            _usage.Invalidate();
+            throw;
+        }
+    }
 
     /// <summary>
     /// Serializes the record before anything else touches it, so a value that cannot be written or
@@ -129,5 +149,5 @@ internal static class EncryptedSpoolMetrics
     internal static readonly Counter<long> RejectedFullCounter = AuditMetrics.Meter.CreateCounter<long>(
         "audit_spool_rejected_full_total",
         "count",
-        "Number of audit records dropped because the spool was at its cap");
+        "Number of audit records dropped because the spool was at its cap; untagged, as the outcome of each dropped record is already on audit_events_dropped_total");
 }

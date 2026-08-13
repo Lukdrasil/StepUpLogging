@@ -21,9 +21,11 @@ public class EncryptedSpoolAuditSinkTests
         new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     /// <summary>
-    /// The record and the payload bytes the sink is contracted to hand the port for it — every
-    /// field populated, so a change to the payload shape (a renamed field, a dropped one, a
-    /// different order, a lost <c>moduleName</c>/<c>version</c>) has to show up here, in the diff.
+    /// The record and the payload bytes the sink is contracted to hand the port for it, so a change
+    /// to the payload shape (a renamed field, a dropped one, a different order, a lost
+    /// <c>moduleName</c>/<c>version</c>) has to show up here, in the diff. One dictionary key is
+    /// mixed-case and one field is left null on purpose: caller-supplied keys travel verbatim and
+    /// nulls are written out, and neither survives a serializer set to rename keys or skip nulls.
     /// </summary>
     private static AuditEvent GoldenAuditEvent() => new()
     {
@@ -32,11 +34,10 @@ public class EncryptedSpoolAuditSinkTests
         ActorType = "user",
         Outcome = AuditOutcome.Denied,
         OnBehalfOfId = "user-7",
-        TenantId = "tenant-1",
         TargetType = "order",
         TargetId = "order-9",
         Reason = "insufficient rights",
-        Data = new Dictionary<string, object?> { ["attempt"] = 2 },
+        Data = new Dictionary<string, object?> { ["attempt"] = 2, ["OrderId"] = "9fa1" },
         OldValues = new Dictionary<string, object?> { ["status"] = "open" },
         NewValues = new Dictionary<string, object?> { ["status"] = "open" },
         EventId = new Guid("0198f0c1-1111-7222-8333-444455556666"),
@@ -49,7 +50,7 @@ public class EncryptedSpoolAuditSinkTests
 
     private const string GoldenPayloadJson =
         """
-        {"moduleName":"orders-api","version":"4.0.0","auditEvent":{"action":"order.cancel","actorId":"user-42","actorType":"user","outcome":2,"onBehalfOfId":"user-7","tenantId":"tenant-1","targetType":"order","targetId":"order-9","reason":"insufficient rights","data":{"attempt":2},"oldValues":{"status":"open"},"newValues":{"status":"open"},"eventId":"0198f0c1-1111-7222-8333-444455556666","timestampUtc":"2026-08-13T10:11:12.1234567+00:00","traceId":"4bf92f3577b34da6a3ce929d0e0e4736","spanId":"00f067aa0ba902b7","sourceIp":"198.51.100.7","userAgent":"curl/8.7.1"}}
+        {"moduleName":"orders-api","version":"4.0.0","auditEvent":{"action":"order.cancel","actorId":"user-42","actorType":"user","outcome":2,"onBehalfOfId":"user-7","tenantId":null,"targetType":"order","targetId":"order-9","reason":"insufficient rights","data":{"attempt":2,"OrderId":"9fa1"},"oldValues":{"status":"open"},"newValues":{"status":"open"},"eventId":"0198f0c1-1111-7222-8333-444455556666","timestampUtc":"2026-08-13T10:11:12.1234567+00:00","traceId":"4bf92f3577b34da6a3ce929d0e0e4736","spanId":"00f067aa0ba902b7","sourceIp":"198.51.100.7","userAgent":"curl/8.7.1"}}
         """;
 
     /// <summary>Records what the sink handed the port, so the payload can be asserted on directly.</summary>
@@ -158,6 +159,10 @@ public class EncryptedSpoolAuditSinkTests
             TimestampUtc = DateTimeOffset.UtcNow
         };
 
+    /// <summary>The envelope the sink writes for <paramref name="auditEvent"/>, for tests that need its file name.</summary>
+    private static SpoolEnvelope EnvelopeFor(AuditEvent auditEvent) =>
+        new() { EventId = auditEvent.EventId, CreatedUtc = auditEvent.TimestampUtc, Payload = [] };
+
     private static int SpooledRecordCount(TempSpoolDirectory spool) =>
         Directory.GetFiles(spool.FullPath, "*.env").Length;
 
@@ -188,6 +193,8 @@ public class EncryptedSpoolAuditSinkTests
         Assert.Equal(auditEvent.EventId, entry.Envelope!.EventId);
         Assert.Equal(auditEvent.TimestampUtc, entry.Envelope.CreatedUtc);
 
+        // What a receiver gets back for every field is B08's round-trip test, once a drained record
+        // is what it reconstructs from; here the golden payload above pins the serialized shape.
         var payload = JsonSerializer.Deserialize<SpoolPayload>(encryptor.Decrypt(entry.Envelope.Payload), PayloadJsonOptions)!;
         Assert.Equal("orders-api", payload.ModuleName);
         Assert.Equal("4.0.0", payload.Version);
@@ -267,6 +274,101 @@ public class EncryptedSpoolAuditSinkTests
         Assert.Equal(AuditWriteResult.Stored, await sink.WriteAsync(SpoolableEvent()));
 
         Assert.Equal(expectedStatus, (await healthCheck.CheckHealthAsync(new HealthCheckContext(), TestContext.Current.CancellationToken)).Status);
+    }
+
+    [Fact]
+    public async Task CheckHealthAsync_SpoolAtItsCap_ReportsTheFullStatusRatherThanTheMilderWarnStatus()
+    {
+        using var spool = new TempSpoolDirectory();
+        var options = OptionsFor(spool, options =>
+        {
+            options.SpoolMaxEntries = 2;
+            options.SpoolWarnStatus = HealthStatus.Degraded;
+        });
+        using var sink = CreateSink(options, new FakeAuditPayloadEncryptor());
+        var healthCheck = new SpoolCapHealthCheck(Options.Create(options));
+
+        await sink.WriteAsync(SpoolableEvent());
+        Assert.Equal(HealthStatus.Degraded, (await healthCheck.CheckHealthAsync(new HealthCheckContext(), TestContext.Current.CancellationToken)).Status);
+
+        await sink.WriteAsync(SpoolableEvent());
+
+        // An instance that is already losing audit records must not read as the milder status an
+        // operator chose for "the spool is filling up".
+        Assert.Equal(HealthStatus.Unhealthy, (await healthCheck.CheckHealthAsync(new HealthCheckContext(), TestContext.Current.CancellationToken)).Status);
+    }
+
+    [Fact]
+    public async Task CheckHealthAsync_CancelledProbe_StopsInsteadOfScanningTheSpool()
+    {
+        using var spool = new TempSpoolDirectory();
+        var healthCheck = new SpoolCapHealthCheck(Options.Create(OptionsFor(spool)));
+        using var cancelled = new CancellationTokenSource();
+        await cancelled.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            async () => await healthCheck.CheckHealthAsync(new HealthCheckContext(), cancelled.Token));
+    }
+
+    [Fact]
+    public async Task WriteAsync_TemporaryFileLeftBehindInTheSpool_CountsAgainstTheCap()
+    {
+        using var spool = new TempSpoolDirectory();
+        using var sink = CreateSink(OptionsFor(spool, options => options.SpoolMaxEntries = 1), new FakeAuditPayloadEncryptor());
+
+        // Bytes a failed or interrupted write left behind occupy the spool exactly as a record
+        // does, and nothing clears them before the next start-up.
+        File.WriteAllText(Path.Combine(spool.FullPath, "20260813T1200000000000Z-orphan.tmp"), "{}");
+
+        Assert.Equal(AuditWriteResult.Dropped, await sink.WriteAsync(SpoolableEvent()));
+    }
+
+    [Fact]
+    public async Task WriteAsync_AfterAWriteFailed_CountsWhatTheFailureLeftInTheSpool()
+    {
+        using var spool = new TempSpoolDirectory();
+        using var sink = CreateSink(OptionsFor(spool, options => options.SpoolMaxEntries = 2), new FakeAuditPayloadEncryptor());
+        await sink.WriteAsync(SpoolableEvent());
+        var doomed = SpoolableEvent();
+        var temporaryPath = Path.ChangeExtension(
+            Path.Combine(spool.FullPath, SpoolFile.NameFor(EnvelopeFor(doomed))),
+            SpoolFile.TemporaryExtension);
+
+        using (new FileStream(temporaryPath, FileMode.Create, FileAccess.Write, FileShare.None))
+        {
+            await Assert.ThrowsAnyAsync<IOException>(async () => await sink.WriteAsync(doomed));
+        }
+
+        // The failure left a second file in the spool, which fills it: a sink that kept adding up
+        // its own successful writes would still believe there is room for one more.
+        Assert.Equal(AuditWriteResult.Dropped, await sink.WriteAsync(SpoolableEvent()));
+    }
+
+    [Fact]
+    public async Task WriteAsync_AfterTheDrainWorkerEmptiedAFullSpool_StoresAgainInsteadOfTrustingTheOlderVerdict()
+    {
+        using var spool = new TempSpoolDirectory();
+        using var sink = CreateSink(OptionsFor(spool, options => options.SpoolMaxEntries = 3), new FakeAuditPayloadEncryptor());
+        for (var i = 0; i < 3; i++)
+        {
+            await sink.WriteAsync(SpoolableEvent());
+        }
+
+        Assert.Equal(AuditWriteResult.Dropped, await sink.WriteAsync(SpoolableEvent()));
+        foreach (var delivered in Directory.GetFiles(spool.FullPath))
+        {
+            File.Delete(delivered);
+        }
+
+        Assert.Equal(AuditWriteResult.Stored, await sink.WriteAsync(SpoolableEvent()));
+    }
+
+    [Fact]
+    public void SpoolDirectory_HasNoDefault_SoItCannotSilentlyLandInsideTheDeployment()
+    {
+        // A path under the deployment folder is the container's ephemeral layer: a restart or a
+        // redeploy would destroy records WriteAsync already reported durable.
+        Assert.Empty(new EncryptedSpoolOptions().SpoolDirectory);
     }
 
     [Fact]

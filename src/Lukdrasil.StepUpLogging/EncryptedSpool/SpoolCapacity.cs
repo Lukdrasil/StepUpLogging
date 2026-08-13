@@ -17,37 +17,83 @@ internal readonly record struct SpoolUsage(long Bytes, int Records, double FillF
 }
 
 /// <summary>
-/// Measures the spool directory against the caps configured for it. Only complete records count:
-/// a <c>.tmp</c> file is a write in flight, and the writer that owns it is holding it for the
-/// moment it takes to fsync and rename.
+/// Measures the spool directory against the caps configured for it.
 /// </summary>
 internal sealed class SpoolCapacity(EncryptedSpoolOptions options)
 {
     /// <summary>Reads what the spool directory holds right now.</summary>
     public SpoolUsage Measure()
     {
-        // Counted off the disk on every call rather than tracked in memory: the drain worker and a
-        // restart's recovery sweep add and remove spool files without telling anyone, so an
-        // in-process counter would drift and end up rejecting writes into a spool that has room.
         var directory = new DirectoryInfo(options.SpoolDirectory);
         if (!directory.Exists)
         {
-            return new SpoolUsage(Bytes: 0, Records: 0, FillFraction: 0);
+            return Usage(bytes: 0, records: 0);
         }
 
         long bytes = 0;
         var records = 0;
-        foreach (var file in directory.EnumerateFiles($"*{SpoolFile.EnvelopeExtension}"))
+
+        // Every file here occupies the spool, a `.tmp` included: a write that failed after creating
+        // one leaves it behind until the next start-up sweep, and bytes nothing counts are bytes the
+        // cap cannot bound.
+        foreach (var file in directory.EnumerateFiles())
         {
             bytes += file.Length;
             records++;
         }
 
-        // Whichever cap is closest decides: a spool of many tiny records fills on the record count
-        // long before the byte budget, and one of few large records the other way round.
-        return new SpoolUsage(
-            bytes,
-            records,
-            Math.Max((double)bytes / options.SpoolMaxBytes, (double)records / options.SpoolMaxEntries));
+        return Usage(bytes, records);
     }
+
+    /// <summary>The usage <paramref name="usage"/> becomes once one more record of <paramref name="recordBytes"/> is spooled.</summary>
+    public SpoolUsage Grown(SpoolUsage usage, long recordBytes) => Usage(usage.Bytes + recordBytes, usage.Records + 1);
+
+    // Whichever cap is closest decides: a spool of many tiny records fills on the record count long
+    // before the byte budget, and one of few large records the other way round.
+    private SpoolUsage Usage(long bytes, int records) =>
+        new(bytes, records, Math.Max((double)bytes / options.SpoolMaxBytes, (double)records / options.SpoolMaxEntries));
+}
+
+/// <summary>
+/// The spool's fill level as the write path sees it: the disk stays the source of truth, but
+/// re-reading the whole directory on every audit write would put a scan proportional to the spool's
+/// depth on the business path — tens of milliseconds once a stalled receiver has let it grow.
+/// </summary>
+/// <remarks>
+/// Not thread-safe: the sink reads and updates it under the gate that serializes its writes.
+/// </remarks>
+internal sealed class SpoolUsageTracker(SpoolCapacity capacity)
+{
+    private SpoolUsage? _addedUp;
+
+    /// <summary>
+    /// The current usage, exact wherever being wrong would cost a record. Records only ever leave
+    /// the spool behind this tracker's back — the drain worker deletes them once delivered — so an
+    /// added-up value is only ever too high, never too low: it can report the spool full early, but
+    /// never late. Early is what would drop a record for room that already exists, so that one
+    /// verdict is confirmed against the disk before it is returned.
+    /// </summary>
+    public SpoolUsage Read()
+    {
+        var usage = _addedUp ?? capacity.Measure();
+        if (usage.IsFull)
+        {
+            usage = capacity.Measure();
+        }
+
+        _addedUp = usage;
+        return usage;
+    }
+
+    /// <summary>Adds a record of <paramref name="recordBytes"/> that reached the spool.</summary>
+    public void Recorded(long recordBytes)
+    {
+        if (_addedUp is { } usage)
+        {
+            _addedUp = capacity.Grown(usage, recordBytes);
+        }
+    }
+
+    /// <summary>Drops what was added up, so the next read comes from the disk again.</summary>
+    public void Invalidate() => _addedUp = null;
 }
