@@ -14,14 +14,5 @@ internal sealed class TempSpoolDirectory : IDisposable
 
     public string FullPath { get; }
 
-    public void Dispose()
-    {
-        try
-        {
-            Directory.Delete(FullPath, recursive: true);
-        }
-        catch (DirectoryNotFoundException)
-        {
-        }
-    }
+    public void Dispose() => Directory.Delete(FullPath, recursive: true);
 }

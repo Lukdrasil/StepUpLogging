@@ -39,7 +39,7 @@ public class SpoolCrashRestartTests
     public async Task Restart_AfterACrashMidWrite_DeletesTheOrphanedTemporaryFileAndKeepsEverySpooledRecord()
     {
         using var spool = new TempSpoolDirectory();
-        var spooled = new[] { EnvelopeCreatedAt(Noon), EnvelopeCreatedAt(Noon.AddSeconds(1)) };
+        var spooled = new[] { SpoolEnvelopes.CreatedAt(Noon), SpoolEnvelopes.CreatedAt(Noon.AddSeconds(1)) };
         var crashedWriter = new SpoolWriter(spool.FullPath);
         foreach (var envelope in spooled)
         {
@@ -68,11 +68,4 @@ public class SpoolCrashRestartTests
 
         Assert.Equal(GoldenSpoolEnvelope.FileName, Path.GetFileName(Assert.Single(Directory.GetFiles(spoolDirectory))));
     }
-
-    private static SpoolEnvelope EnvelopeCreatedAt(DateTimeOffset createdUtc) => new()
-    {
-        EventId = Guid.CreateVersion7(createdUtc),
-        CreatedUtc = createdUtc,
-        Payload = [0x2a]
-    };
 }

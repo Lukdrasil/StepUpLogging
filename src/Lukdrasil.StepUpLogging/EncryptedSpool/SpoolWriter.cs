@@ -37,6 +37,10 @@ internal sealed class SpoolWriter
         var temporaryPath = Path.ChangeExtension(envelopePath, SpoolFile.TemporaryExtension);
 
         await WriteDurablyAsync(temporaryPath, JsonSerializer.SerializeToUtf8Bytes(envelope));
+
+        // The rename is atomic on one volume, so a reader sees the record whole or not at all. The
+        // directory entry itself is not fsynced — .NET has no portable API for that — so a power
+        // loss right here can cost the rename, never the record's bytes (ADR 0020 D1).
         File.Move(temporaryPath, envelopePath);
     }
 

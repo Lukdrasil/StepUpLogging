@@ -40,9 +40,9 @@ public class SpoolFormatTests
         using var spool = new TempSpoolDirectory();
         var writer = new SpoolWriter(spool.FullPath);
 
-        await writer.WriteAsync(EnvelopeCreatedAt(Noon.AddSeconds(30)));
-        await writer.WriteAsync(EnvelopeCreatedAt(Noon));
-        await writer.WriteAsync(EnvelopeCreatedAt(Noon.AddTicks(1)));
+        await writer.WriteAsync(SpoolEnvelopes.CreatedAt(Noon.AddSeconds(30)));
+        await writer.WriteAsync(SpoolEnvelopes.CreatedAt(Noon));
+        await writer.WriteAsync(SpoolEnvelopes.CreatedAt(Noon.AddTicks(1)));
 
         var entries = new SpoolReader(spool.FullPath).ReadOldestFirst().ToList();
 
@@ -56,8 +56,8 @@ public class SpoolFormatTests
     {
         using var spool = new TempSpoolDirectory();
         var writer = new SpoolWriter(spool.FullPath);
-        var first = EnvelopeCreatedAt(Noon);
-        var second = EnvelopeCreatedAt(Noon);
+        var first = SpoolEnvelopes.CreatedAt(Noon);
+        var second = SpoolEnvelopes.CreatedAt(Noon);
 
         await writer.WriteAsync(first);
         await writer.WriteAsync(second);
@@ -90,11 +90,4 @@ public class SpoolFormatTests
 
         Assert.Empty(reader.ReadOldestFirst());
     }
-
-    private static SpoolEnvelope EnvelopeCreatedAt(DateTimeOffset createdUtc) => new()
-    {
-        EventId = Guid.CreateVersion7(createdUtc),
-        CreatedUtc = createdUtc,
-        Payload = [0x2a]
-    };
 }
