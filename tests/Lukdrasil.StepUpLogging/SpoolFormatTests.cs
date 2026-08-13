@@ -140,7 +140,7 @@ public class SpoolFormatTests
     }
 
     [Fact]
-    public async Task ReadOldestFirst_AFileIsLockedWhenOpened_SurfacesAsCorruptAndEnumerationContinues()
+    public async Task ReadOldestFirst_AFileIsLockedWhenOpened_SurfacesAsUnreadableAndEnumerationContinues()
     {
         using var spool = new TempSpoolDirectory();
         var writer = new SpoolWriter(spool.FullPath);
@@ -157,12 +157,13 @@ public class SpoolFormatTests
         Assert.Equal(first.EventId, entries.Current.Envelope!.EventId);
 
         // The file exists but a read fault other than "vanished" (here, an exclusive lock held
-        // by another process) still leaves it on disk: it must surface as corrupt, not be
-        // silently dropped, so B08 can dead-letter it.
+        // by another process) still leaves it on disk: it must surface as unreadable, not
+        // corrupt and not silently dropped, so B08 retries it instead of dead-lettering it.
         using (new FileStream(lockedPath, FileMode.Open, FileAccess.Read, FileShare.None))
         {
             Assert.True(entries.MoveNext());
-            Assert.True(entries.Current.IsCorrupt);
+            Assert.True(entries.Current.IsUnreadable);
+            Assert.False(entries.Current.IsCorrupt);
             Assert.Equal(lockedPath, entries.Current.FilePath);
         }
 

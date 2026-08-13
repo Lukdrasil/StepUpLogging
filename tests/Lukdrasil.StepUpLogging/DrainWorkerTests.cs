@@ -231,8 +231,9 @@ public class DrainWorkerTests
 
     [Theory]
     [InlineData(HttpStatusCode.BadRequest)]
-    [InlineData(HttpStatusCode.NotFound)]
+    [InlineData(HttpStatusCode.Conflict)]
     [InlineData(HttpStatusCode.RequestEntityTooLarge)]
+    [InlineData(HttpStatusCode.UnsupportedMediaType)]
     [InlineData(HttpStatusCode.UnprocessableEntity)]
     public async Task DrainWorker_PermanentStatusCode_DeadLettersImmediately_LogsCritical_HealthUnhealthy_QueueContinues(
         HttpStatusCode permanentRejection)
@@ -272,6 +273,33 @@ public class DrainWorkerTests
         Assert.Equal(HealthStatus.Unhealthy, await HealthOf(harness));
     }
 
+    [Fact]
+    public async Task DrainWorker_SpoolFileIsLockedWhenRead_LeavesItSpooledForRetryInsteadOfDeadLettering()
+    {
+        using var harness = new DrainHarness(FakeAuditReceiver.Responding(HttpStatusCode.OK));
+        var locked = await harness.SpoolAsync(AuditedOperation(at: Noon));
+        var lockedFileName = harness.SpooledFileNames()[0];
+        var lockedPath = Path.Combine(harness.SpoolOptions.SpoolDirectory, lockedFileName);
+        using var meter = new AuditMeterTotals();
+
+        // A sharing violation is not a defect in the record — unlike malformed JSON, the same file
+        // read a moment later succeeds, so it must stay spooled rather than be dead-lettered.
+        using (new FileStream(lockedPath, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+        }
+
+        Assert.Empty(harness.Receiver.Received);
+        Assert.Equal([lockedFileName], harness.SpooledFileNames());
+        Assert.Empty(harness.DeadLetteredFileNames());
+        Assert.Equal(1, meter.Total("audit_spool_drain_failures_total"));
+
+        await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal([locked.EventId], harness.Receiver.Received.Select(envelope => envelope.EventId));
+        Assert.Empty(harness.SpooledFileNames());
+    }
+
     /// <summary>The receiver behaviours ADR 0020 D7 calls transient: retry, never dead-letter.</summary>
     private static FakeAuditReceiver TransientlyFailing(string failure) => failure switch
     {
@@ -279,6 +307,15 @@ public class DrainWorkerTests
         "503" => FakeAuditReceiver.Responding(HttpStatusCode.ServiceUnavailable),
         "408" => FakeAuditReceiver.Responding(HttpStatusCode.RequestTimeout),
         "429" => FakeAuditReceiver.Responding(HttpStatusCode.TooManyRequests),
+        // Not a defect in the record: an expired or misconfigured credential (401/403), or a
+        // receiver mid-rollout that does not yet recognise the route (404). Dead-lettering these
+        // would walk the whole spool at machine speed for the duration of an outage that fixes
+        // itself (ADR 0020 D7).
+        "401" => FakeAuditReceiver.Responding(HttpStatusCode.Unauthorized),
+        "404" => FakeAuditReceiver.Responding(HttpStatusCode.NotFound),
+        // A redirect the worker must see as itself, not follow: AllowAutoRedirect on the named
+        // client would rewrite this POST into a body-less GET (B09 hand-off).
+        "302" => FakeAuditReceiver.Responding(HttpStatusCode.Redirect),
         "network-failure" => FakeAuditReceiver.Failing(new HttpRequestException("connection refused")),
         "timeout" => FakeAuditReceiver.Failing(new TaskCanceledException("the request timed out", new TimeoutException())),
         _ => throw new ArgumentOutOfRangeException(nameof(failure), failure, "unknown transient failure")
@@ -289,6 +326,9 @@ public class DrainWorkerTests
     [InlineData("503")]
     [InlineData("408")]
     [InlineData("429")]
+    [InlineData("401")]
+    [InlineData("404")]
+    [InlineData("302")]
     [InlineData("network-failure")]
     [InlineData("timeout")]
     public async Task DrainWorker_TransientStatusCodeOrNetworkFailureOrTimeout_Retries(string transientFailure)
@@ -359,6 +399,7 @@ public class DrainWorkerTests
     }
 
     [Theory]
+    [InlineData(0, 5)]
     [InlineData(1, 10)]
     [InlineData(2, 20)]
     [InlineData(3, 30)]
@@ -372,6 +413,22 @@ public class DrainWorkerTests
         };
 
         Assert.Equal(TimeSpan.FromSeconds(expectedSeconds), DrainWorker.RetryDelayFor(consecutiveFailures, options));
+    }
+
+    [Fact]
+    public void DrainWorker_RetryDelay_HugeConsecutiveFailuresWithADrainIntervalThatWouldOverflowByMultiplyingFirst_ClampsToTheCapWithoutThrowing()
+    {
+        // DrainInterval * 2^consecutiveFailures overflows TimeSpan's range for a legal configuration
+        // (a 20-minute interval, ~2.5h of consecutive failures) long before consecutiveFailures gets
+        // anywhere near where that would be surprising. The cap must be applied without ever forming
+        // that intermediate value.
+        var options = new EncryptedSpoolOptions
+        {
+            DrainInterval = TimeSpan.FromMinutes(20),
+            MaxDrainBackoff = TimeSpan.FromMinutes(5)
+        };
+
+        Assert.Equal(TimeSpan.FromMinutes(5), DrainWorker.RetryDelayFor(int.MaxValue, options));
     }
 
     [Fact]
@@ -440,6 +497,35 @@ public class DrainWorkerTests
     }
 
     [Fact]
+    public async Task DrainWorker_Running_AfterAFailure_WaitsTheBackedOffDelayNotJustTheDrainInterval()
+    {
+        // A pure-function test of RetryDelayFor alone would still pass if the running loop ignored
+        // it and always waited a plain DrainInterval — this drives the loop itself and pins the one
+        // clock advance that must not be enough.
+        using var harness = new DrainHarness(
+            FakeAuditReceiver.Responding(HttpStatusCode.ServiceUnavailable, HttpStatusCode.OK),
+            options =>
+            {
+                options.DrainInterval = TimeSpan.FromSeconds(5);
+                options.MaxDrainBackoff = TimeSpan.FromMinutes(5);
+            });
+        await harness.SpoolAsync(AuditedOperation(at: Noon));
+        await harness.Worker.StartAsync(TestContext.Current.CancellationToken);
+        await Until(() => harness.Receiver.Received.Count == 1);
+
+        // One failure backs the wait off to DrainInterval * 2 = 10s: one DrainInterval of clock is
+        // not enough to trigger the retry.
+        harness.Time.Advance(harness.SpoolOptions.DrainInterval);
+        await Task.Delay(20, TestContext.Current.CancellationToken);
+        Assert.Equal(1, harness.Receiver.Received.Count);
+
+        harness.Time.Advance(harness.SpoolOptions.DrainInterval);
+        await Until(() => harness.Receiver.Received.Count == 2);
+
+        await harness.Worker.StopAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
     public async Task DrainWorker_HostStopping_DrainsWhatIsStillSpooledBeforeItGoes()
     {
         using var harness = new DrainHarness(FakeAuditReceiver.Responding(HttpStatusCode.OK));
@@ -486,11 +572,16 @@ public class DrainWorkerTests
             ? Task.FromException<HttpResponseMessage>(new InvalidOperationException("something no delivery rule covers"))
             : Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK))));
         await harness.SpoolAsync(AuditedOperation(at: Noon));
+        using var meter = new AuditMeterTotals();
 
         await harness.Worker.StartAsync(TestContext.Current.CancellationToken);
         await Until(() => harness.SpooledFileNames().Count == 0, harness.Time, harness.SpoolOptions.DrainInterval);
 
         Assert.NotEmpty(harness.Logger.MessagesAt(LogLevel.Error));
+
+        // Not just a log line: a swallowed cycle failure must move a counter too, so a loop stuck
+        // failing every cycle is something an alert can catch without matching log strings.
+        Assert.True(meter.Total("audit_spool_drain_failures_total") >= 1);
         await harness.Worker.StopAsync(TestContext.Current.CancellationToken);
     }
 }

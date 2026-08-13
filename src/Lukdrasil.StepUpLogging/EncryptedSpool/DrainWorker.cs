@@ -24,6 +24,11 @@ namespace Lukdrasil.StepUpLogging.Audit.EncryptedSpool;
 /// <see cref="HttpClientName"/>. The worker sends what that client is set up to send and never sees
 /// a credential, exactly as it never sees a key: the record's payload is opaque to it.
 /// </para>
+/// <para>
+/// <b>That client must be configured with <c>AllowAutoRedirect = false</c>.</b> A redirect followed
+/// automatically turns this POST into a body-less GET before the worker ever sees the 3xx, and a 2xx
+/// on that GET would read as delivery of a record that was never sent (B09 hand-off).
+/// </para>
 /// </remarks>
 internal sealed class DrainWorker(
     IOptions<EncryptedSpoolOptions> options,
@@ -90,6 +95,9 @@ internal sealed class DrainWorker(
             // Anything the delivery contract does not describe — a spool file that cannot be moved,
             // a fault inside the client's own pipeline. Out of ExecuteAsync it would end the worker
             // and stop the host with it, taking the application down over an audit delivery fault.
+            // Counted on the same instrument as a per-record delivery failure, so a cycle stuck
+            // failing this way is visible to alerting rather than only to someone reading logs.
+            EncryptedSpoolMetrics.DrainFailureCounter.Add(1);
             logger.LogError(
                 ex,
                 "The audit drain cycle over {SpoolDirectory} failed. The records it did not deliver stay spooled, and the next cycle picks them up.",
@@ -110,8 +118,17 @@ internal sealed class DrainWorker(
 
             if (entry.Envelope is not { } envelope)
             {
-                DeadLetter(entry.FilePath, "the spool file could not be read as an audit envelope");
-                continue;
+                if (entry.IsCorrupt)
+                {
+                    DeadLetter(entry.FilePath, "the spool file could not be parsed as an audit envelope");
+                    continue;
+                }
+
+                // A sharing violation or permission fault, not a bad record: leave it spooled and
+                // stop here exactly as a transient delivery failure would, so a lock that clears
+                // gets retried instead of losing the record to dead-letter.
+                ReportUndelivered(entry.FilePath, "the spool file could not be read");
+                return;
             }
 
             var attempt = await DeliverAsync(client, envelope, cancellationToken).ConfigureAwait(false);
@@ -147,17 +164,27 @@ internal sealed class DrainWorker(
     /// <summary>How long to wait before the next attempt after <paramref name="consecutiveFailures"/> failed ones.</summary>
     internal static TimeSpan RetryDelayFor(int consecutiveFailures, EncryptedSpoolOptions options)
     {
-        // Clamped, because the doubling is unbounded while an outage is not: 2^31 drain intervals
-        // is not a TimeSpan anyone can express, and every value past the cap means the same thing.
-        var backoff = options.DrainInterval * Math.Pow(2, Math.Min(consecutiveFailures, 30));
-        return backoff < options.MaxDrainBackoff ? backoff : options.MaxDrainBackoff;
+        var delay = options.DrainInterval < options.MaxDrainBackoff ? options.DrainInterval : options.MaxDrainBackoff;
+
+        // Doubled one step at a time instead of DrainInterval * 2^consecutiveFailures: that
+        // multiplication overflows TimeSpan's range for a legal DrainInterval well before
+        // consecutiveFailures reaches a number an outage would plausibly produce. Stepping instead
+        // means every intermediate value stays inside range, and the loop itself exits as soon as
+        // the cap is reached, however large consecutiveFailures is.
+        for (var step = 0; step < consecutiveFailures && delay < options.MaxDrainBackoff; step++)
+        {
+            delay = delay > options.MaxDrainBackoff / 2 ? options.MaxDrainBackoff : delay * 2;
+        }
+
+        return delay;
     }
 
     /// <summary>
     /// Posts one record and reads the endpoint's answer as the delivery contract defines it: 2xx is
-    /// durably stored, any client error but 408 and 429 is a rejection no retry can change, and
-    /// everything else — a server error, a refused connection, a timeout — leaves the record for
-    /// another attempt (ADR 0020 D7).
+    /// durably stored, a status naming a defect in the record (see <see cref="IsPermanentRejection"/>)
+    /// is a rejection no retry can change, and everything else — a redirect, an auth or routing
+    /// failure, a server error, a refused connection, a timeout — leaves the record for another
+    /// attempt (ADR 0020 D7).
     /// </summary>
     private async Task<DeliveryAttempt> DeliverAsync(HttpClient client, SpoolEnvelope envelope, CancellationToken cancellationToken)
     {
@@ -183,13 +210,19 @@ internal sealed class DrainWorker(
     }
 
     /// <summary>
-    /// Whether <paramref name="status"/> says the request itself is defective — an unreadable
-    /// format, an oversized payload — rather than that the endpoint is momentarily unable to take
-    /// it. Every client error says so except the two that ask for exactly one thing, another
-    /// attempt (ADR 0020 D7).
+    /// Whether <paramref name="status"/> indicts the record itself — malformed, conflicting,
+    /// oversized, wrongly typed, or unprocessable — rather than the request merely finding the
+    /// endpoint unable to take it right now. Everything else, including 401/403/407 and 404/405,
+    /// is transient: an expired credential or a receiver mid-rollout looks permanent in the moment,
+    /// but dead-lettering on that basis would walk the whole spool into dead-letter at machine
+    /// speed for the length of a config outage that fixes itself (ADR 0020 D7).
     /// </summary>
-    private static bool IsPermanentRejection(HttpStatusCode status) =>
-        (int)status is >= 400 and < 500 && status is not (HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests);
+    private static bool IsPermanentRejection(HttpStatusCode status) => status is
+        HttpStatusCode.BadRequest or
+        HttpStatusCode.Conflict or
+        HttpStatusCode.RequestEntityTooLarge or
+        HttpStatusCode.UnsupportedMediaType or
+        HttpStatusCode.UnprocessableEntity;
 
     /// <summary>
     /// Sets a record aside that no retry can deliver, and says so at Critical: it never reached the
