@@ -624,7 +624,7 @@ public sealed class OrderService(IAuditLogger<OrderService> audit)
             await _db.CancelOrderAsync(orderId);
             
             // Record success with companion log
-            var evt = AuditEvent.Success("order.cancel", userId) with
+            var evt = AuditEvent.Success("order.cancel", userId, "user") with
             {
                 TargetType = "order",
                 TargetId = orderId,
@@ -637,7 +637,7 @@ public sealed class OrderService(IAuditLogger<OrderService> audit)
         }
         catch (NotFoundException)
         {
-            await audit.AuditAsync(AuditEvent.Denied("order.cancel", userId) with
+            await audit.AuditAsync(AuditEvent.Denied("order.cancel", userId, "user") with
             {
                 TargetType = "order",
                 TargetId = orderId,
@@ -656,7 +656,7 @@ The optional `log` parameter lets you emit a log event alongside the audit recor
 - **The companion log is written exactly as given and is never redacted** — the same as every other application log the library emits. Whatever redaction you see on the audit record's library-filled fields comes from the library's extraction logic, not from redacting the template itself.
 - **Only use the log for a summary.** Put identifiers (order ID, user ID) and structured context (outcome, reason) in the audit `Action`, required fields, and `Data`. Put the human-readable narrative in the log. Example:
   ```csharp
-  var evt = AuditEvent.Failure("user.login", userId) with
+  var evt = AuditEvent.Failure("user.login", userId, "user") with
   {
       Data = new Dictionary<string, object?> { { "attempt", 3 } }
   };
@@ -671,8 +671,9 @@ The optional `log` parameter lets you emit a log event alongside the audit recor
 
 Every `AuditEvent` has:
 
-- **Caller-supplied:** `Action` (string, e.g., `"order.cancel"`), `ActorId`, `Outcome` (Success/Failure/Denied), and optional `TargetType`, `TargetId`, `Reason`, `Data`, `ActorType`, `OnBehalfOfId`, `TenantId`.
-- **Library-filled:** `TimestampUtc` (UTC), `TraceId`, `SpanId` (from OpenTelemetry), `SourceIp` (redacted on only one of its two branches — see below), `UserAgent` (always redacted; see [Security](#security)).
+- **Caller-supplied, required:** `Action` (string, e.g., `"order.cancel"`), `ActorId`, `ActorType` (the kind of actor `ActorId` identifies, e.g. `"user"`, `"service"`, `"api-key"` — required, with no default, so a call site cannot pass off a guessed actor kind as fact), `Outcome` (Success/Failure/Denied).
+- **Caller-supplied, optional:** `TargetType`, `TargetId`, `Reason`, `Data`, `OldValues`, `NewValues` (state before/after the action, like `Data` never redacted — supply only the fields that changed, not a whole entity), `OnBehalfOfId`, `TenantId`.
+- **Library-filled:** `EventId` (a UUIDv7 stamped on every call; a caller-set value is overwritten — this is the field a retrying or spooling sink deduplicates on), `TimestampUtc` (UTC), `TraceId`, `SpanId` (from OpenTelemetry), `SourceIp` (redacted on only one of its two branches — see below), `UserAgent` (always redacted; see [Security](#security)).
 
 `SourceIp` is redacted asymmetrically, by where the address came from: an address read from `X-Forwarded-For` (only when `TrustForwardedHeaders = true`) is client-supplied and goes through redaction, while an address read from the connection is supplied by the network layer, cannot be forged, and reaches your sink bare. This is the same client-IP rule request logging uses (ADR 0008), reused rather than restated.
 
@@ -681,7 +682,8 @@ The library does **not** copy the `Data` dictionary — if your sink buffers the
 ### Metrics and Alerting
 
 The audit meter `StepUpLogging.Audit` provides:
-- `audit_events_total{outcome}` — count of records written, grouped by outcome (Success, Failure, Denied).
+- `audit_events_total{outcome}` — count of records written, grouped by outcome (Success, Failure, Denied). Moves only for a `Stored` write.
+- `audit_events_dropped_total{outcome}` — count of records a sink deliberately discarded (returned `AuditWriteResult.Dropped`), e.g. under back-pressure. No companion log is written for these, and `audit_events_total` does not move.
 - `audit_write_failures_total` — count of sink writes that threw.
 
 **Zero audit events over a period is itself an alarm** — it indicates your audit stopped working. Query for the *rate* of `audit_events_total` over a rolling window:
@@ -691,6 +693,13 @@ The audit meter `StepUpLogging.Audit` provides:
 rate(audit_events_total[1h]) == 0
 ```
 
+**A nonzero drop rate is an alarm in its own right, separate from the one above** — it means a sink is discarding records on purpose, and `audit_events_total` never moves for a dropped write, so the alarm above reads healthy the whole time it happens:
+
+```promql
+# Alert if any audit events are being deliberately dropped
+audit_events_dropped_total > 0
+```
+
 ### Example Production Sink
 
 This example writes to Entity Framework Core with transactional consistency:
@@ -698,7 +707,7 @@ This example writes to Entity Framework Core with transactional consistency:
 ```csharp
 public sealed class DbAuditSink(MyDbContext db) : IAuditEventSink
 {
-    public async ValueTask WriteAsync(AuditEvent auditEvent)
+    public async ValueTask<AuditWriteResult> WriteAsync(AuditEvent auditEvent)
     {
         db.AuditLogs.Add(new AuditLogEntity
         {
@@ -718,6 +727,7 @@ public sealed class DbAuditSink(MyDbContext db) : IAuditEventSink
         
         // Writes in the same transaction as the business operation
         await db.SaveChangesAsync();
+        return AuditWriteResult.Stored;
     }
 }
 
@@ -734,6 +744,7 @@ Because nothing in the package writes audit records for you, the assertion that 
 
 ```csharp
 using System.Collections.Concurrent;
+using Microsoft.Extensions.DependencyInjection.Extensions; // RemoveAll
 
 // Test double only — never wire this in Program.cs; it discards every record on shutdown
 public sealed class RecordingAuditSink : IAuditEventSink
@@ -742,14 +753,19 @@ public sealed class RecordingAuditSink : IAuditEventSink
     // drives, and each writes on its own thread
     public ConcurrentQueue<AuditEvent> Records { get; } = new();
 
-    public ValueTask WriteAsync(AuditEvent auditEvent)
+    public ValueTask<AuditWriteResult> WriteAsync(AuditEvent auditEvent)
     {
         Records.Enqueue(auditEvent);
-        return default;
+        return ValueTask.FromResult(AuditWriteResult.Stored);
     }
 }
 
 builder.AddStepUpLogging();
+// Defensive, not required here since nothing has registered a sink yet: if this recipe instead
+// runs against a builder that already carries Program.cs's own AddAuditLogging<DbAuditSink>() call
+// (e.g. a test that shares Program.cs's startup code before substituting a sink), a second
+// AddAuditLogging call throws, naming both sink types — RemoveAll first avoids that either way.
+builder.Services.RemoveAll<IAuditEventSink>();
 // Singleton so one instance outlives the request scope the assertions run outside of
 builder.AddAuditLogging<RecordingAuditSink>(ServiceLifetime.Singleton);
 
@@ -760,7 +776,143 @@ Assert.Equal("order.cancel", recorded.Action);
 Assert.Equal(AuditOutcome.Success, recorded.Outcome);
 ```
 
+Skip the `RemoveAll` and `AddAuditLogging<RecordingAuditSink>` throws `InvalidOperationException`,
+naming both sinks: *"AddAuditLogging\<RecordingAuditSink\> failed: DbAuditSink is already
+registered as the IAuditEventSink... call services.RemoveAll\<IAuditEventSink\>() before
+registering the test sink."*
+
 Cover the failure path too: a sink that throws must abort the business operation (exceptions propagate unchanged), and an operation that was denied must still leave a `Denied` record.
+
+## Encrypted Spool Audit Sink
+
+`EncryptedSpoolAuditSink` ships inside this same package — no separate install. It is a durable,
+at-least-once `IAuditEventSink`: every audited write is encrypted, written to a local write-ahead
+spool, and delivered to a receiver you configure, one `POST` per record. A crash between "the
+receiver accepted it" and "the spool file was deleted" resends the record on the next drain cycle,
+so **your receiver must deduplicate on `EventId`** — delivery is at-least-once, not exactly-once.
+
+### Setup
+
+```csharp
+using Lukdrasil.StepUpLogging;
+using Lukdrasil.StepUpLogging.Audit.EncryptedSpool;
+
+builder.AddStepUpLogging();
+builder.AddEncryptedSpoolAuditSink(options =>
+{
+    // A mounted volume that outlives the process — never a path inside the deployment artifact,
+    // which is replaced on the next restart or rollout and would take spooled records with it.
+    options.SpoolDirectory = "/var/lib/myapp/audit-spool";
+    options.EndpointBaseUrl = "https://audit-receiver.internal";
+    options.ModuleName = "order-service";
+    options.Version = "1.4.0";
+});
+
+// The consumer's own IAuditPayloadEncryptor — see below — registered separately.
+builder.Services.AddSingleton<IAuditPayloadEncryptor, MyAeadEncryptor>();
+```
+
+Do not call `AddAuditLogging` yourself for this sink — `AddEncryptedSpoolAuditSink` does that
+internally, alongside registering the drain worker as a hosted service and a combined health
+check. There is no `Enabled` flag: not calling this method is how the sink stays off. A required
+option left unset is a host that refuses to start, naming it. Whatever credentials the endpoint
+needs (a bearer token, a client certificate) go on the delivery `HttpClient` via
+`options.ConfigureProducerCredentials`, not on the port and not in `EncryptedSpoolOptions` as a
+key — the drain worker sends what that client is set up to send and never inspects it.
+
+### Options
+
+`EncryptedSpoolOptions` is set in the `AddEncryptedSpoolAuditSink` lambda; unlike
+`StepUpLoggingOptions`, it is not bound from `appsettings.json`.
+
+| Option | Default | What it does |
+|---|---|---|
+| `SpoolDirectory` | *required* | Where spooled records are kept, one file per record. Must outlive the process. |
+| `EndpointBaseUrl` | *required* | Absolute base URL of the audit endpoint; records are posted to `{EndpointBaseUrl}/audit`. |
+| `ModuleName` | *required* | Name of the producing module, carried inside the encrypted payload. |
+| `Version` | *required* | Version of the producing module, alongside `ModuleName`. |
+| `MaxPayloadBytes` | 64 KB | Largest serialized record accepted. Over it, `AuditAsync` throws at the call site — nothing is encrypted or spooled. |
+| `SpoolMaxBytes` | 256 MB | Spool size cap. Reaching either this or `SpoolMaxEntries` starts dropping new records. |
+| `SpoolMaxEntries` | 100 000 | Spool record-count cap. |
+| `DrainInterval` | 5 s | How often the drain worker looks for records, and the first wait it backs off from. |
+| `MaxDrainBackoff` | 5 min | Ceiling the wait doubles up to while the endpoint keeps failing. |
+| `DeliveryTimeout` | 30 s | Timeout for one delivery attempt. A timeout is transient — retried, never dead-lettered. |
+| `ShutdownDrainTimeout` | 5 s | How long a stopping host waits for the drain worker. Nothing is lost when it runs out; the next start delivers. |
+| `UnreadableRetryLimit` | 10 | Drain cycles a spool file may fail to even be opened before it is dead-lettered as unreadable. |
+| `SpoolWarnStatus`, `SpoolFullStatus`, `UnreachableStatus` | see [Health check](#health-check) | The statuses the health check reports. |
+| `ConfigureProducerCredentials` | none | Sets credentials on the delivery `HttpClient`, as above. |
+
+### The encryption port
+
+The sink never sees a key. It hands the serialized record to `IAuditPayloadEncryptor`, which your
+application implements and registers:
+
+```csharp
+public interface IAuditPayloadEncryptor
+{
+    ValueTask<byte[]> EncryptAsync(ReadOnlyMemory<byte> payload);
+}
+```
+
+Your implementation owns **all** cryptography — algorithm, key material, and key custody
+(acquisition, caching, rotation). The sink treats the returned bytes as opaque: it spools and
+delivers them as-is, never interpreting either side of the call. Register it as a **singleton**,
+and make it **thread-safe** — the sink that calls it is itself a singleton, calling `EncryptAsync`
+concurrently from every in-flight audit write; unsynchronized shared state (a cached key, a
+counter-derived nonce) breaks confidentiality for the whole archive, not just the affected
+records. An exception thrown here propagates unchanged out of `AuditAsync` — it is never turned
+into a dropped record.
+
+### Delivery contract
+
+The drain worker posts one spooled envelope per request to `{EndpointBaseUrl}/audit` and reads the
+response:
+
+| Response | Meaning | Outcome |
+|---|---|---|
+| `2xx` | The receiver durably stored the record | Deleted from the spool |
+| `400`, `409`, `413`, `415`, `422` | The record itself is defective — malformed, conflicting, oversized, wrongly typed, or unprocessable | Moved to `dead-letter/`, logged Critical, never retried |
+| Anything else (`3xx`, `401`/`403`/`404`/`405`/`407`, `408`, `429`, `5xx`, a network failure, a timeout) | The receiver could not take the record right now, or the failure says nothing about the record itself | Retried with backoff |
+
+`dead-letter/` is a sibling directory of the spool, and nothing in this package ever deletes from
+it: it is the permanent evidence that a record never reached the audit store, and clearing it is a
+manual, investigated action. A record reaches it by three routes, not only the table above: a
+permanent rejection from the receiver, a spool file that cannot even be parsed as an envelope, or
+one that still cannot be read from disk after `UnreadableRetryLimit` attempts — the last two never
+contact the endpoint at all. All three flip the health check to `Unhealthy`.
+
+### Health check
+
+One combined health check (registered under the `audit` tag) reports the worst of four conditions:
+
+| Condition | Status | Configurable via |
+|---|---|---|
+| Spool at ≥ 50% of cap (writes still succeed) | `SpoolWarnStatus` (default `Unhealthy`) | `EncryptedSpoolOptions.SpoolWarnStatus` |
+| Spool at 100% of cap (new records are being dropped) | `SpoolFullStatus` (default `Unhealthy`) | `EncryptedSpoolOptions.SpoolFullStatus` |
+| `dead-letter/` holds any record | `Unhealthy`, not configurable | — |
+| Three delivery attempts in a row have failed (the run ends on the first that gets through) | `UnreachableStatus` (default `Degraded`) | `EncryptedSpoolOptions.UnreachableStatus` — the count of three is fixed |
+
+### Metrics
+
+Under the same `StepUpLogging.Audit` meter as the rest of audit logging:
+
+- `audit_spool_depth` — records currently held in the spool.
+- `audit_spool_bytes` — bytes currently held in the spool.
+- `audit_spool_rejected_full_total` — records dropped because the spool was at its cap.
+- `audit_spool_drained_total` — records the endpoint confirmed it stored.
+- `audit_spool_drain_failures_total` — delivery attempts, unreadable spool files, and drain-cycle faults that did not get a record through (retried, not lost); it can move while the endpoint itself is perfectly healthy, e.g. one spool file the worker cannot yet open.
+- `audit_spool_dead_lettered_total` — records moved to `dead-letter/`.
+- `audit_encryption_failures_total` — `IAuditPayloadEncryptor` calls that threw (the exception still propagates; this only counts that it happened).
+
+### The fsync cost
+
+Every audit write through this sink costs one `fsync`: the record is flushed to the device, not
+just the OS page cache, before `WriteAsync` returns, so a power loss right after cannot lose a
+record the caller was already told was durable. That costs single-digit to tens of milliseconds on
+ordinary SSDs, more on network storage, and it lands **on the business path** — the caller of
+`AuditAsync`, not a background thread. Audit volume is usually small relative to overall traffic
+(mutating operations, not every request), but account for it: nobody will guess that audit is the
+source of the latency until they measure it.
 
 ## Common Scenarios
 
