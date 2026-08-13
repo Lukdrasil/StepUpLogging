@@ -35,7 +35,10 @@ application running by losing audit silently. This ADR rejects every one of them
 
 5. **Spool caps**, per issue #22 B5: at ≥ 50 % of cap the health check reports the configured
    `SpoolWarnStatus` (default `Unhealthy`, overridable) including the overall status, and logs
-   ERROR. Already-spooled records are never dropped or rotated out.
+   ERROR. Already-spooled records are never dropped or rotated out. At 100 % of cap the health
+   check reports `SpoolFullStatus` (default `Unhealthy`), configurable separately from
+   `SpoolWarnStatus` so an instance actively dropping records cannot look merely `Degraded`
+   unless the operator explicitly chose that.
 
 6. **At 100 % of cap the new record is dropped**, logged at Critical and counted — `WriteAsync`
    returns `AuditWriteResult.Dropped` (ADR 0018 D6) rather than throwing, so core neither counts it
@@ -65,7 +68,11 @@ application running by losing audit silently. This ADR rejects every one of them
    This is a receiver verdict about a record it was actually sent; a record that cannot be read
    from disk after bounded retries is dead-lettered as unreadable — distinct from receiver
    rejection: the endpoint is never contacted, so it never counts against the endpoint's own
-   reachability signal, only against the drain worker's own failure counter.
+   reachability signal, only against the drain worker's own failure counter. Two further routes
+   lead to `dead-letter/` without the receiver being contacted at all: a spool file that cannot
+   be parsed (corrupt), and a file that cannot be read after a bounded number of drain cycles
+   (`UnreadableRetryLimit`) — an unbounded read-retry would recreate the head-of-line blocking
+   this decision rejects.
 
 8. **Deletion of spool files by a compromised host is an accepted risk.** Encryption does nothing
    against it. The mitigation is to shorten the window: a short `DrainInterval`, so records sit on
