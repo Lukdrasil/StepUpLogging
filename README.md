@@ -14,7 +14,7 @@
 ✅ **OpenTelemetry Activities** - Built-in distributed tracing with 6+ instrumentation points (default-enabled)  
 ✅ **Minimal overhead** - 18-29% faster than standard Serilog in baseline tests  
 ✅ **Request body capture** - Optional capture during step-up with configurable size limits  
-✅ **Sensitive data redaction** - Regex-based redaction for query strings and request bodies  
+✅ **Sensitive data redaction** - Regex-based redaction for query strings and request bodies, with an opt-in sweep of application log properties too  
 ✅ **OpenTelemetry metrics** - Built-in metrics for monitoring step-up triggers and duration  
 ✅ **Manual control** - Expose endpoints to manually trigger or check step-up status  
 ✅ **.NET 10.0** - Built with modern C# 14 features
@@ -655,7 +655,7 @@ public sealed class OrderService(IAuditLogger<OrderService> audit, IOrderReposit
 
 The optional `log` parameter lets you emit a log event alongside the audit record:
 
-- **The companion log is written exactly as given and is never redacted** — the same as every other application log the library emits. Whatever redaction you see on the audit record's library-filled fields comes from the library's extraction logic, not from redacting the template itself.
+- **The companion log is written exactly as given** — its message-template text is never touched, and its property values are redacted only if you set `RedactLogEventProperties`, the same as every other application log the library emits. Whatever redaction you see on the audit record's library-filled fields comes from the library's extraction logic, not from redacting the template itself.
 - **Only use the log for a summary.** Put identifiers (order ID, user ID) and structured context (outcome, reason) in the audit `Action`, required fields, and `Data`. Put the human-readable narrative in the log. Example:
   ```csharp
   var evt = AuditEvent.Failure("user.login", userId, "user") with
@@ -1068,7 +1068,8 @@ See full [performance test results](tests/k6/performance_test_results.md).
 | `CaptureRequestBody` | `false` | - | Capture POST/PUT/PATCH bodies during step-up |
 | `MaxBodyCaptureBytes` | `16384` | - | Max bytes to capture from request body |
 | `ExcludePaths` | `["/health", "/metrics"]` | - | Paths to exclude from logging |
-| `RedactionRegexes` | `[]` | - | Regex patterns for redacting sensitive data (request metadata and bodies only — see [Security](#security)) |
+| `RedactionRegexes` | `[]` | - | Regex patterns for redacting sensitive data. Always applied to request metadata and bodies; also applied to application log properties when `RedactLogEventProperties` is set — see [Security](#security) |
+| `RedactLogEventProperties` | `false` | - | Opt-in: also sweep the string-valued scalar properties of application log events with `RedactionRegexes`, not just request metadata. See [Security](#security) |
 | `AdditionalSensitiveHeaders` | `[]` | - | Custom header names to redact in request logging |
 | `TrustForwardedHeaders` | `false` | - | When `true`, `ClientIp` is taken from the first `X-Forwarded-For` entry (v2 behavior). Only enable behind a proxy you control with `ForwardedHeadersMiddleware`. See [Security](#security). |
 | `TreatServerErrorStatusAsError` | `true` | - | When `false`, a request completing with status >= 500 but **no** exception is logged at Warning instead of Error, so it does not trigger step-up. Set this in a reverse proxy / BFF where most 5xx are relayed from a backend. An unhandled exception is still Error. |
@@ -1096,10 +1097,11 @@ The list has no effect in `StepUpMode.AlwaysOn`: that mode never steps up, so th
 to suppress, and a developer running it locally wants to see the SQL.
 
 One caveat: the deny-list gates the export path only. The pre-error buffer is deliberately **not**
-filtered — when it flushes on an error it still carries the SQL that led up to that error, and it
-carries it **unredacted** (redaction covers request metadata — query string, route values,
-headers, body — not the rendered text of arbitrary log events). Treat EF as a channel that can
-leak secrets: do not log sensitive values through it.
+filtered — when it flushes on an error it still carries the SQL that led up to that error, and
+unless you set `RedactLogEventProperties` it carries it **unredacted**: the SQL command text is a
+property of an ordinary log event, not request metadata, so only that flag brings it in scope (see
+[Security](#security)). Treat EF as a channel that can leak secrets: do not log sensitive values
+through it.
 
 To restore the pre-3.1.0 behaviour (step-up raises every category, including EF SQL), set the
 list empty:
@@ -1128,12 +1130,35 @@ with your known proxies so `Connection.RemoteIpAddress` reflects the true client
 `TrustForwardedHeaders` at `false`. The raw header is always logged (redacted) as
 `ForwardedFor` for diagnostics.
 
-### Redaction covers request metadata and bodies, not message-template arguments
+### Redaction: always-on for request data, opt-in for application logs
 
-`RedactionRegexes` is applied to query strings, route values, headers, and request bodies.
-It does **not** scan the rendered text of arbitrary log messages — a secret passed as a
-message-template argument (`logger.LogInformation("token={T}", secret)`) is **not** redacted.
-Do not log secrets in message templates.
+`RedactionRegexes` is always applied to query strings, route values, headers, and request
+bodies. On its own it does **not** scan the rendered text of arbitrary log messages — a secret
+passed as a message-template argument (`logger.LogInformation("token={T}", secret)`) is left
+alone.
+
+Set `RedactLogEventProperties: true` to also sweep the string-valued scalar properties of
+application log events with the same `RedactionRegexes`, so the example above **is** redacted
+once the flag is on. The sweep reaches properties and nothing else. It does not touch
+message-template text or exception messages: an interpolated `logger.LogInformation($"token={t}")`
+bakes the value into the template and produces no property, so it is logged verbatim whatever the
+flag says. It does not recurse into structures (`{@user}`), sequences or dictionaries. It skips
+the twelve properties the library stamps itself (`TraceId`, `SourceContext`,
+`ServiceInstanceId` and nine more — the `RedactLogEventProperties` XML doc lists them and the
+reason for each). And it never sees the two events the library writes straight to the bypass
+logger — the request summary and the startup level-ordering warning — which do not pass root
+enrichment. Do not log secrets in interpolated message templates.
+
+The flag has a running cost worth sizing before you enable it. The sweep sits on the root pipeline,
+which deliberately runs at `Verbose` so the pre-error buffer and trigger sinks see everything, so it
+runs on every event that **reaches the root**, not on the smaller set that is actually exported: a
+`Debug` event the level switch drops is swept before it is dropped. (Events filtered out by a
+`Serilog:MinimumLevel:Override` are dropped before enrichment and are never swept.) Per event the
+work is one regex replace per configured pattern per non-excluded string-valued scalar property,
+each scaling with the length of the value. No figure is published here: a measurement taken against
+this README's sample patterns would not transfer to yours. The lever is the pattern list — keep
+`RedactionRegexes` short and each pattern narrow rather than open-ended. With the flag off, or with
+no patterns configured, the enricher is not registered at all and there is no per-event cost.
 
 ### Sustained-error cost amplification
 

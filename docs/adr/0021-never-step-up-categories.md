@@ -25,6 +25,12 @@ entire SQL traffic for the next 180 seconds. Two consequences:
    command text, and with `EnableSensitiveDataLogging` also the parameter values, leave
    the process unredacted.
 
+   > **Amended by ADR 0022 (2026-08-13):** true only with `RedactLogEventProperties` off,
+   > which is the default. Set it and `RedactionRegexes` also sweeps the string-valued scalar
+   > properties of application log events, EF's command text among them — so a consumer can
+   > close this gap without the deny-list. The volume argument in 1. is untouched, and it is
+   > the one the default rests on. See ADR 0022 D1/D3.
+
 A consumer can already write
 `Serilog:MinimumLevel:Override:Microsoft.EntityFrameworkCore.Database.Command = Warning`.
 `SplitSerilogConfiguration` keeps `MinimumLevel` (including `Override`) on the root
@@ -49,6 +55,12 @@ outputs. `PreErrorBufferSink` is deliberately **not** filtered: its flush is bou
 is the most valuable content the buffer holds. The flood problem is the 180-second window,
 not the one bounded flush. (Consequence: that flush still carries unredacted SQL through
 the bypass logger — pre-existing behaviour, unchanged by this ADR, documented in the README.)
+
+> **Amended by ADR 0022 (2026-08-13):** "unredacted" here now means "unless
+> `RedactLogEventProperties` is set". Root enrichment runs before any sink, so
+> `PreErrorBufferSink` buffers an already-redacted event and its flush carries exactly what
+> every other property-bearing event carries. The flush is still unfiltered by the deny-list;
+> only its redaction changed. See ADR 0022 D4.
 
 **2. A listed category is pinned to `BaseLevel`, not silenced.** It behaves as though
 step-up did not exist: EF `Warning`/`Error` still export, `Information` SQL never does.

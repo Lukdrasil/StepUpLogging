@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using Serilog;
 using Serilog.Core;
 using Serilog.Events;
@@ -309,5 +310,27 @@ public class StepUpSinkTests
 
         Assert.Empty(stepUpCollector.Events);
         Assert.Single(immediateCollector.Events);
+    }
+
+    [Fact]
+    public void SteppedUp_ListedCategory_SurvivesRedaction_StillDropped()
+    {
+        // ADR 0021 regression: RedactionEnricher must exclude SourceContext even when a configured
+        // pattern would otherwise match it, or the NeverStepUpCategories deny-list this sink checks
+        // silently stops matching once redaction is turned on.
+        var collector = new CollectingSink();
+        var inner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
+        var levelSwitch = new LoggingLevelSwitch(LogEventLevel.Information);
+        using var sink = new StepUpSink(inner, levelSwitch, LogEventLevel.Warning, [EfCommandCategory]);
+
+        var enricher = new RedactionEnricher(new CompiledRedactionPatterns(new[] { new Regex(".*", RegexOptions.Compiled) }));
+        var logEvent = MakeEvent(LogEventLevel.Information, SourceContext(EfCommandCategory));
+        enricher.Enrich(logEvent, new SimpleLogEventPropertyFactory());
+
+        Assert.Equal(EfCommandCategory, ((ScalarValue)logEvent.Properties["SourceContext"]).Value);
+
+        sink.Emit(logEvent);
+
+        Assert.Empty(collector.Events);
     }
 }

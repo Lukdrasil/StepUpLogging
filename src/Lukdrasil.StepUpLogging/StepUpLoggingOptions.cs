@@ -46,15 +46,61 @@ public sealed class StepUpLoggingOptions
 
     /// <summary>
     /// Regular expression patterns for redacting sensitive data in logs.
-    /// Patterns are applied to query strings, headers, route parameters, and request bodies.
+    /// Patterns are applied to query strings, headers, route parameters, and request bodies, and,
+    /// when <see cref="RedactLogEventProperties"/> is also set, to the string-valued scalar
+    /// properties of application log events as well.
     /// </summary>
     /// <remarks>
-    /// SCOPE: redaction covers request metadata (query string, headers, route values, request body) only.
-    /// It does NOT scan the rendered text of arbitrary log messages — e.g. a secret passed as a message
-    /// template argument (<c>logger.LogInformation("token={T}", secret)</c>) is not redacted. Do not log
-    /// secrets in message templates.
+    /// SCOPE: on its own, this covers request metadata (query string, headers, route values, request
+    /// body) only — it does NOT scan the rendered text of arbitrary log messages, so e.g. a secret
+    /// passed as a message template argument (<c>logger.LogInformation("token={T}", secret)</c>) is
+    /// not redacted. Set <see cref="RedactLogEventProperties"/> to cover that case too; see its own
+    /// doc for exactly what it does and does not reach. An interpolated template
+    /// (<c>logger.LogInformation($"token={t}")</c>) is never redacted by either setting — it produces
+    /// no property. Do not log secrets in interpolated message templates.
     /// </remarks>
     public string[] RedactionRegexes { get; set; } = [];
+
+    /// <summary>
+    /// When true, applies <see cref="RedactionRegexes"/> to the string-valued scalar properties of
+    /// log events on the root pipeline. Default: false.
+    /// </summary>
+    /// <remarks>
+    /// Sweeps log event properties for secrets logged through <c>ILogger</c>, <c>LogImmediate*</c>,
+    /// <c>[LoggerMessage]</c> methods, and properties added by your own enrichers — not just the
+    /// request-metadata fields the always-on redaction covers. The sweep runs after enrichers.
+    /// A value whose redaction fails — a pattern that times out, for example — is replaced by
+    /// <c>[REDACTION-ERROR]</c>; any remaining patterns then run against that sentinel and may
+    /// rewrite part of it, so the exported text is not always the sentinel verbatim — the original
+    /// value is never emitted either way. Enabling this is opt-in so an existing
+    /// <see cref="RedactionRegexes"/> configuration does not change behavior on upgrade; with no
+    /// patterns configured the flag has no effect either.
+    ///
+    /// The sweep sits on the root pipeline, which runs at <c>Verbose</c>, so it costs one regex
+    /// replace per pattern per non-excluded string-valued scalar property on every event that reaches the root —
+    /// including the events the step-up level switch later drops and never exports — which is why
+    /// <see cref="RedactionRegexes"/> is best kept short and each pattern narrow.
+    ///
+    /// What the sweep does NOT reach:
+    /// <list type="bullet">
+    /// <item>Message template text and exception messages. An interpolated
+    /// <c>logger.LogInformation($"token={t}")</c> bakes the value into the template itself and
+    /// produces no property, so it is logged verbatim.</item>
+    /// <item>Anything that is not a string scalar: values held inside a structure
+    /// (<c>{@user}</c>), a sequence or a dictionary are not recursed into.</item>
+    /// <item>The properties the library stamps itself — <c>TraceId</c>, <c>SpanId</c>,
+    /// <c>ParentSpanId</c>, <c>TraceFlags</c>, <c>TraceState</c>, <c>SourceContext</c>,
+    /// <c>Application</c>, <c>Environment</c>, <c>MachineName</c>, <c>ServiceVersion</c>,
+    /// <c>ServiceInstanceId</c> and <c>CallStack</c>. Redacting these would break trace
+    /// correlation, OTLP resource identity and the <see cref="NeverStepUpCategories"/> deny-list,
+    /// which matches on <c>SourceContext</c>. The exclusion is by property NAME: a property of
+    /// your own under one of those names wins over the library's stamp and then escapes redaction
+    /// with it.</item>
+    /// <item>Events the library writes straight to the bypass logger — the request summary and the
+    /// startup warning about level ordering — which never pass root enrichment.</item>
+    /// </list>
+    /// </remarks>
+    public bool RedactLogEventProperties { get; set; } = false;
 
     /// <summary>
     /// Enables capture of request bodies (POST, PUT, PATCH) in logs when logging is stepped-up.
@@ -197,7 +243,8 @@ public sealed class StepUpLoggingOptions
     /// pre-error buffer is never filtered by it — buffered events still flush on error. Set
     /// this to <c>[]</c> to restore pre-3.1.0 behaviour (no category is exempt from step-up).
     /// The default suppresses the Entity Framework Core SQL command log, which would otherwise
-    /// flood the export — and carry unredacted SQL — during a step-up window.
+    /// flood the export during a step-up window — and, unless <see cref="RedactLogEventProperties"/>
+    /// is also set, carry unredacted SQL.
     /// </remarks>
     public string[] NeverStepUpCategories { get; set; } = ["Microsoft.EntityFrameworkCore.Database.Command"];
 }
