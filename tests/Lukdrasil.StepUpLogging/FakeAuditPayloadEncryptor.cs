@@ -10,18 +10,18 @@ namespace Lukdrasil.StepUpLogging.Tests;
 internal sealed class FakeAuditPayloadEncryptor : IAuditPayloadEncryptor
 {
     public ValueTask<byte[]> EncryptAsync(ReadOnlyMemory<byte> payload) =>
-        ValueTask.FromResult(Flip(payload.Span));
+        ValueTask.FromResult(InvertBits(payload.Span));
 
-    public byte[] Decrypt(ReadOnlyMemory<byte> blob) => Flip(blob.Span);
+    public byte[] Decrypt(ReadOnlyMemory<byte> blob) => InvertBits(blob.Span);
 
-    private static byte[] Flip(ReadOnlySpan<byte> bytes)
+    private static byte[] InvertBits(ReadOnlySpan<byte> bytes)
     {
-        var result = new byte[bytes.Length];
+        var inverted = new byte[bytes.Length];
         for (var i = 0; i < bytes.Length; i++)
         {
-            result[i] = (byte)~bytes[i];
+            inverted[i] = (byte)~bytes[i];
         }
 
-        return result;
+        return inverted;
     }
 }
