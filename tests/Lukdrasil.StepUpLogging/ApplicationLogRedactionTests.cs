@@ -194,45 +194,42 @@ public class ApplicationLogRedactionTests
         // re-emits that same reference to the bypass logger on flush — a second registration in
         // ApplyCommonEnrichers would sweep it again. \w+ matches its own replacement, so a second
         // pass is visible as [[REDACTED]] rather than being idempotent and invisible.
+        // Not wrapped in try/finally: on assertion failure the file is left on disk as evidence
+        // rather than deleted before anyone can inspect it.
         var tempFile = Path.Combine(Path.GetTempPath(), $"stepup-redaction-preerror-{Guid.NewGuid():N}.log");
-        try
+        var builder = Host.CreateApplicationBuilder();
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
         {
-            var builder = Host.CreateApplicationBuilder();
-            builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["SerilogStepUp:EnableOtlpExporter"] = "false",
-                ["SerilogStepUp:EnablePreErrorBuffering"] = "true",
-                ["SerilogStepUp:Mode"] = "Auto",
-                ["SerilogStepUp:BaseLevel"] = "Warning",
-                ["SerilogStepUp:StepUpLevel"] = "Information",
-                ["SerilogStepUp:RedactLogEventProperties"] = "true",
-                ["SerilogStepUp:RedactionRegexes:0"] = @"\w+",
-                ["Serilog:Using:0"] = "Serilog.Sinks.File",
-                ["Serilog:WriteTo:0:Name"] = "File",
-                ["Serilog:WriteTo:0:Args:path"] = tempFile,
-                // shared:true is required once a config File sink attaches to both the gated and the
-                // bypass logger, or the two writers contend for the file lock (ADR 0003).
-                ["Serilog:WriteTo:0:Args:shared"] = "true",
-            });
-            builder.AddStepUpLogging();
+            ["SerilogStepUp:EnableOtlpExporter"] = "false",
+            ["SerilogStepUp:EnablePreErrorBuffering"] = "true",
+            ["SerilogStepUp:Mode"] = "Auto",
+            ["SerilogStepUp:BaseLevel"] = "Warning",
+            ["SerilogStepUp:StepUpLevel"] = "Information",
+            ["SerilogStepUp:RedactLogEventProperties"] = "true",
+            ["SerilogStepUp:RedactionRegexes:0"] = @"\w+",
+            ["Serilog:Using:0"] = "Serilog.Sinks.File",
+            ["Serilog:WriteTo:0:Name"] = "File",
+            ["Serilog:WriteTo:0:Args:path"] = tempFile,
+            // shared:true is required once a config File sink attaches to both the gated and the
+            // bypass logger, or the two writers contend for the file lock (ADR 0003).
+            ["Serilog:WriteTo:0:Args:shared"] = "true",
+        });
+        builder.AddStepUpLogging();
 
-            using (var host = builder.Build())
-            {
-                var logger = host.Services.GetRequiredService<Serilog.ILogger>();
-                // Below BaseLevel, so the gated sink drops it: the bypass flush is its only route
-                // to the file.
-                logger.Information("checkout {Token}", "token=secret123");
-                logger.Error("boom");
-            }
-
-            var contents = File.ReadAllText(tempFile);
-            Assert.Contains("[REDACTED]=[REDACTED]", contents);
-            Assert.DoesNotContain("[[REDACTED]]", contents);
-        }
-        finally
+        using (var host = builder.Build())
         {
-            if (File.Exists(tempFile)) File.Delete(tempFile);
+            var logger = host.Services.GetRequiredService<Serilog.ILogger>();
+            // Below BaseLevel, so the gated sink drops it: the bypass flush is its only route
+            // to the file.
+            logger.Information("checkout {Token}", "token=secret123");
+            logger.Error("boom");
         }
+
+        var contents = File.ReadAllText(tempFile);
+        Assert.Contains("[REDACTED]=[REDACTED]", contents);
+        Assert.DoesNotContain("[[REDACTED]]", contents);
+
+        File.Delete(tempFile);
     }
 
     [Fact]
