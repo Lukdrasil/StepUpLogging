@@ -761,9 +761,10 @@ public sealed class RecordingAuditSink : IAuditEventSink
 }
 
 builder.AddStepUpLogging();
-// Program.cs's own AddAuditLogging<DbAuditSink>() already ran on this builder when the test host
-// is built from it (e.g. WebApplicationFactory.ConfigureTestServices) — a second AddAuditLogging
-// call now throws, naming both sink types, so the existing registration has to go first.
+// Defensive, not required here since nothing has registered a sink yet: if this recipe instead
+// runs against a builder that already carries Program.cs's own AddAuditLogging<DbAuditSink>() call
+// (e.g. a test that shares Program.cs's startup code before substituting a sink), a second
+// AddAuditLogging call throws, naming both sink types — RemoveAll first avoids that either way.
 builder.Services.RemoveAll<IAuditEventSink>();
 // Singleton so one instance outlives the request scope the assertions run outside of
 builder.AddAuditLogging<RecordingAuditSink>(ServiceLifetime.Singleton);
@@ -875,7 +876,10 @@ response:
 
 `dead-letter/` is a sibling directory of the spool, and nothing in this package ever deletes from
 it: it is the permanent evidence that a record never reached the audit store, and clearing it is a
-manual, investigated action.
+manual, investigated action. A record reaches it by three routes, not only the table above: a
+permanent rejection from the receiver, a spool file that cannot even be parsed as an envelope, or
+one that still cannot be read from disk after `UnreadableRetryLimit` attempts — the last two never
+contact the endpoint at all. All three flip the health check to `Unhealthy`.
 
 ### Health check
 
@@ -896,7 +900,7 @@ Under the same `StepUpLogging.Audit` meter as the rest of audit logging:
 - `audit_spool_bytes` — bytes currently held in the spool.
 - `audit_spool_rejected_full_total` — records dropped because the spool was at its cap.
 - `audit_spool_drained_total` — records the endpoint confirmed it stored.
-- `audit_spool_drain_failures_total` — delivery attempts that did not get a record through (retried, not lost).
+- `audit_spool_drain_failures_total` — delivery attempts, unreadable spool files, and drain-cycle faults that did not get a record through (retried, not lost); it can move while the endpoint itself is perfectly healthy, e.g. one spool file the worker cannot yet open.
 - `audit_spool_dead_lettered_total` — records moved to `dead-letter/`.
 - `audit_encryption_failures_total` — `IAuditPayloadEncryptor` calls that threw (the exception still propagates; this only counts that it happened).
 
