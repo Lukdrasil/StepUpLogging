@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -126,12 +125,12 @@ public class ApplicationLogRedactionTests
     {
         var patterns = new CompiledRedactionPatterns(Array.Empty<Regex>());
         var enricher = new RedactionEnricher(patterns);
-        var factory = new CountingLogEventPropertyFactory();
-        var logEvent = MakeEvent(new LogEventProperty("Message", new ScalarValue("nothing to redact")));
+        var original = new ScalarValue("nothing to redact");
+        var logEvent = MakeEvent(new LogEventProperty("Message", original));
 
-        enricher.Enrich(logEvent, factory);
+        enricher.Enrich(logEvent, new SimpleLogEventPropertyFactory());
 
-        Assert.Equal(0, factory.CreatePropertyCallCount);
+        Assert.Same(original, logEvent.Properties["Message"]);
     }
 
     // ─── end-to-end pipeline tests ─────────────────────────────────────────────
@@ -214,16 +213,5 @@ public class ApplicationLogRedactionTests
 
         var evt = Assert.Single(collector.Events);
         Assert.Equal("[REDACTED]", ((ScalarValue)evt.Properties["ConsumerStamped"]).Value);
-    }
-}
-
-internal sealed class CountingLogEventPropertyFactory : ILogEventPropertyFactory
-{
-    public int CreatePropertyCallCount { get; private set; }
-
-    public LogEventProperty CreateProperty(string name, object? value, bool destructureObjects = false)
-    {
-        CreatePropertyCallCount++;
-        return new LogEventProperty(name, new ScalarValue(value));
     }
 }
