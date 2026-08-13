@@ -22,10 +22,11 @@ internal sealed class SpoolReader(string spoolDirectory)
 {
     /// <summary>
     /// Returns the spooled records in creation order, oldest first — the order the file names sort
-    /// in (ADR 0020 D3). Envelopes are deserialized lazily, one file at a time. A file that fails to
-    /// parse is skipped but still yielded, as a corrupt <see cref="SpoolEntry"/>, so the caller can
-    /// dead-letter it; a file that vanishes between the directory listing and the read — another
-    /// drainer deleted it concurrently — is skipped with nothing left to act on.
+    /// in (ADR 0020 D3). Envelopes are deserialized lazily, one file at a time. A file that vanishes
+    /// between the directory listing and the read — another drainer deleted it concurrently — is
+    /// skipped with nothing left to act on. Every other read fault (malformed JSON, a locked file,
+    /// a permission fault) leaves the file behind, still occupying cap, so it is yielded as a
+    /// corrupt <see cref="SpoolEntry"/> rather than dropped, for the caller to dead-letter.
     /// </summary>
     public IEnumerable<SpoolEntry> ReadOldestFirst()
     {
@@ -55,9 +56,15 @@ internal sealed class SpoolReader(string spoolDirectory)
         {
             bytes = File.ReadAllBytes(path);
         }
-        catch (IOException)
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
         {
             return null;
+        }
+        catch (Exception)
+        {
+            // A sharing violation, a permission fault, a disk read error — the file is still
+            // there, unlike the vanished case above, so it is corrupt rather than absent.
+            return new SpoolEntry(path, Envelope: null);
         }
 
         try
