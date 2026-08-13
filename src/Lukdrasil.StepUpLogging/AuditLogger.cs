@@ -58,35 +58,34 @@ internal sealed class AuditLogger<T>(
             throw;
         }
 
-        // Outside the catch above on purpose: audit_write_failures_total means the sink threw while
-        // writing, and a sink answering with something no member names may well have written the
-        // record. That is a contract violation, not a write failure.
         if (writeResult is AuditWriteResult.Dropped)
         {
             AuditMetrics.EventsDroppedCounter.Add(1);
             return;
         }
 
-        if (writeResult is not AuditWriteResult.Stored)
-        {
-            throw new InvalidOperationException(
-                $"{sink.GetType()} returned {writeResult} from {nameof(IAuditEventSink.WriteAsync)}, which is neither " +
-                $"{nameof(AuditWriteResult)}.{nameof(AuditWriteResult.Stored)} nor " +
-                $"{nameof(AuditWriteResult)}.{nameof(AuditWriteResult.Dropped)}. Whether the record exists is now " +
-                "unknowable, so no counter is moved and no companion log is written.");
-        }
+        // Thrown outside the catch above on purpose: audit_write_failures_total means the sink threw
+        // while writing, and a sink answering with something no member names may well have written
+        // the record. That is a contract violation, not a write failure.
+        if (writeResult is not AuditWriteResult.Stored) throw UnrecognizedWriteResult(writeResult);
 
         AuditMetrics.EventsCounter.Add(1, new KeyValuePair<string, object?>("outcome", OutcomeTag(record.Outcome)));
 
         if (companionLog is null) return;
 
-        // Written last and only on success, so that a companion log can never assert an action for
-        // which no audit record exists.
+        // Written last and only after a Stored write, so that a companion log can never assert an
+        // action for which no audit record exists.
         using (logger.BeginImmediateScope())
         {
             companionLog(logger);
         }
     }
+
+    private InvalidOperationException UnrecognizedWriteResult(AuditWriteResult writeResult) =>
+        new($"{sink.GetType()} returned {writeResult} from {nameof(IAuditEventSink.WriteAsync)}, which is neither " +
+            $"{nameof(AuditWriteResult)}.{nameof(AuditWriteResult.Stored)} nor " +
+            $"{nameof(AuditWriteResult)}.{nameof(AuditWriteResult.Dropped)}. Whether the record exists is now " +
+            "unknowable, so no counter is moved and no companion log is written.");
 
     private AuditEvent Enrich(AuditEvent auditEvent)
     {
