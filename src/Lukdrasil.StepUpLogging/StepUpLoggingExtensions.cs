@@ -12,6 +12,7 @@ using Microsoft.AspNetCore.Http.Features;
 using Serilog.Exceptions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using OpenTelemetry;
@@ -114,15 +115,39 @@ public static class StepUpLoggingExtensions
     /// The package ships no sink: there is deliberately no default and no no-op implementation to
     /// fall back on, because an audit trail that silently goes nowhere is worse than none at all.
     /// Auditing is turned off by not calling this method — there is no configuration flag for it.
+    /// <para>
+    /// The double-registration guard only sees registrations made through this method. A consumer who
+    /// bypasses it — <c>services.AddSingleton&lt;IAuditEventSink, MySink&gt;()</c> directly — still
+    /// silently keeps only the last one registered (ADR 0018 D5's consequences); closing that would mean
+    /// this method policing registrations it does not own, so it is documented rather than chased.
+    /// </para>
     /// </remarks>
     /// <typeparam name="TSink">The consumer's sink, which owns the audit store and its transaction.</typeparam>
     /// <param name="builder">The host application builder</param>
     /// <param name="sinkLifetime">Lifetime of <typeparamref name="TSink"/> (default: <see cref="ServiceLifetime.Scoped"/>, so the sink can share the request's <c>DbContext</c>)</param>
+    /// <exception cref="InvalidOperationException">
+    /// An <see cref="IAuditEventSink"/> is already registered. <see cref="IAuditLogger{T}"/> resolves a
+    /// single sink, so a second registration would silently discard one of them (ADR 0018 D5). Naming a
+    /// test sink in <c>ConfigureTestServices</c> hits this too, since it registers before the host is
+    /// built, on the same collection Program.cs already registered on — call
+    /// <c>services.RemoveAll&lt;IAuditEventSink&gt;()</c> first to substitute a test double.
+    /// </exception>
     public static IHostApplicationBuilder AddAuditLogging<TSink>(
         this IHostApplicationBuilder builder,
         ServiceLifetime sinkLifetime = ServiceLifetime.Scoped)
         where TSink : class, IAuditEventSink
     {
+        var existingSink = builder.Services.FirstOrDefault(sd => sd.ServiceType == typeof(IAuditEventSink));
+        if (existingSink is not null)
+        {
+            var existingSinkName = existingSink.ImplementationType?.Name ?? "an existing IAuditEventSink";
+            throw new InvalidOperationException(
+                $"AddAuditLogging<{typeof(TSink).Name}> failed: {existingSinkName} is already registered as the " +
+                $"IAuditEventSink. AuditLogger<T> resolves a single sink, so registering a second one would " +
+                "silently discard one of them. If this is a test substituting a sink Program.cs already " +
+                $"registered, call services.{nameof(ServiceCollectionDescriptorExtensions.RemoveAll)}<{nameof(IAuditEventSink)}>() before registering the test sink.");
+        }
+
         // Audit records must carry where the action came from, so the accessor is a deliberate
         // dependency rather than an optional one.
         builder.Services.AddHttpContextAccessor();

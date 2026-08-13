@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Serilog;
@@ -31,6 +32,13 @@ public class AuditLoggingRegistrationTests : IDisposable
             Written.Add(auditEvent);
             return ValueTask.FromResult(AuditWriteResult.Stored);
         }
+    }
+
+    /// <summary>A second, distinct sink type so a double-registration test can prove both names appear.</summary>
+    private sealed class SecondTestAuditSink : IAuditEventSink
+    {
+        public ValueTask<AuditWriteResult> WriteAsync(AuditEvent auditEvent)
+            => ValueTask.FromResult(AuditWriteResult.Stored);
     }
 
     private static HostApplicationBuilder CreateHostBuilder()
@@ -228,6 +236,83 @@ public class AuditLoggingRegistrationTests : IDisposable
 
         await host.StartAsync(TestContext.Current.CancellationToken);
         await host.StopAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AddAuditLogging_CalledTwiceWithDifferentSinks_ThrowsNamingBoth(bool testSinkFirst)
+    {
+        var builder = CreateHostBuilder();
+        builder.AddStepUpLogging();
+
+        var firstSinkName = testSinkFirst ? nameof(TestAuditSink) : nameof(SecondTestAuditSink);
+        var secondSinkName = testSinkFirst ? nameof(SecondTestAuditSink) : nameof(TestAuditSink);
+
+        if (testSinkFirst)
+        {
+            builder.AddAuditLogging<TestAuditSink>();
+        }
+        else
+        {
+            builder.AddAuditLogging<SecondTestAuditSink>();
+        }
+
+        var ex = testSinkFirst
+            ? Assert.Throws<InvalidOperationException>(() => builder.AddAuditLogging<SecondTestAuditSink>())
+            : Assert.Throws<InvalidOperationException>(() => builder.AddAuditLogging<TestAuditSink>());
+
+        Assert.Contains(firstSinkName, ex.Message);
+        Assert.Contains(secondSinkName, ex.Message);
+    }
+
+    /// <summary>Positive control for the guard above: a lone registration must still work.</summary>
+    [Fact]
+    public void AddAuditLogging_CalledOnce_StillRegistersSink()
+    {
+        using var host = BuildAuditingHost();
+        using var scope = host.Services.CreateScope();
+
+        Assert.IsType<TestAuditSink>(scope.ServiceProvider.GetRequiredService<IAuditEventSink>());
+    }
+
+    /// <summary>
+    /// Documents the README testing recipe the ADR 0018 amendment describes: a
+    /// <c>WebApplicationFactory</c>'s <c>ConfigureTestServices</c> runs before the host is built, so
+    /// its call to <see cref="StepUpLoggingExtensions.AddAuditLogging{TSink}"/> lands on the same
+    /// <see cref="IServiceCollection"/> Program.cs already registered a sink on, and the guard fires
+    /// exactly as it would for two calls in Program.cs itself.
+    /// </summary>
+    [Fact]
+    public void AddAuditLogging_CalledAgainAfterProgramRegisteredASink_LikeConfigureTestServicesWould_Throws()
+    {
+        var builder = CreateHostBuilder();
+        builder.AddStepUpLogging();
+        builder.AddAuditLogging<TestAuditSink>(); // Program.cs
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => builder.AddAuditLogging<SecondTestAuditSink>()); // ConfigureTestServices
+
+        Assert.Contains(nameof(TestAuditSink), ex.Message);
+        Assert.Contains(nameof(SecondTestAuditSink), ex.Message);
+        Assert.Contains($"{nameof(ServiceCollectionDescriptorExtensions.RemoveAll)}<{nameof(IAuditEventSink)}>", ex.Message);
+    }
+
+    /// <summary>Proves the recipe the guard's own message points to actually works.</summary>
+    [Fact]
+    public void AddAuditLogging_AfterRemoveAllOfTheExistingSink_RegistersTheReplacementSink()
+    {
+        var builder = CreateHostBuilder();
+        builder.AddStepUpLogging();
+        builder.AddAuditLogging<TestAuditSink>(); // Program.cs
+
+        builder.Services.RemoveAll<IAuditEventSink>();
+        builder.AddAuditLogging<SecondTestAuditSink>(); // ConfigureTestServices
+
+        using var host = builder.Build();
+        using var scope = host.Services.CreateScope();
+
+        Assert.IsType<SecondTestAuditSink>(scope.ServiceProvider.GetRequiredService<IAuditEventSink>());
     }
 
     private sealed class StartupRecordingService : IHostedService
