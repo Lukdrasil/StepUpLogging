@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -183,6 +184,84 @@ public class ApplicationLogRedactionTests
 
         var evt = Assert.Single(collector.Events);
         Assert.Equal("token=super-secret", ((ScalarValue)evt.Properties["Token"]).Value);
+    }
+
+    [Fact]
+    public void FlagOn_BufferedPreErrorEvent_ReachesBypassRedactedExactlyOnce()
+    {
+        // ADR 0022 D4: the enricher is registered on the root configuration only. Root enrichment
+        // runs before every sink, so PreErrorBufferSink buffers an already-redacted event and
+        // re-emits that same reference to the bypass logger on flush — a second registration in
+        // ApplyCommonEnrichers would sweep it again. \w+ matches its own replacement, so a second
+        // pass is visible as [[REDACTED]] rather than being idempotent and invisible.
+        var tempFile = Path.Combine(Path.GetTempPath(), $"stepup-redaction-preerror-{Guid.NewGuid():N}.log");
+        try
+        {
+            var builder = Host.CreateApplicationBuilder();
+            builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["SerilogStepUp:EnableOtlpExporter"] = "false",
+                ["SerilogStepUp:EnablePreErrorBuffering"] = "true",
+                ["SerilogStepUp:Mode"] = "Auto",
+                ["SerilogStepUp:BaseLevel"] = "Warning",
+                ["SerilogStepUp:StepUpLevel"] = "Information",
+                ["SerilogStepUp:RedactLogEventProperties"] = "true",
+                ["SerilogStepUp:RedactionRegexes:0"] = @"\w+",
+                ["Serilog:Using:0"] = "Serilog.Sinks.File",
+                ["Serilog:WriteTo:0:Name"] = "File",
+                ["Serilog:WriteTo:0:Args:path"] = tempFile,
+                // shared:true is required once a config File sink attaches to both the gated and the
+                // bypass logger, or the two writers contend for the file lock (ADR 0003).
+                ["Serilog:WriteTo:0:Args:shared"] = "true",
+            });
+            builder.AddStepUpLogging();
+
+            using (var host = builder.Build())
+            {
+                var logger = host.Services.GetRequiredService<Serilog.ILogger>();
+                // Below BaseLevel, so the gated sink drops it: the bypass flush is its only route
+                // to the file.
+                logger.Information("checkout {Token}", "token=secret123");
+                logger.Error("boom");
+            }
+
+            var contents = File.ReadAllText(tempFile);
+            Assert.Contains("[REDACTED]=[REDACTED]", contents);
+            Assert.DoesNotContain("[[REDACTED]]", contents);
+        }
+        finally
+        {
+            if (File.Exists(tempFile)) File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
+    public void FlagOn_CallStackStampedByLibrary_IsNotRedacted()
+    {
+        // ADR 0022 D6: EnrichWithCallStack stamps a string property the library itself owns, so a
+        // broad consumer pattern must not be allowed to mangle the stack it records.
+        var builder = Host.CreateApplicationBuilder();
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["SerilogStepUp:EnableOtlpExporter"] = "false",
+            ["SerilogStepUp:EnablePreErrorBuffering"] = "false",
+            ["SerilogStepUp:Mode"] = "AlwaysOn",
+            ["SerilogStepUp:EnrichWithCallStack"] = "true",
+            ["SerilogStepUp:RedactLogEventProperties"] = "true",
+            ["SerilogStepUp:RedactionRegexes:0"] = @"\w+",
+        });
+        var collector = new CollectingSink();
+        builder.AddStepUpLogging((_, lc) => lc.WriteTo.Sink(collector));
+
+        using (var host = builder.Build())
+        {
+            var logger = host.Services.GetRequiredService<Serilog.ILogger>();
+            logger.Information("event");
+        }
+
+        var evt = Assert.Single(collector.Events);
+        var callStack = Assert.IsType<string>(((ScalarValue)evt.Properties["CallStack"]).Value);
+        Assert.Contains(nameof(FlagOn_CallStackStampedByLibrary_IsNotRedacted), callStack);
     }
 
     [Fact]

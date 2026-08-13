@@ -57,15 +57,36 @@ public sealed class StepUpLoggingOptions
     public string[] RedactionRegexes { get; set; } = [];
 
     /// <summary>
-    /// When true, applies <see cref="RedactionRegexes"/> to every string-valued scalar property of
-    /// every log event on the root pipeline — not just the request-metadata fields the always-on
+    /// When true, applies <see cref="RedactionRegexes"/> to the string-valued scalar properties of
+    /// log events on the root pipeline — not just to the request-metadata fields the always-on
     /// redaction covers — so a secret a consumer logs through <c>ILogger</c>, <c>LogImmediate*</c>,
-    /// or a <c>[LoggerMessage]</c> method is masked too. Out of scope: message-template text (e.g.
-    /// an interpolated <c>$"token={t}"</c>, which bakes the value into the template and produces no
-    /// property), exception messages, and structured/sequence/dictionary property values. Default:
-    /// false — enabling this is opt-in so an existing <see cref="RedactionRegexes"/> configuration
-    /// does not change behavior on upgrade.
+    /// or a <c>[LoggerMessage]</c> method is masked too. Properties added by your own enrichers are
+    /// swept as well; the sweep runs after them. A value whose redaction fails — a pattern that
+    /// times out, for example — is replaced by <c>[REDACTION-ERROR]</c> rather than let through.
+    /// Default: false — enabling this is opt-in so an existing <see cref="RedactionRegexes"/>
+    /// configuration does not change behavior on upgrade; with no patterns configured the flag has
+    /// no effect either.
     /// </summary>
+    /// <remarks>
+    /// What the sweep does NOT reach:
+    /// <list type="bullet">
+    /// <item>Message template text and exception messages. An interpolated
+    /// <c>logger.LogInformation($"token={t}")</c> bakes the value into the template itself and
+    /// produces no property, so it is logged verbatim.</item>
+    /// <item>Anything that is not a string scalar: values held inside a structure
+    /// (<c>{@user}</c>), a sequence or a dictionary are not recursed into.</item>
+    /// <item>The properties the library stamps itself — <c>TraceId</c>, <c>SpanId</c>,
+    /// <c>ParentSpanId</c>, <c>TraceFlags</c>, <c>TraceState</c>, <c>SourceContext</c>,
+    /// <c>Application</c>, <c>Environment</c>, <c>MachineName</c>, <c>ServiceVersion</c>,
+    /// <c>ServiceInstanceId</c> and <c>CallStack</c>. Redacting these would break trace
+    /// correlation, OTLP resource identity and the <see cref="NeverStepUpCategories"/> deny-list,
+    /// which matches on <c>SourceContext</c>. The exclusion is by property NAME: a property of
+    /// your own under one of those names wins over the library's stamp and then escapes redaction
+    /// with it.</item>
+    /// <item>Events the library writes straight to the bypass logger — the request summary and the
+    /// startup warning about level ordering — which never pass root enrichment.</item>
+    /// </list>
+    /// </remarks>
     public bool RedactLogEventProperties { get; set; } = false;
 
     /// <summary>
