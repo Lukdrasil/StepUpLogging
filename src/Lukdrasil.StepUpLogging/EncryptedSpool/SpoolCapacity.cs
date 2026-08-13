@@ -115,10 +115,13 @@ internal sealed class SpoolUsageTracker(SpoolCapacity capacity)
     }
 
     /// <summary>
-    /// The tally as it stands, without ever touching disk — for cheap, frequent observation (an
-    /// OTel gauge), where re-scanning the spool on every collection interval would be wasteful.
-    /// Same tolerance as <see cref="Read"/>: only ever too high, never too low. Zero before the
-    /// first <see cref="Read"/> has established a baseline.
+    /// The tally as it stands, scanning disk at most once — the first call, if nothing has primed it
+    /// yet (typically a restart sitting on a backlog no write in this process has touched). Every
+    /// later call reuses that tally instead of re-scanning, so cheap, frequent observation (an OTel
+    /// gauge) never puts a directory enumeration on every collection interval. Same tolerance as
+    /// <see cref="Read"/>: only ever too high, never too low — reporting zero here as long as the
+    /// spool sat unread would break that, since an idle-but-backlogged instance is exactly the case
+    /// the gauge exists for.
     /// </summary>
     public SpoolUsage Snapshot
     {
@@ -126,7 +129,19 @@ internal sealed class SpoolUsageTracker(SpoolCapacity capacity)
         {
             lock (_gate)
             {
-                return _addedUp ?? default;
+                if (_addedUp is { } usage)
+                {
+                    return usage;
+                }
+            }
+
+            // The scan happens outside the lock, matching Read(): it is disk I/O, and nothing else
+            // needs the lock held across it.
+            var measured = capacity.Measure();
+            lock (_gate)
+            {
+                _addedUp ??= measured;
+                return _addedUp.Value;
             }
         }
     }

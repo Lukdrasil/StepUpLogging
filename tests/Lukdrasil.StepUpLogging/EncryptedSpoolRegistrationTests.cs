@@ -96,6 +96,8 @@ public class EncryptedSpoolRegistrationTests : IDisposable
         Case(o => o.MaxDrainBackoff = TimeSpan.Zero, nameof(EncryptedSpoolOptions.MaxDrainBackoff)),
         Case(o => o.ShutdownDrainTimeout = TimeSpan.Zero, nameof(EncryptedSpoolOptions.ShutdownDrainTimeout)),
         Case(o => o.UnreadableRetryLimit = 0, nameof(EncryptedSpoolOptions.UnreadableRetryLimit)),
+        Case(o => o.DeliveryTimeout = TimeSpan.Zero, nameof(EncryptedSpoolOptions.DeliveryTimeout)),
+        Case(o => o.DeliveryTimeout = TimeSpan.FromSeconds(-5), nameof(EncryptedSpoolOptions.DeliveryTimeout)),
     ];
 
     private static object[] Case(Action<EncryptedSpoolOptions> invalidate, string optionName) => [invalidate, optionName];
@@ -144,6 +146,108 @@ public class EncryptedSpoolRegistrationTests : IDisposable
             () => host.StartAsync(TestContext.Current.CancellationToken));
 
         Assert.False(serverStub.Started);
+    }
+
+    /// <summary>
+    /// The positive control for the two <see cref="EncryptedSpoolOptions.DeliveryTimeout"/> cases in
+    /// <see cref="InvalidOptionCases"/>: <see cref="Timeout.InfiniteTimeSpan"/> (also &lt;= zero) must
+    /// not be rejected, since <see cref="HttpClient.Timeout"/> treats it as "never time out", not
+    /// "already timed out".
+    /// </summary>
+    [Fact]
+    public async Task AddEncryptedSpoolAuditSink_DeliveryTimeoutIsInfinite_HostStarts()
+    {
+        using var spool = new TempSpoolDirectory();
+        var builder = CreateHostBuilder();
+        builder.AddStepUpLogging();
+        builder.Services.AddSingleton<IAuditPayloadEncryptor, FakeAuditPayloadEncryptor>();
+        builder.AddEncryptedSpoolAuditSink(options =>
+        {
+            ValidOptions(options, spool.FullPath);
+            options.DeliveryTimeout = Timeout.InfiniteTimeSpan;
+        });
+
+        using var host = builder.Build();
+
+        await host.StartAsync(TestContext.Current.CancellationToken);
+        await host.StopAsync(TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>
+    /// Proves start-up sink resolution (B07 hand-off item 4) is load-bearing: a
+    /// <see cref="EncryptedSpoolOptions.SpoolDirectory"/> that passes every string/URI rule but
+    /// cannot physically be created (its parent path component is a file) must still fail the host at
+    /// start, not on the first audited write. Deleting the forced <c>GetRequiredService&lt;IAuditEventSink&gt;()</c>
+    /// call would make this test hang or pass wrongly instead of failing here.
+    /// </summary>
+    [Fact]
+    public async Task AddEncryptedSpoolAuditSink_SpoolDirectoryCannotBeCreated_RefusesToStart_BeforeAnyHostedServiceRuns()
+    {
+        using var root = new TempSpoolDirectory();
+        var blockingFile = Path.Combine(root.FullPath, "not-a-directory");
+        File.WriteAllText(blockingFile, "x");
+        var unusableSpoolDirectory = Path.Combine(blockingFile, "spool");
+
+        var builder = CreateHostBuilder();
+        var serverStub = new StartupRecordingService();
+        builder.Services.AddSingleton<IHostedService>(serverStub);
+        builder.AddStepUpLogging();
+        builder.Services.AddSingleton<IAuditPayloadEncryptor, FakeAuditPayloadEncryptor>();
+        builder.AddEncryptedSpoolAuditSink(options => ValidOptions(options, unusableSpoolDirectory));
+
+        using var host = builder.Build();
+
+        await Assert.ThrowsAnyAsync<Exception>(() => host.StartAsync(TestContext.Current.CancellationToken));
+
+        Assert.False(serverStub.Started);
+    }
+
+    /// <summary>
+    /// Proves the named client obligations (B08 hand-off item 1) beyond the redirect flag: nothing
+    /// else asserted that <see cref="EncryptedSpoolOptions.DeliveryTimeout"/> and
+    /// <see cref="EncryptedSpoolOptions.ConfigureProducerCredentials"/> actually reach the client —
+    /// deleting either assignment in <c>AddDeliveryHttpClient</c> would still leave the suite green
+    /// without this test.
+    /// </summary>
+    [Fact]
+    public void AddEncryptedSpoolAuditSink_NamedHttpClient_HasConfiguredTimeoutAndProducerCredentials()
+    {
+        using var spool = new TempSpoolDirectory();
+        var builder = CreateHostBuilder();
+        builder.AddStepUpLogging();
+        builder.Services.AddSingleton<IAuditPayloadEncryptor, FakeAuditPayloadEncryptor>();
+        builder.AddEncryptedSpoolAuditSink(options =>
+        {
+            ValidOptions(options, spool.FullPath);
+            options.DeliveryTimeout = TimeSpan.FromSeconds(7);
+            options.ConfigureProducerCredentials = client => client.DefaultRequestHeaders.Add("X-Api-Key", "secret-value");
+        });
+
+        using var host = builder.Build();
+        var client = host.Services.GetRequiredService<IHttpClientFactory>().CreateClient(DrainWorker.HttpClientName);
+
+        Assert.Equal(TimeSpan.FromSeconds(7), client.Timeout);
+        Assert.Equal("secret-value", Assert.Single(client.DefaultRequestHeaders.GetValues("X-Api-Key")));
+    }
+
+    /// <summary>
+    /// A second <c>AddEncryptedSpoolAuditSink</c> call must name itself, not the
+    /// <c>AddAuditLogging&lt;EncryptedSpoolAuditSink&gt;</c> it calls internally — the caller never
+    /// invoked that method, and its remedy (<c>RemoveAll&lt;IAuditEventSink&gt;()</c>) does not fit
+    /// "you called this method twice".
+    /// </summary>
+    [Fact]
+    public void AddEncryptedSpoolAuditSink_CalledTwice_ThrowsNamingItself()
+    {
+        using var spool = new TempSpoolDirectory();
+        var builder = CreateHostBuilder();
+        builder.AddStepUpLogging();
+        builder.AddEncryptedSpoolAuditSink(options => ValidOptions(options, spool.FullPath));
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => builder.AddEncryptedSpoolAuditSink(options => ValidOptions(options, spool.FullPath)));
+
+        Assert.Contains(nameof(StepUpLoggingEncryptedSpoolExtensions.AddEncryptedSpoolAuditSink), ex.Message);
     }
 
     [Fact]
@@ -213,6 +317,21 @@ public class EncryptedSpoolRegistrationTests : IDisposable
             TimestampUtc = DateTimeOffset.UtcNow
         };
 
+    /// <summary>
+    /// A single reading of <paramref name="instrumentName"/> on the shared <c>StepUpLogging.Audit</c>
+    /// meter. An <c>ObservableGauge</c> instrument has no <c>Dispose</c>, so every host any test in
+    /// this process ever started stays registered and keeps reporting its own (frozen, once that host
+    /// is gone) value — a pre-existing, accepted leak (notes.md). Callers isolate their own host's
+    /// contribution by reading before and after the change they are asserting on, rather than
+    /// trusting an absolute total.
+    /// </summary>
+    private static long GaugeTotal(string instrumentName)
+    {
+        using var meter = new AuditMeterTotals();
+        meter.RecordObservableInstruments();
+        return meter.Total(instrumentName);
+    }
+
     [Fact]
     public async Task AddEncryptedSpoolAuditSink_SpoolDepthAndBytesGauges_ReflectWrites()
     {
@@ -222,15 +341,49 @@ public class EncryptedSpoolRegistrationTests : IDisposable
         await host.StartAsync(TestContext.Current.CancellationToken);
         try
         {
+            // Baseline after this host's own gauge exists (an empty spool) but before it writes
+            // anything, so the delta below isolates this host's contribution from any other gauge
+            // still registered on the shared meter (see GaugeTotal's doc).
+            var depthBefore = GaugeTotal("audit_spool_depth");
+            var bytesBefore = GaugeTotal("audit_spool_bytes");
+
             var sink = host.Services.GetRequiredService<IAuditEventSink>();
             await sink.WriteAsync(SpoolableEvent());
             await sink.WriteAsync(SpoolableEvent());
 
-            using var meter = new AuditMeterTotals();
-            meter.RecordObservableInstruments();
+            Assert.Equal(2, GaugeTotal("audit_spool_depth") - depthBefore);
+            Assert.True(GaugeTotal("audit_spool_bytes") - bytesBefore > 0);
+        }
+        finally
+        {
+            await host.StopAsync(TestContext.Current.CancellationToken);
+        }
+    }
 
-            Assert.Equal(2, meter.Total("audit_spool_depth"));
-            Assert.True(meter.Total("audit_spool_bytes") > 0);
+    /// <summary>
+    /// A restart sitting on an undelivered backlog is exactly the case the gauge exists for: it must
+    /// not read 0 just because this process has not written anything yet. Plants the files with a
+    /// throwaway <see cref="SpoolWriter"/> before the host under test ever sees the directory, so the
+    /// gauge's first-ever observation is also the tracker's first-ever touch.
+    /// </summary>
+    [Fact]
+    public async Task AddEncryptedSpoolAuditSink_SpoolDepthGauge_ReflectsFilesAlreadyOnDiskAtStart_BeforeAnyWrite()
+    {
+        using var spool = new TempSpoolDirectory();
+        var priorProcess = new SpoolWriter(spool.FullPath);
+        await priorProcess.WriteAsync(new SpoolEnvelope { EventId = Guid.CreateVersion7(), CreatedUtc = DateTimeOffset.UtcNow, Payload = [1, 2, 3] });
+        await priorProcess.WriteAsync(new SpoolEnvelope { EventId = Guid.CreateVersion7(), CreatedUtc = DateTimeOffset.UtcNow, Payload = [4, 5, 6] });
+
+        // Baseline before this host (and its gauge) exists at all, so the delta below isolates it
+        // from any other gauge still registered on the shared meter (see GaugeTotal's doc).
+        var depthBefore = GaugeTotal("audit_spool_depth");
+
+        using var host = ValidHostBuilder(spool).Build();
+
+        await host.StartAsync(TestContext.Current.CancellationToken);
+        try
+        {
+            Assert.Equal(2, GaugeTotal("audit_spool_depth") - depthBefore);
         }
         finally
         {

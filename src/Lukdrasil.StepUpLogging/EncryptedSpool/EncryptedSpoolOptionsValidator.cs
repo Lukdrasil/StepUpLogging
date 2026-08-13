@@ -25,6 +25,7 @@ internal sealed class EncryptedSpoolOptionsValidator : IValidateOptions<Encrypte
         RequirePositive(options.MaxDrainBackoff, nameof(EncryptedSpoolOptions.MaxDrainBackoff), failures);
         RequirePositive(options.ShutdownDrainTimeout, nameof(EncryptedSpoolOptions.ShutdownDrainTimeout), failures);
         RequirePositive(options.UnreadableRetryLimit, nameof(EncryptedSpoolOptions.UnreadableRetryLimit), failures);
+        RequireValidHttpClientTimeout(options.DeliveryTimeout, failures);
 
         return failures.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(failures);
     }
@@ -47,6 +48,23 @@ internal sealed class EncryptedSpoolOptionsValidator : IValidateOptions<Encrypte
         if (value.CompareTo(default) <= 0)
         {
             failures.Add($"{nameof(EncryptedSpoolOptions)}.{optionName} must be greater than zero.");
+        }
+    }
+
+    /// <summary>
+    /// <see cref="EncryptedSpoolOptions.DeliveryTimeout"/> is not a plain "greater than zero" option:
+    /// <see cref="HttpClient.Timeout"/> also accepts <see cref="Timeout.InfiniteTimeSpan"/> (&lt;=
+    /// zero itself, "never time out") as its one legal non-positive value. A generic
+    /// <see cref="RequirePositive{T}"/> would reject that legitimate value along with zero and every
+    /// other negative one, so this option gets its own rule instead.
+    /// </summary>
+    private static void RequireValidHttpClientTimeout(TimeSpan value, List<string> failures)
+    {
+        if (value <= TimeSpan.Zero && value != Timeout.InfiniteTimeSpan)
+        {
+            failures.Add(
+                $"{nameof(EncryptedSpoolOptions)}.{nameof(EncryptedSpoolOptions.DeliveryTimeout)} must be greater than zero, " +
+                $"or {nameof(Timeout)}.{nameof(Timeout.InfiniteTimeSpan)}.");
         }
     }
 

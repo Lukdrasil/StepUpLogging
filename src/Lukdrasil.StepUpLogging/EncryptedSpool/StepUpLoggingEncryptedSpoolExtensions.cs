@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 
@@ -29,7 +30,17 @@ public static class StepUpLoggingEncryptedSpoolExtensions
     /// <remarks>
     /// The consumer's own <see cref="IAuditPayloadEncryptor"/> — which owns all key handling — is
     /// registered separately, in <c>Program.cs</c>; this method resolves it but never configures or
-    /// touches key material (ADR 0017 D3).
+    /// touches key material (ADR 0017 D3). Register it as a singleton, thread-safe: the sink that
+    /// calls it is itself a singleton, calling it concurrently outside its own write gate. A
+    /// <c>Scoped</c> registration becomes a captive dependency the moment this method's singleton
+    /// sink resolves it — promoted to the root scope for the process's lifetime in Production, and
+    /// refused outright by scope validation in Development.
+    /// <para>
+    /// If <see cref="EncryptedSpoolOptions.SpoolDirectory"/> cannot be created or is not writable,
+    /// the host fails to start with the raw filesystem exception (e.g. <see cref="IOException"/>,
+    /// <see cref="UnauthorizedAccessException"/>) — resolving the sink during start-up validation is
+    /// what forces this to surface then, rather than on the first audited operation (B07 hand-off).
+    /// </para>
     /// </remarks>
     /// <param name="builder">The host application builder.</param>
     /// <param name="configureOptions">
@@ -38,14 +49,17 @@ public static class StepUpLoggingEncryptedSpoolExtensions
     /// and <see cref="EncryptedSpoolOptions.Version"/>.
     /// </param>
     /// <exception cref="InvalidOperationException">
-    /// An <see cref="IAuditEventSink"/> is already registered (ADR 0018 D5) — see
-    /// <see cref="StepUpLoggingExtensions.AddAuditLogging{TSink}"/>.
+    /// An <see cref="IAuditEventSink"/> is already registered — either a prior call to this method,
+    /// a direct <see cref="StepUpLoggingExtensions.AddAuditLogging{TSink}"/>, or a raw
+    /// <c>services.AddSingleton&lt;IAuditEventSink, X&gt;()</c> (ADR 0018 D5). Call this method
+    /// exactly once, and never call <c>AddAuditLogging</c> for this sink — it does that internally.
     /// </exception>
     public static IHostApplicationBuilder AddEncryptedSpoolAuditSink(
         this IHostApplicationBuilder builder,
         Action<EncryptedSpoolOptions> configureOptions)
     {
         ArgumentNullException.ThrowIfNull(configureOptions);
+        GuardAgainstExistingSink(builder);
 
         builder.Services.AddSingleton<IValidateOptions<EncryptedSpoolOptions>, EncryptedSpoolOptionsValidator>();
         builder.Services.AddOptions<EncryptedSpoolOptions>()
@@ -60,7 +74,10 @@ public static class StepUpLoggingEncryptedSpoolExtensions
         builder.Services.AddSingleton(sp => new SpoolUsageTracker(new SpoolCapacity(SpoolOptions(sp))));
         builder.Services.AddSingleton<DeadLetterBox>();
         builder.Services.AddSingleton<EndpointReachability>();
-        builder.Services.AddSingleton(TimeProvider.System);
+        // TryAdd, not Add: a consumer who registered their own TimeProvider first (a FakeTimeProvider
+        // in their own integration tests, say) keeps it — this library's opinion only applies when
+        // nothing else already supplied one.
+        builder.Services.TryAddSingleton(TimeProvider.System);
         builder.Services.AddSingleton<EncryptedSpoolGauges>();
 
         AddDeliveryHttpClient(builder.Services);
@@ -74,14 +91,36 @@ public static class StepUpLoggingEncryptedSpoolExtensions
         // the first audited business operation (B07 hand-off). The gauges resolve alongside it so
         // their ObservableGauge instruments exist from host start rather than only once something
         // else happens to touch them.
+        // The message below is never actually shown: ResolveSinkAtStart only ever returns true or
+        // lets the sink's own constructor exception escape unwrapped (see its remarks), so this
+        // string exists only to satisfy Validate's signature. The real guidance for that failure
+        // lives on this method's own <remarks>.
         builder.Services.AddOptions<EncryptedSpoolAuditSinkPrerequisites>()
-            .Validate<IServiceProvider>(
-                ResolveSinkAtStart,
-                "AddEncryptedSpoolAuditSink could not construct the encrypted spool sink at start-up. " +
-                "Check that SpoolDirectory exists (or can be created) and is writable.")
+            .Validate<IServiceProvider>(ResolveSinkAtStart, "AddEncryptedSpoolAuditSink's start-up check failed.")
             .ValidateOnStart();
 
         return builder;
+    }
+
+    /// <summary>
+    /// Throws naming <em>this</em> method — not <see cref="StepUpLoggingExtensions.AddAuditLogging{TSink}"/>,
+    /// which this method calls internally and whose own guard message would otherwise be what the
+    /// caller sees, prescribing a remedy (<c>RemoveAll&lt;IAuditEventSink&gt;()</c>) that fits a
+    /// direct <c>AddAuditLogging</c> mistake, not a duplicated call to this one.
+    /// </summary>
+    private static void GuardAgainstExistingSink(IHostApplicationBuilder builder)
+    {
+        var existingSinkRegistration = builder.Services.FirstOrDefault(sd => sd.ServiceType == typeof(IAuditEventSink));
+        if (existingSinkRegistration is null)
+        {
+            return;
+        }
+
+        var existingSinkName = existingSinkRegistration.ImplementationType?.Name ?? "an existing IAuditEventSink";
+        throw new InvalidOperationException(
+            $"AddEncryptedSpoolAuditSink failed: {existingSinkName} is already registered as the {nameof(IAuditEventSink)}. " +
+            $"{nameof(AuditLogger<object>)} resolves a single sink, so registering {nameof(EncryptedSpoolAuditSink)} " +
+            "alongside it would silently discard one of them. Call AddEncryptedSpoolAuditSink exactly once.");
     }
 
     private static EncryptedSpoolOptions SpoolOptions(IServiceProvider services) =>

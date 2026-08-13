@@ -5,10 +5,10 @@ namespace Lukdrasil.StepUpLogging.Audit.EncryptedSpool;
 /// <summary>
 /// The spool's own gauges on the <c>StepUpLogging.Audit</c> meter — <c>audit_spool_depth</c>
 /// (records) and <c>audit_spool_bytes</c> — backed by the same <see cref="SpoolUsageTracker"/> the
-/// write path already maintains, via <see cref="SpoolUsageTracker.Snapshot"/>: a collection
-/// interval never costs the spool a fresh directory scan, and the value it reports carries the same
-/// tolerance the write path already accepts — only ever too high, never too low, self-correcting on
-/// the next successful write (issue #22 B8).
+/// write path already maintains, via <see cref="SpoolUsageTracker.Snapshot"/>: a directory scan
+/// happens at most once (seeding the tally the first time anything asks), never on every collection
+/// interval, and the value reported carries the same tolerance the write path already accepts — only
+/// ever too high, never too low, self-correcting on the next successful write (issue #22 B8).
 /// </summary>
 /// <remarks>
 /// Registered once, as a DI singleton, for the process's one <c>AddEncryptedSpoolAuditSink</c> call
