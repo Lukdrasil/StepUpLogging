@@ -26,10 +26,10 @@ public class AuditLoggingRegistrationTests : IDisposable
     {
         public List<AuditEvent> Written { get; } = [];
 
-        public ValueTask WriteAsync(AuditEvent auditEvent)
+        public ValueTask<AuditWriteResult> WriteAsync(AuditEvent auditEvent)
         {
             Written.Add(auditEvent);
-            return ValueTask.CompletedTask;
+            return ValueTask.FromResult(AuditWriteResult.Stored);
         }
     }
 

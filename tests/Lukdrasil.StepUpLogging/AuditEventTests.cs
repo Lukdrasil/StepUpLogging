@@ -109,13 +109,14 @@ public class AuditEventTests
     }
 
     [Fact]
-    public async Task FakeAuditEventSink_ImplementsWriteAsync_AndCanBeAwaited()
+    public async Task FakeAuditEventSink_ImplementsWriteAsync_AndReportsTheRecordStored()
     {
         var sink = new FakeAuditEventSink();
         var evt = AuditEvent.Success("order.cancel", "user-1", "user");
 
-        await sink.WriteAsync(evt);
+        var result = await sink.WriteAsync(evt);
 
+        Assert.Equal(AuditWriteResult.Stored, result);
         Assert.Single(sink.Written);
         Assert.Same(evt, sink.Written[0]);
     }
@@ -138,10 +139,10 @@ public class AuditEventTests
     {
         public List<AuditEvent> Written { get; } = [];
 
-        public ValueTask WriteAsync(AuditEvent auditEvent)
+        public ValueTask<AuditWriteResult> WriteAsync(AuditEvent auditEvent)
         {
             Written.Add(auditEvent);
-            return ValueTask.CompletedTask;
+            return ValueTask.FromResult(AuditWriteResult.Stored);
         }
     }
 

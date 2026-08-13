@@ -28,31 +28,38 @@ public class AuditLoggerTests
     {
         public List<AuditEvent> Written { get; } = [];
 
-        public ValueTask WriteAsync(AuditEvent auditEvent)
+        public ValueTask<AuditWriteResult> WriteAsync(AuditEvent auditEvent)
         {
             Written.Add(auditEvent);
-            return ValueTask.CompletedTask;
+            return ValueTask.FromResult(AuditWriteResult.Stored);
         }
     }
 
     /// <summary>A sink that completes asynchronously, so an implementation that fails to await the write is caught.</summary>
     private sealed class AsyncJournalingAuditSink(List<string> journal) : IAuditEventSink
     {
-        public async ValueTask WriteAsync(AuditEvent auditEvent)
+        public async ValueTask<AuditWriteResult> WriteAsync(AuditEvent auditEvent)
         {
             await Task.Delay(20);
             journal.Add("audit");
+            return AuditWriteResult.Stored;
         }
     }
 
     /// <summary>A sink that yields before throwing, so a fire-and-forget write cannot observe the failure.</summary>
     private sealed class ThrowingAuditSink(Exception failure) : IAuditEventSink
     {
-        public async ValueTask WriteAsync(AuditEvent auditEvent)
+        public async ValueTask<AuditWriteResult> WriteAsync(AuditEvent auditEvent)
         {
             await Task.Yield();
             throw failure;
         }
+    }
+
+    /// <summary>A sink that stores nothing and reports <paramref name="result"/>, whatever it is.</summary>
+    private sealed class ResultReportingAuditSink(AuditWriteResult result) : IAuditEventSink
+    {
+        public ValueTask<AuditWriteResult> WriteAsync(AuditEvent auditEvent) => ValueTask.FromResult(result);
     }
 
     /// <summary>
@@ -526,6 +533,85 @@ public class AuditLoggerTests
             async () => await harness.AuditLogger.AuditAsync(AuditEvent.Success("order.cancel", "user-42", "user")));
 
         Assert.Equal(before, recorder.Total("audit_events_total", nameof(AuditOutcome.Success)));
+    }
+
+    [Fact]
+    public async Task AuditAsync_WhenSinkDropsTheRecord_CountsTheDrop_WithoutCountingTheEvent()
+    {
+        using var recorder = new AuditMeterRecorder();
+        using var harness = new Harness(new ResultReportingAuditSink(AuditWriteResult.Dropped));
+
+        var droppedBefore = recorder.Total("audit_events_dropped_total");
+        var writtenBefore = recorder.Total("audit_events_total", nameof(AuditOutcome.Success));
+
+        await harness.AuditLogger.AuditAsync(AuditEvent.Success("order.cancel", "user-42", "user"));
+
+        // audit_events_total means records written, and the operator's "audit stopped" alarm reads
+        // it: counting a dropped record there would make the alarm healthiest while audit is lost.
+        Assert.Equal(droppedBefore + 1, recorder.Total("audit_events_dropped_total"));
+        Assert.Equal(writtenBefore, recorder.Total("audit_events_total", nameof(AuditOutcome.Success)));
+    }
+
+    [Fact]
+    public async Task AuditAsync_WhenSinkDropsTheRecord_DoesNotInvokeTheCompanionLog()
+    {
+        using var harness = new Harness(new ResultReportingAuditSink(AuditWriteResult.Dropped));
+        var logInvoked = false;
+
+        await harness.AuditLogger.AuditAsync(
+            AuditEvent.Success("order.cancel", "user-42", "user"),
+            _ => logInvoked = true);
+
+        // A companion log asserting an action for which no audit record exists is the thing the
+        // write-then-log order exists to prevent, and a dropped record is exactly that case.
+        Assert.False(logInvoked);
+        Assert.Empty(harness.BypassOutput.Events);
+    }
+
+    [Fact]
+    public async Task AuditAsync_WhenSinkStoresTheRecord_DoesNotCountADrop()
+    {
+        using var recorder = new AuditMeterRecorder();
+        using var harness = new Harness(new RecordingAuditSink());
+
+        var droppedBefore = recorder.Total("audit_events_dropped_total");
+
+        await harness.AuditLogger.AuditAsync(AuditEvent.Success("order.cancel", "user-42", "user"));
+
+        Assert.Equal(droppedBefore, recorder.Total("audit_events_dropped_total"));
+    }
+
+    [Theory]
+    [InlineData(default(AuditWriteResult))]
+    [InlineData((AuditWriteResult)99)]
+    public async Task AuditAsync_WhenSinkReportsAnUnrecognizedResult_ThrowsNamingTheSink(AuditWriteResult result)
+    {
+        using var harness = new Harness(new ResultReportingAuditSink(result));
+
+        var thrown = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await harness.AuditLogger.AuditAsync(AuditEvent.Success("order.cancel", "user-42", "user")));
+
+        // Choosing a branch on the sink's behalf would mean asserting either that the record exists
+        // or that it is gone, and there is no way to know which — so the sink is named instead.
+        Assert.Contains(nameof(ResultReportingAuditSink), thrown.Message);
+    }
+
+    [Fact]
+    public async Task AuditAsync_WhenSinkReportsAnUnrecognizedResult_CountsNeitherAWriteFailureNorTheEvent()
+    {
+        using var recorder = new AuditMeterRecorder();
+        using var harness = new Harness(new ResultReportingAuditSink(default));
+
+        var failuresBefore = recorder.Total("audit_write_failures_total");
+        var writtenBefore = recorder.Total("audit_events_total", nameof(AuditOutcome.Success));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await harness.AuditLogger.AuditAsync(AuditEvent.Success("order.cancel", "user-42", "user")));
+
+        // audit_write_failures_total means the sink threw while writing; here the write may well
+        // have succeeded, and only the sink's answer about it is broken.
+        Assert.Equal(failuresBefore, recorder.Total("audit_write_failures_total"));
+        Assert.Equal(writtenBefore, recorder.Total("audit_events_total", nameof(AuditOutcome.Success)));
     }
 
     [Theory]
