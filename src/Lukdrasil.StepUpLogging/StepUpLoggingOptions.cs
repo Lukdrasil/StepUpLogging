@@ -63,17 +63,19 @@ public sealed class StepUpLoggingOptions
 
     /// <summary>
     /// When true, applies <see cref="RedactionRegexes"/> to the string-valued scalar properties of
-    /// log events on the root pipeline — not just to the request-metadata fields the always-on
-    /// redaction covers — so a secret a consumer logs through <c>ILogger</c>, <c>LogImmediate*</c>,
-    /// or a <c>[LoggerMessage]</c> method is masked too. Properties added by your own enrichers are
-    /// swept as well; the sweep runs after them. A value whose redaction fails — a pattern that
-    /// times out, for example — is replaced by <c>[REDACTION-ERROR]</c>; any remaining patterns then
-    /// run against that sentinel and may rewrite part of it, so the exported text is not always the
-    /// sentinel verbatim — the original value is never emitted either way. Default: false — enabling
-    /// this is opt-in so an existing <see cref="RedactionRegexes"/> configuration does not change
-    /// behavior on upgrade; with no patterns configured the flag has no effect either.
+    /// log events on the root pipeline. Default: false.
     /// </summary>
     /// <remarks>
+    /// Sweeps log event properties for secrets logged through <c>ILogger</c>, <c>LogImmediate*</c>,
+    /// <c>[LoggerMessage]</c> methods, and properties added by your own enrichers — not just the
+    /// request-metadata fields the always-on redaction covers. The sweep runs after enrichers.
+    /// A value whose redaction fails — a pattern that times out, for example — is replaced by
+    /// <c>[REDACTION-ERROR]</c>; any remaining patterns then run against that sentinel and may
+    /// rewrite part of it, so the exported text is not always the sentinel verbatim — the original
+    /// value is never emitted either way. Enabling this is opt-in so an existing
+    /// <see cref="RedactionRegexes"/> configuration does not change behavior on upgrade; with no
+    /// patterns configured the flag has no effect either.
+    ///
     /// What the sweep does NOT reach:
     /// <list type="bullet">
     /// <item>Message template text and exception messages. An interpolated
