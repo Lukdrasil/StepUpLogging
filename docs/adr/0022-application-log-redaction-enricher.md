@@ -88,18 +88,31 @@ Three facts about the existing pipeline constrain the answer:
 6. **A fixed exclusion set protects the library's own properties.** Never redacted:
    `TraceId`, `SpanId`, `ParentSpanId`, `TraceFlags`, `TraceState`, `SourceContext`, `Application`,
    `Environment`, `MachineName`, `ServiceVersion`, `ServiceInstanceId`, and `CallStack` — twelve
-   names, not the eleven originally scoped. `CallStack` was added during implementation: it is
-   stamped by `Enrich.WithCallStack()` (`StepUpLoggingExtensions.cs:425`, gated by
-   `EnrichWithCallStack`, default `false`) from the third-party `Serilog.Enrichers.CallStack`
-   package, so unlike the rest of the set — which the library stamps itself via
-   `Enrich.WithProperty("Name", ...)` and is grep-able at the call site — its property name is a
-   fact about that package, not something visible in `ApplyCommonEnrichers`
-   (`StepUpLoggingExtensions.cs:390-437`) without checking it. It belongs in the set for the same
-   reason as the rest: it is a library-owned diagnostic value, never a consumer secret, and
-   redacting it would leave a captured stack trace unreadable while protecting nothing. None of the
-   twelve can carry a consumer secret, and two fail destructively if mangled: `ServiceInstanceId`
-   is a GUID in "N" form, so it matches `[0-9a-f]{32}` — precisely the API-key pattern this decision
-   is argued from — and silently splits OTLP resource identity; `SourceContext` is what
+   names, not the eleven originally scoped. The set is maintained **by name, not by origin**: the
+   twelve are stamped from six different places and no single registration site lists them.
+   `Enrich.WithProperty` literals in `ApplyCommonEnrichers` (`StepUpLoggingExtensions.cs:390-437`)
+   account for four — `Application` (`:396`), `Environment` (`:405`), `ServiceVersion` (`:430`),
+   `ServiceInstanceId` (`:435`). `TraceId`/`SpanId` come from the third-party
+   `Serilog.Enrichers.OpenTelemetry` (`:393-394`); `ParentSpanId`/`TraceFlags`/`TraceState` from
+   the library's own `ActivityContextEnricher` (`:395`), which names them internally; `MachineName`
+   from `Serilog.Enrichers.Environment` via `Enrich.WithMachineName()` (`:420`); and `CallStack`
+   from `Serilog.Enrichers.CallStack` via `Enrich.WithCallStack()` (`:425`, gated by
+   `EnrichWithCallStack`, default `false`). `SourceContext` is stamped by no enricher here at all —
+   Serilog itself and the `ILogger<T>` category bridge produce it.
+
+   That spread is the trap, and it is why the set was first scoped at eleven: only four of the
+   twelve names are readable at their call site, so enumerating the set from `ApplyCommonEnrichers`
+   drops every property whose name is a fact about a package rather than a literal in this repo —
+   which is exactly how `CallStack` was missed. The set has to be derived from the properties that
+   actually land on an event, not from the registration block; adding an enricher will drift it out
+   of date with nothing but this note to catch that.
+
+   `CallStack` belongs in the set for the same reason as the rest: it is a library-owned diagnostic
+   value, never a consumer secret, and redacting it would leave a captured stack trace unreadable
+   while protecting nothing. None of the twelve can carry a consumer secret, and two fail
+   destructively if mangled: `ServiceInstanceId` is a GUID in "N" form, so it matches
+   `[0-9a-f]{32}` — precisely the API-key pattern this decision is argued from — and silently
+   splits OTLP resource identity; `SourceContext` is what
    `StepUpSink.Emit` matches `NeverStepUpCategories` against (ADR 0021), so redacting it would
    silently disable the EF Core deny-list rather than merely look wrong. `ThreadId` and `ProcessId`
    need no entry — they are non-string scalars and the enricher never touches them. Rejected:
