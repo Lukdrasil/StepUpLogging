@@ -195,7 +195,7 @@ public class ApplicationLogRedactionTests
         // ApplyCommonEnrichers would sweep it again. \w+ matches its own replacement, so a second
         // pass is visible as [[REDACTED]] rather than being idempotent and invisible.
         // Not wrapped in try/finally: on assertion failure the file is left on disk as evidence
-        // rather than deleted before anyone can inspect it. Deleted only on success, below.
+        // rather than deleted before anyone can inspect it.
         var tempFile = Path.Combine(Path.GetTempPath(), $"stepup-redaction-preerror-{Guid.NewGuid():N}.log");
         var builder = Host.CreateApplicationBuilder();
         builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>

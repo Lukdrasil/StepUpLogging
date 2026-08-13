@@ -67,12 +67,11 @@ public sealed class StepUpLoggingOptions
     /// redaction covers — so a secret a consumer logs through <c>ILogger</c>, <c>LogImmediate*</c>,
     /// or a <c>[LoggerMessage]</c> method is masked too. Properties added by your own enrichers are
     /// swept as well; the sweep runs after them. A value whose redaction fails — a pattern that
-    /// times out, for example — has the original replaced with <c>[REDACTION-ERROR]</c>; with more
-    /// than one pattern configured, a later pattern can still match against that sentinel and rewrite
-    /// part of it, so the final text is not always the sentinel verbatim, but it is never the
-    /// original value either way. Default: false — enabling this is opt-in so an existing <see cref="RedactionRegexes"/>
-    /// configuration does not change behavior on upgrade; with no patterns configured the flag has
-    /// no effect either.
+    /// times out, for example — is replaced by <c>[REDACTION-ERROR]</c>; any remaining patterns then
+    /// run against that sentinel and may rewrite part of it, so the exported text is not always the
+    /// sentinel verbatim — the original value is never emitted either way. Default: false — enabling
+    /// this is opt-in so an existing <see cref="RedactionRegexes"/> configuration does not change
+    /// behavior on upgrade; with no patterns configured the flag has no effect either.
     /// </summary>
     /// <remarks>
     /// What the sweep does NOT reach:

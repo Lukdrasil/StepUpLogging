@@ -1097,12 +1097,11 @@ The list has no effect in `StepUpMode.AlwaysOn`: that mode never steps up, so th
 to suppress, and a developer running it locally wants to see the SQL.
 
 One caveat: the deny-list gates the export path only. The pre-error buffer is deliberately **not**
-filtered — when it flushes on an error it still carries the SQL that led up to that error. Whether
-that SQL reaches the buffer redacted depends on `RedactLogEventProperties`: request metadata
-(query string, route values, headers, body) is always redacted, but the SQL command text is a
-property of an ordinary application log event, so it is covered only when
-`RedactLogEventProperties` is also set — with it off, the buffer carries the SQL **unredacted**.
-Treat EF as a channel that can leak secrets: do not log sensitive values through it.
+filtered — when it flushes on an error it still carries the SQL that led up to that error, and
+unless you set `RedactLogEventProperties` it carries it **unredacted**: the SQL command text is a
+property of an ordinary log event, not request metadata, so only that flag brings it in scope (see
+[Security](#security)). Treat EF as a channel that can leak secrets: do not log sensitive values
+through it.
 
 To restore the pre-3.1.0 behaviour (step-up raises every category, including EF SQL), set the
 list empty:
@@ -1140,12 +1139,15 @@ alone.
 
 Set `RedactLogEventProperties: true` to also sweep the string-valued scalar properties of
 application log events with the same `RedactionRegexes`, so the example above **is** redacted
-once the flag is on. It does not reach message-template text or exception messages — an
-interpolated `logger.LogInformation($"token={t}")` bakes the value into the template and
-produces no property, so it is logged verbatim regardless of the flag — nor structured, sequence
-or dictionary values, nor the properties the library stamps on every event (`TraceId`,
-`SourceContext`, `ServiceInstanceId`, etc. — see the `RedactLogEventProperties` XML doc for the
-full list and why). Do not log secrets in interpolated message templates.
+once the flag is on. The sweep reaches properties and nothing else. It does not touch
+message-template text or exception messages: an interpolated `logger.LogInformation($"token={t}")`
+bakes the value into the template and produces no property, so it is logged verbatim whatever the
+flag says. It does not recurse into structures (`{@user}`), sequences or dictionaries. It skips
+the twelve properties the library stamps itself (`TraceId`, `SourceContext`,
+`ServiceInstanceId` and nine more — the `RedactLogEventProperties` XML doc lists them and the
+reason for each). And it never sees the two events the library writes straight to the bypass
+logger — the request summary and the startup level-ordering warning — which do not pass root
+enrichment. Do not log secrets in interpolated message templates.
 
 ### Sustained-error cost amplification
 

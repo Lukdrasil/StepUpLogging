@@ -19,14 +19,17 @@ entire SQL traffic for the next 180 seconds. Two consequences:
 1. **Volume and cost.** In a DB-heavy service `Database.Command` is typically the
    dominant category. The step-up window coincides with an incident, i.e. exactly when
    traffic and telemetry cost are already elevated.
-2. **Unredacted content.** At the time of this decision, `CompiledRedactionPatterns.Redact()`
-   covered request metadata only — query string, route values, headers, request body — and did
-   not scan the rendered text of arbitrary log events. The SQL command text, and with
-   `EnableSensitiveDataLogging` also the parameter values, left the process unredacted with no
-   way to opt out. (Amendment, ADR 0022: `StepUpLoggingOptions.RedactLogEventProperties`, opt-in
-   and default off, now also sweeps the string-valued scalar properties of application log
-   events — including the EF command-text property — so this gap is closable without waiting on
-   this ADR.)
+2. **Unredacted content.** `CompiledRedactionPatterns.Redact()` covers request metadata
+   only — query string, route values, headers, request body. It does not scan the
+   rendered text of arbitrary log events (documented in `StepUpLoggingOptions`). The SQL
+   command text, and with `EnableSensitiveDataLogging` also the parameter values, leave
+   the process unredacted.
+
+   > **Amended by ADR 0022 (2026-08-13):** true only with `RedactLogEventProperties` off,
+   > which is the default. Set it and `RedactionRegexes` also sweeps the string-valued scalar
+   > properties of application log events, EF's command text among them — so a consumer can
+   > close this gap without the deny-list. The volume argument in 1. is untouched, and it is
+   > the one the default rests on. See ADR 0022 D1/D3.
 
 A consumer can already write
 `Serilog:MinimumLevel:Override:Microsoft.EntityFrameworkCore.Database.Command = Warning`.
@@ -51,10 +54,13 @@ outputs. `PreErrorBufferSink` is deliberately **not** filtered: its flush is bou
 (`PreErrorBufferSize` events per trace, once, on error) and the SQL leading up to an error
 is the most valuable content the buffer holds. The flood problem is the 180-second window,
 not the one bounded flush. (Consequence: that flush still carries unredacted SQL through
-the bypass logger — pre-existing behaviour, unchanged by this ADR, documented in the README.
-Amendment, ADR 0022: unredacted here means "unless `RedactLogEventProperties` is set" — root
-enrichment runs before `PreErrorBufferSink` sees the event, so a buffered flush is redacted
-exactly like every other property-bearing event when the flag is on.)
+the bypass logger — pre-existing behaviour, unchanged by this ADR, documented in the README.)
+
+> **Amended by ADR 0022 (2026-08-13):** "unredacted" here now means "unless
+> `RedactLogEventProperties` is set". Root enrichment runs before any sink, so
+> `PreErrorBufferSink` buffers an already-redacted event and its flush carries exactly what
+> every other property-bearing event carries. The flush is still unfiltered by the deny-list;
+> only its redaction changed. See ADR 0022 D4.
 
 **2. A listed category is pinned to `BaseLevel`, not silenced.** It behaves as though
 step-up did not exist: EF `Warning`/`Error` still export, `Information` SQL never does.

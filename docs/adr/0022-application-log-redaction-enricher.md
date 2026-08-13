@@ -119,8 +119,9 @@ Three facts about the existing pipeline constrain the answer:
   deliberate, given the alternative is a silent behaviour change on upgrade.
 - Redaction is now a two-tier concept: request-input redaction (always on when patterns are set)
   and application-log redaction (opt-in). Four surfaces stated the limit **absolutely** and became
-  wrong — not merely incomplete — the moment D1 shipped, and all four were corrected rather than
-  appended to:
+  wrong — not merely incomplete — the moment D1 shipped. The three live surfaces were rewritten
+  rather than given a trailing caveat; ADR 0021, being a decision record, keeps its original text
+  and carries an `Amended by ADR 0022` note in the house style ADR 0016 established:
   1. the **shipped XML doc** on `StepUpLoggingOptions.RedactionRegexes`, which named the exact
      `logger.LogInformation("token={T}", secret)` case D1 covers. This was the highest-priority
      one: it ships inside the NuGet package as IntelliSense, is an API contract rather than prose,
