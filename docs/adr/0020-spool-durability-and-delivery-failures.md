@@ -20,7 +20,7 @@ application running by losing audit silently. This ADR rejects every one of them
    merely to the OS page cache. One fsync per audit write, synchronously on the business path.
 
 2. **Records are written to a `.tmp` file and atomically renamed** into place. The drain worker
-   sees only complete files; a `.tmp` left by a crash is deleted at start-up. Without this, a crash
+   sees only complete files; a `.tmp` left by a crash is handled at start-up. A `.tmp` that still parses as a whole envelope is instead promoted to its `.env` name — the directory entry for its rename is not fsynced, so a power loss can revert the rename alone and leave a complete record behind under its old name, and that record was already durable. An unparseable `.tmp` is deleted. Without this, a crash
    mid-write leaves truncated content that the drain worker would treat as a poisoned record.
 
 3. **One file per record**, named `{createdUtc:yyyyMMddTHHmmssfffffffZ}-{eventId}.env`, so
