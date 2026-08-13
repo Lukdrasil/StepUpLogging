@@ -60,10 +60,14 @@ internal sealed class SpoolCapacity(EncryptedSpoolOptions options)
 /// depth on the business path — tens of milliseconds once a stalled receiver has let it grow.
 /// </summary>
 /// <remarks>
-/// Not thread-safe: the sink reads and updates it under the gate that serializes its writes.
+/// The write path still owns correctness — the sink reads and updates this under the gate that
+/// serializes its writes, so only ever one thread updates the tally. The lock exists for
+/// <see cref="Snapshot"/> alone: a gauge observes the tally from a collection thread, and every
+/// update takes the lock so that observation can never catch a half-written value.
 /// </remarks>
 internal sealed class SpoolUsageTracker(SpoolCapacity capacity)
 {
+    private readonly object _gate = new();
     private SpoolUsage? _addedUp;
 
     /// <summary>
@@ -81,19 +85,64 @@ internal sealed class SpoolUsageTracker(SpoolCapacity capacity)
             usage = capacity.Measure();
         }
 
-        _addedUp = usage;
+        lock (_gate)
+        {
+            _addedUp = usage;
+        }
+
         return usage;
     }
 
     /// <summary>Adds a record of <paramref name="recordBytes"/> that reached the spool.</summary>
     public void Recorded(long recordBytes)
     {
-        if (_addedUp is { } usage)
+        lock (_gate)
         {
-            _addedUp = capacity.Grown(usage, recordBytes);
+            if (_addedUp is { } usage)
+            {
+                _addedUp = capacity.Grown(usage, recordBytes);
+            }
         }
     }
 
     /// <summary>Drops what was added up, so the next read comes from the disk again.</summary>
-    public void Invalidate() => _addedUp = null;
+    public void Invalidate()
+    {
+        lock (_gate)
+        {
+            _addedUp = null;
+        }
+    }
+
+    /// <summary>
+    /// The tally as it stands, scanning disk at most once — the first call, if nothing has primed it
+    /// yet (typically a restart sitting on a backlog no write in this process has touched). Every
+    /// later call reuses that tally instead of re-scanning, so cheap, frequent observation (an OTel
+    /// gauge) never puts a directory enumeration on every collection interval. Same tolerance as
+    /// <see cref="Read"/>: only ever too high, never too low — reporting zero here as long as the
+    /// spool sat unread would break that, since an idle-but-backlogged instance is exactly the case
+    /// the gauge exists for.
+    /// </summary>
+    public SpoolUsage Snapshot
+    {
+        get
+        {
+            lock (_gate)
+            {
+                if (_addedUp is { } usage)
+                {
+                    return usage;
+                }
+            }
+
+            // The scan happens outside the lock, matching Read(): it is disk I/O, and nothing else
+            // needs the lock held across it.
+            var measured = capacity.Measure();
+            lock (_gate)
+            {
+                _addedUp ??= measured;
+                return _addedUp.Value;
+            }
+        }
+    }
 }

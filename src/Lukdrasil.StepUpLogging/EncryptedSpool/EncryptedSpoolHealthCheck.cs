@@ -17,7 +17,7 @@ namespace Lukdrasil.StepUpLogging.Audit.EncryptedSpool;
 /// failed often enough in a row (ADR 0019 D4).</item>
 /// </list>
 /// </summary>
-internal sealed class SpoolCapHealthCheck(
+internal sealed class EncryptedSpoolHealthCheck(
     IOptions<EncryptedSpoolOptions> options,
     DeadLetterBox deadLetterBox,
     EndpointReachability reachability) : IHealthCheck

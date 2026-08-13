@@ -119,4 +119,20 @@ public sealed class EncryptedSpoolOptions
     /// resumes on its own once the endpoint is back (ADR 0019 D4).
     /// </summary>
     public HealthStatus UnreachableStatus { get; set; } = HealthStatus.Degraded;
+
+    /// <summary>
+    /// How long the drain worker's <see cref="HttpClient"/> waits for one delivery attempt before
+    /// giving up on it. A request that runs past this is treated exactly like any other transient
+    /// failure — retried with backoff, never dead-lettered (ADR 0020 D7). Defaults to 30 seconds.
+    /// </summary>
+    public TimeSpan DeliveryTimeout { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Sets whatever credentials the audit endpoint requires — an <c>Authorization</c> header, a
+    /// client certificate, a custom scheme — directly on the <see cref="HttpClient"/> the drain
+    /// worker delivers with. Not encryption key material: this authenticates the HTTP request only,
+    /// and the worker never inspects what it does. Optional; nothing extra is sent when this is
+    /// left unset.
+    /// </summary>
+    public Action<HttpClient>? ConfigureProducerCredentials { get; set; }
 }

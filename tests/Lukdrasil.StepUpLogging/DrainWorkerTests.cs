@@ -103,11 +103,16 @@ public class DrainWorkerTests
 
             Receiver = receiver;
             _client = new HttpClient(receiver);
-            _sink = new EncryptedSpoolAuditSink(Options.Create(SpoolOptions), Encryptor, NullLogger<EncryptedSpoolAuditSink>.Instance);
+            _sink = new EncryptedSpoolAuditSink(
+                Options.Create(SpoolOptions),
+                new SpoolWriter(SpoolOptions.SpoolDirectory),
+                new SpoolUsageTracker(new SpoolCapacity(SpoolOptions)),
+                Encryptor,
+                NullLogger<EncryptedSpoolAuditSink>.Instance);
             DeadLetter = new DeadLetterBox(Options.Create(SpoolOptions));
             Reachability = new EndpointReachability();
             Worker = StartedOver();
-            HealthCheck = new SpoolCapHealthCheck(Options.Create(SpoolOptions), DeadLetter, Reachability);
+            HealthCheck = new EncryptedSpoolHealthCheck(Options.Create(SpoolOptions), DeadLetter, Reachability);
         }
 
         public EncryptedSpoolOptions SpoolOptions { get; }
@@ -126,7 +131,7 @@ public class DrainWorkerTests
 
         public DrainWorker Worker { get; }
 
-        public SpoolCapHealthCheck HealthCheck { get; }
+        public EncryptedSpoolHealthCheck HealthCheck { get; }
 
         /// <summary>Another worker over the same spool, endpoint and directories — what a restarted host builds.</summary>
         public DrainWorker StartedOver() =>

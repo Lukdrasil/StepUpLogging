@@ -35,5 +35,8 @@ internal sealed class AuditMeterTotals : IDisposable
         }
     }
 
+    /// <summary>Polls every enabled observable instrument (e.g. a gauge) once, recording its current value.</summary>
+    public void RecordObservableInstruments() => _listener.RecordObservableInstruments();
+
     public void Dispose() => _listener.Dispose();
 }
