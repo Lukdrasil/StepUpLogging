@@ -327,10 +327,13 @@ public class DrainWorkerTests
         // A fault that never clears (a bad sector, a broken ACL) must not block the queue forever
         // (ADR 0020's own rejected alternative), and the endpoint was never contacted for it, so it
         // must not count against EndpointReachability — that would blame the receiver for a local
-        // disk fault. FileShare.Delete (not None): the dead-letter move needs directory rights, not
-        // read access to the file, exactly as ADR 0020 D7's rationale for a permission fault says —
-        // a lock that also blocked the move would never let this test's own dead-letter succeed.
-        using (new FileStream(lockedPath, FileMode.Open, FileAccess.Read, FileShare.Delete))
+        // disk fault. On Windows, FileShare.Delete (not None): the dead-letter move needs directory
+        // rights, not read access to the file, exactly as ADR 0020 D7's rationale for a permission
+        // fault says — a lock that also blocked the move would never let this test's own dead-letter
+        // succeed. On Unix the share mode is an advisory flock that Delete alone does not take, so
+        // the file stays readable there; None is what makes the read fail, and rename is unaffected.
+        var unreadable = OperatingSystem.IsWindows() ? FileShare.Delete : FileShare.None;
+        using (new FileStream(lockedPath, FileMode.Open, FileAccess.Read, unreadable))
         {
             await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
             await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
