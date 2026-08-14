@@ -9,8 +9,10 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Serilog;
+using Serilog.Extensions.Hosting;
 using Serilog.Core;
 using Serilog.Events;
 using Xunit;
@@ -30,48 +32,45 @@ public class QueryStringAndRouteParameterRedactionTests
         public void Emit(LogEvent logEvent) => Events.Add(logEvent);
     }
 
-    private static TestServer BuildServer(CaptureSink capture, Serilog.ILogger logger)
+    private static async Task<IHost> BuildServerAsync(Serilog.ILogger logger)
     {
         var opts = new StepUpLoggingOptions
         {
             RedactionRegexes = new[] { "secret-[A-Za-z0-9]+" }
         };
 
-        var builder = new WebHostBuilder()
-            .ConfigureServices(services =>
-            {
-                services.AddRouting();
-                services.AddSingleton(Options.Create(opts));
-                services.AddSingleton(logger);
-                services.AddSingleton(sp => new StepUpLoggingController(opts, logger));
-                var patterns = opts.RedactionRegexes
-                    .Select(p => new Regex(p, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100)))
-                    .ToArray();
-                services.AddSingleton(new CompiledRedactionPatterns(patterns));
-                var diagType = Type.GetType("Serilog.Extensions.Hosting.DiagnosticContext, Serilog.Extensions.Hosting")
-                               ?? Type.GetType("Serilog.AspNetCore.DiagnosticContext, Serilog.AspNetCore");
-                var ctor = diagType!.GetConstructors().OrderByDescending(c => c.GetParameters().Length).First();
-                var args = ctor.GetParameters().Select(p =>
-                    p.ParameterType == typeof(Serilog.ILogger) ? (object?)logger
-                    : p.HasDefaultValue ? p.DefaultValue
-                    : null).ToArray();
-                services.AddSingleton(diagType, ctor.Invoke(args));
-            })
-            .Configure(app =>
-            {
-                app.UseRouting();
-                app.UseStepUpRequestLogging();
-                app.UseEndpoints(endpoints =>
+        var host = new HostBuilder()
+            .ConfigureWebHost(web => web
+                .UseTestServer()
+                .ConfigureServices(services =>
                 {
-                    endpoints.MapGet("/api/{id}", async ctx =>
+                    services.AddRouting();
+                    services.AddSingleton(Options.Create(opts));
+                    services.AddSingleton(logger);
+                    services.AddSingleton(sp => new StepUpLoggingController(opts, logger));
+                    var patterns = opts.RedactionRegexes
+                        .Select(p => new Regex(p, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100)))
+                        .ToArray();
+                    services.AddSingleton(new CompiledRedactionPatterns(patterns));
+                    services.AddSingleton(new DiagnosticContext(logger));
+                })
+                .Configure(app =>
+                {
+                    app.UseRouting();
+                    app.UseStepUpRequestLogging();
+                    app.UseEndpoints(endpoints =>
                     {
-                        ctx.Response.StatusCode = 200;
-                        await ctx.Response.WriteAsync("ok");
+                        endpoints.MapGet("/api/{id}", async ctx =>
+                        {
+                            ctx.Response.StatusCode = 200;
+                            await ctx.Response.WriteAsync("ok");
+                        });
                     });
-                });
-            });
+                }))
+            .Build();
 
-        return new TestServer(builder);
+        await host.StartAsync();
+        return host;
     }
 
     private static LogEvent? FindRequestFinishedEvent(CaptureSink capture) =>
@@ -86,8 +85,8 @@ public class QueryStringAndRouteParameterRedactionTests
         Log.Logger = logger;
         try
         {
-            using var server = BuildServer(capture, logger);
-            using var client = server.CreateClient();
+            using var host = await BuildServerAsync(logger);
+            using var client = host.GetTestClient();
 
             var response = await client.GetAsync("/api/plain?token=secret-xyz789");
             response.EnsureSuccessStatusCode();
@@ -116,8 +115,8 @@ public class QueryStringAndRouteParameterRedactionTests
         Log.Logger = logger;
         try
         {
-            using var server = BuildServer(capture, logger);
-            using var client = server.CreateClient();
+            using var host = await BuildServerAsync(logger);
+            using var client = host.GetTestClient();
 
             var response = await client.GetAsync("/api/secret-abc123");
             response.EnsureSuccessStatusCode();

@@ -6,9 +6,11 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using System.Text.RegularExpressions;
 using Serilog;
+using Serilog.Extensions.Hosting;
 using Serilog.Core;
 using Serilog.Events;
 using Xunit;
@@ -41,38 +43,34 @@ namespace Lukdrasil.StepUpLogging.Tests
                     AdditionalSensitiveHeaders = new[] { "X-Api-Token" }
                 };
 
-                var builder = new WebHostBuilder()
-                    .ConfigureServices(services =>
-                    {
-                        services.AddSingleton(Options.Create(opts));
-                        services.AddSingleton<Serilog.ILogger>(completionLogger);
-                        services.AddSingleton(sp => new StepUpLoggingController(opts, completionLogger));
-                        var patterns = opts.RedactionRegexes
-                            .Where(p => !string.IsNullOrWhiteSpace(p))
-                            .Select(p => new Regex(p, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100)))
-                            .ToArray();
-                        services.AddSingleton(new CompiledRedactionPatterns(patterns));
-                        var diagType = Type.GetType("Serilog.Extensions.Hosting.DiagnosticContext, Serilog.Extensions.Hosting")
-                                       ?? Type.GetType("Serilog.AspNetCore.DiagnosticContext, Serilog.AspNetCore");
-                        var ctor = diagType!.GetConstructors().OrderByDescending(c => c.GetParameters().Length).First();
-                        var args = ctor.GetParameters().Select(p =>
-                            p.ParameterType == typeof(Serilog.ILogger) ? (object?)completionLogger
-                            : p.HasDefaultValue ? p.DefaultValue
-                            : null).ToArray();
-                        services.AddSingleton(diagType, ctor.Invoke(args));
-                    })
-                    .Configure(app =>
-                    {
-                        app.UseStepUpRequestLogging();
-                        app.Run(async ctx =>
+                using var host = new HostBuilder()
+                    .ConfigureWebHost(web => web
+                        .UseTestServer()
+                        .ConfigureServices(services =>
                         {
-                            ctx.Response.StatusCode = 200;
-                            await ctx.Response.WriteAsync("ok");
-                        });
-                    });
+                            services.AddSingleton(Options.Create(opts));
+                            services.AddSingleton<Serilog.ILogger>(completionLogger);
+                            services.AddSingleton(sp => new StepUpLoggingController(opts, completionLogger));
+                            var patterns = opts.RedactionRegexes
+                                .Where(p => !string.IsNullOrWhiteSpace(p))
+                                .Select(p => new Regex(p, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100)))
+                                .ToArray();
+                            services.AddSingleton(new CompiledRedactionPatterns(patterns));
+                            services.AddSingleton(new DiagnosticContext(completionLogger));
+                        })
+                        .Configure(app =>
+                        {
+                            app.UseStepUpRequestLogging();
+                            app.Run(async ctx =>
+                            {
+                                ctx.Response.StatusCode = 200;
+                                await ctx.Response.WriteAsync("ok");
+                            });
+                        }))
+                    .Build();
 
-                using var server = new TestServer(builder);
-                using var client = server.CreateClient();
+                await host.StartAsync();
+                using var client = host.GetTestClient();
                 // Client sends a different casing than the configured "X-Api-Token".
                 client.DefaultRequestHeaders.Add("x-api-token", secret);
                 await client.GetAsync("/api/test");

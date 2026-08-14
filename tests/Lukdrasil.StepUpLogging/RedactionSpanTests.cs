@@ -10,8 +10,10 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Serilog;
+using Serilog.Extensions.Hosting;
 using Serilog.Core;
 using Serilog.Events;
 using Xunit;
@@ -30,37 +32,34 @@ public class RedactionSpanTests
         public void Emit(LogEvent logEvent) => Events.Add(logEvent);
     }
 
-    private static TestServer BuildServer(CaptureSink capture, Serilog.ILogger logger)
+    private static async Task<IHost> BuildServerAsync(Serilog.ILogger logger)
     {
         var opts = new StepUpLoggingOptions { EnableActivityInstrumentation = true };
 
-        var builder = new WebHostBuilder()
-            .ConfigureServices(services =>
-            {
-                services.AddSingleton(Options.Create(opts));
-                services.AddSingleton(logger);
-                services.AddSingleton(sp => new StepUpLoggingController(opts, logger));
-                services.AddSingleton(new CompiledRedactionPatterns(Array.Empty<Regex>()));
-                var diagType = Type.GetType("Serilog.Extensions.Hosting.DiagnosticContext, Serilog.Extensions.Hosting")
-                               ?? Type.GetType("Serilog.AspNetCore.DiagnosticContext, Serilog.AspNetCore");
-                var ctor = diagType!.GetConstructors().OrderByDescending(c => c.GetParameters().Length).First();
-                var args = ctor.GetParameters().Select(p =>
-                    p.ParameterType == typeof(Serilog.ILogger) ? (object?)logger
-                    : p.HasDefaultValue ? p.DefaultValue
-                    : null).ToArray();
-                services.AddSingleton(diagType, ctor.Invoke(args));
-            })
-            .Configure(app =>
-            {
-                app.UseStepUpRequestLogging();
-                app.Run(async ctx =>
+        var host = new HostBuilder()
+            .ConfigureWebHost(web => web
+                .UseTestServer()
+                .ConfigureServices(services =>
                 {
-                    ctx.Response.StatusCode = 200;
-                    await ctx.Response.WriteAsync("ok");
-                });
-            });
+                    services.AddSingleton(Options.Create(opts));
+                    services.AddSingleton(logger);
+                    services.AddSingleton(sp => new StepUpLoggingController(opts, logger));
+                    services.AddSingleton(new CompiledRedactionPatterns(Array.Empty<Regex>()));
+                    services.AddSingleton(new DiagnosticContext(logger));
+                })
+                .Configure(app =>
+                {
+                    app.UseStepUpRequestLogging();
+                    app.Run(async ctx =>
+                    {
+                        ctx.Response.StatusCode = 200;
+                        await ctx.Response.WriteAsync("ok");
+                    });
+                }))
+            .Build();
 
-        return new TestServer(builder);
+        await host.StartAsync();
+        return host;
     }
 
     private static (List<Activity> Redactions, ActivityListener Listener) ListenForRedactionSpans()
@@ -92,8 +91,8 @@ public class RedactionSpanTests
         var (redactions, listener) = ListenForRedactionSpans();
         try
         {
-            using var server = BuildServer(capture, logger);
-            using var client = server.CreateClient();
+            using var host = await BuildServerAsync(logger);
+            using var client = host.GetTestClient();
 
             var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
             request.Headers.TryAddWithoutValidation("Authorization", "Bearer xyz");
@@ -130,8 +129,8 @@ public class RedactionSpanTests
         var (redactions, listener) = ListenForRedactionSpans();
         try
         {
-            using var server = BuildServer(capture, logger);
-            using var client = server.CreateClient();
+            using var host = await BuildServerAsync(logger);
+            using var client = host.GetTestClient();
 
             await client.GetAsync("http://localhost/test");
             await Task.Delay(50);
