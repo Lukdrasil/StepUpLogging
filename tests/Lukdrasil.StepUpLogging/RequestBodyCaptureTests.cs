@@ -11,8 +11,10 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Serilog;
+using Serilog.Extensions.Hosting;
 using Serilog.Core;
 using Serilog.Events;
 using Xunit;
@@ -27,53 +29,49 @@ public class RequestBodyCaptureTests
         public void Emit(LogEvent logEvent) => Events.Add(logEvent);
     }
 
-    private static TestServer BuildServer(Serilog.ILogger logger, out StepUpLoggingOptions opts,
+    private static async Task<IHost> BuildServerAsync(Serilog.ILogger logger,
         int? maxBodyCaptureBytes = null, StepUpMode mode = StepUpMode.AlwaysOn, int statusCode = 200)
     {
-        opts = new StepUpLoggingOptions
+        var options = new StepUpLoggingOptions
         {
             Mode = mode,        // AlwaysOn => IsSteppedUp == true
             CaptureRequestBody = true,
             RedactionRegexes = new[] { "secret-[A-Za-z0-9]+" }
         };
-        if (maxBodyCaptureBytes is int max) opts.MaxBodyCaptureBytes = max;
-        var options = opts;
+        if (maxBodyCaptureBytes is int max) options.MaxBodyCaptureBytes = max;
 
-        var builder = new WebHostBuilder()
-            .ConfigureServices(services =>
-            {
-                services.AddSingleton(Options.Create(options));
-                services.AddSingleton(logger);
-                services.AddSingleton(sp => new StepUpLoggingController(options, logger));
-                var patterns = options.RedactionRegexes
-                    .Select(p => new Regex(p, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100)))
-                    .ToArray();
-                services.AddSingleton(new CompiledRedactionPatterns(patterns));
-                var diagType = Type.GetType("Serilog.Extensions.Hosting.DiagnosticContext, Serilog.Extensions.Hosting")
-                               ?? Type.GetType("Serilog.AspNetCore.DiagnosticContext, Serilog.AspNetCore");
-                var ctor = diagType!.GetConstructors().OrderByDescending(c => c.GetParameters().Length).First();
-                var args = ctor.GetParameters().Select(p =>
-                    p.ParameterType == typeof(Serilog.ILogger) ? (object?)logger
-                    : p.HasDefaultValue ? p.DefaultValue
-                    : null).ToArray();
-                services.AddSingleton(diagType, ctor.Invoke(args));
-            })
-            .Configure(app =>
-            {
-                app.UseStepUpRequestLogging();
-                app.Run(async ctx =>
+        var host = new HostBuilder()
+            .ConfigureWebHost(web => web
+                .UseTestServer()
+                .ConfigureServices(services =>
                 {
-                    // Consume the body exactly like a real endpoint would — this is what the old
-                    // implementation could not survive (it buffered too late, after this read).
-                    // leaveOpen so we don't dispose Request.Body (model binding doesn't either).
-                    var reader = new StreamReader(ctx.Request.Body, Encoding.UTF8, true, 1024, leaveOpen: true);
-                    var received = await reader.ReadToEndAsync();
-                    ctx.Response.StatusCode = statusCode;
-                    await ctx.Response.WriteAsync($"len={received.Length}");
-                });
-            });
+                    services.AddSingleton(Options.Create(options));
+                    services.AddSingleton(logger);
+                    services.AddSingleton(sp => new StepUpLoggingController(options, logger));
+                    var patterns = options.RedactionRegexes
+                        .Select(p => new Regex(p, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100)))
+                        .ToArray();
+                    services.AddSingleton(new CompiledRedactionPatterns(patterns));
+                    services.AddSingleton(new DiagnosticContext(logger));
+                })
+                .Configure(app =>
+                {
+                    app.UseStepUpRequestLogging();
+                    app.Run(async ctx =>
+                    {
+                        // Consume the body exactly like a real endpoint would — this is what the old
+                        // implementation could not survive (it buffered too late, after this read).
+                        // leaveOpen so we don't dispose Request.Body (model binding doesn't either).
+                        var reader = new StreamReader(ctx.Request.Body, Encoding.UTF8, true, 1024, leaveOpen: true);
+                        var received = await reader.ReadToEndAsync();
+                        ctx.Response.StatusCode = statusCode;
+                        await ctx.Response.WriteAsync($"len={received.Length}");
+                    });
+                }))
+            .Build();
 
-        return new TestServer(builder);
+        await host.StartAsync();
+        return host;
     }
 
     private static string? FindRequestBody(CaptureSink capture) =>
@@ -91,8 +89,8 @@ public class RequestBodyCaptureTests
         Log.Logger = logger;
         try
         {
-            using var server = BuildServer(logger, out _);
-            using var client = server.CreateClient();
+            using var host = await BuildServerAsync(logger);
+            using var client = host.GetTestClient();
 
             var body = "{\"user\":\"bob\",\"token\":\"secret-abc123\"}";
             var response = await client.PostAsync("/api/test", new StringContent(body, Encoding.UTF8, "application/json"));
@@ -124,8 +122,8 @@ public class RequestBodyCaptureTests
         Log.Logger = logger;
         try
         {
-            using var server = BuildServer(logger, out _);
-            using var client = server.CreateClient();
+            using var host = await BuildServerAsync(logger);
+            using var client = host.GetTestClient();
 
             // Zero-length body on a POST while stepped up.
             var response = await client.PostAsync("/api/test", new StringContent(string.Empty, Encoding.UTF8, "application/json"));
@@ -154,8 +152,8 @@ public class RequestBodyCaptureTests
         try
         {
             const int limit = 40;
-            using var server = BuildServer(logger, out _, maxBodyCaptureBytes: limit);
-            using var client = server.CreateClient();
+            using var host = await BuildServerAsync(logger, maxBodyCaptureBytes: limit);
+            using var client = host.GetTestClient();
 
             // The secret starts at offset 34, so a naive read of the first 40 chars would slice it
             // mid-token ("...xxsecret" with the hyphen past the cut), the pattern would no longer
@@ -186,8 +184,8 @@ public class RequestBodyCaptureTests
         Log.Logger = logger;
         try
         {
-            using var server = BuildServer(logger, out _, mode: StepUpMode.Auto, statusCode: 500);
-            using var client = server.CreateClient();
+            using var host = await BuildServerAsync(logger, mode: StepUpMode.Auto, statusCode: 500);
+            using var client = host.GetTestClient();
 
             var body = "{\"user\":\"bob\"}";
             await client.PostAsync("/api/test", new StringContent(body, Encoding.UTF8, "application/json"));
@@ -213,8 +211,8 @@ public class RequestBodyCaptureTests
         Log.Logger = logger;
         try
         {
-            using var server = BuildServer(logger, out _, mode: StepUpMode.Auto, statusCode: 200);
-            using var client = server.CreateClient();
+            using var host = await BuildServerAsync(logger, mode: StepUpMode.Auto, statusCode: 200);
+            using var client = host.GetTestClient();
 
             var body = "{\"user\":\"bob\"}";
             await client.PostAsync("/api/test", new StringContent(body, Encoding.UTF8, "application/json"));
@@ -272,45 +270,41 @@ public class RequestBodyCaptureTests
                 RedactionRegexes = new[] { "secret-[A-Za-z0-9]+" }
             };
 
-            var builder = new WebHostBuilder()
-                .ConfigureServices(services =>
-                {
-                    services.AddSingleton(Options.Create(opts));
-                    services.AddSingleton(logger);
-                    services.AddSingleton(sp => new StepUpLoggingController(opts, logger));
-                    var patterns = opts.RedactionRegexes
-                        .Select(p => new Regex(p, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100)))
-                        .ToArray();
-                    services.AddSingleton(new CompiledRedactionPatterns(patterns));
-                    var diagType = Type.GetType("Serilog.Extensions.Hosting.DiagnosticContext, Serilog.Extensions.Hosting")
-                                   ?? Type.GetType("Serilog.AspNetCore.DiagnosticContext, Serilog.AspNetCore");
-                    var ctor = diagType!.GetConstructors().OrderByDescending(c => c.GetParameters().Length).First();
-                    var args = ctor.GetParameters().Select(p =>
-                        p.ParameterType == typeof(Serilog.ILogger) ? (object?)logger
-                        : p.HasDefaultValue ? p.DefaultValue
-                        : null).ToArray();
-                    services.AddSingleton(diagType, ctor.Invoke(args));
-                })
-                .Configure(app =>
-                {
-                    // Drip the buffered body 64 bytes at a time so a single StreamReader.Read returns
-                    // far short of the full body — the exact condition ReadBlock must survive.
-                    app.Use(async (ctx, next) =>
+            using var host = new HostBuilder()
+                .ConfigureWebHost(web => web
+                    .UseTestServer()
+                    .ConfigureServices(services =>
                     {
-                        ctx.Request.EnableBuffering();
-                        ctx.Request.Body = new DripStream(ctx.Request.Body, 64);
-                        await next();
-                    });
-                    app.UseStepUpRequestLogging();
-                    app.Run(async ctx =>
+                        services.AddSingleton(Options.Create(opts));
+                        services.AddSingleton(logger);
+                        services.AddSingleton(sp => new StepUpLoggingController(opts, logger));
+                        var patterns = opts.RedactionRegexes
+                            .Select(p => new Regex(p, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100)))
+                            .ToArray();
+                        services.AddSingleton(new CompiledRedactionPatterns(patterns));
+                        services.AddSingleton(new DiagnosticContext(logger));
+                    })
+                    .Configure(app =>
                     {
-                        ctx.Response.StatusCode = 200;
-                        await ctx.Response.WriteAsync("ok");
-                    });
-                });
+                        // Drip the buffered body 64 bytes at a time so a single StreamReader.Read returns
+                        // far short of the full body — the exact condition ReadBlock must survive.
+                        app.Use(async (ctx, next) =>
+                        {
+                            ctx.Request.EnableBuffering();
+                            ctx.Request.Body = new DripStream(ctx.Request.Body, 64);
+                            await next();
+                        });
+                        app.UseStepUpRequestLogging();
+                        app.Run(async ctx =>
+                        {
+                            ctx.Response.StatusCode = 200;
+                            await ctx.Response.WriteAsync("ok");
+                        });
+                    }))
+                .Build();
 
-            using var server = new TestServer(builder);
-            using var client = server.CreateClient();
+            await host.StartAsync();
+            using var client = host.GetTestClient();
 
             var body = new string('a', 300) + "secret-TAILTOKEN";
             var response = await client.PostAsync("/api/test", new StringContent(body, Encoding.UTF8, "application/json"));
@@ -366,45 +360,41 @@ public class RequestBodyCaptureTests
                 RedactionRegexes = new[] { "secret-[A-Za-z0-9]+" }
             };
 
-            var builder = new WebHostBuilder()
-                .ConfigureServices(services =>
-                {
-                    services.AddSingleton(Options.Create(opts));
-                    services.AddSingleton(logger);
-                    services.AddSingleton(sp => new StepUpLoggingController(opts, logger));
-                    var patterns = opts.RedactionRegexes
-                        .Select(p => new Regex(p, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100)))
-                        .ToArray();
-                    services.AddSingleton(new CompiledRedactionPatterns(patterns));
-                    var diagType = Type.GetType("Serilog.Extensions.Hosting.DiagnosticContext, Serilog.Extensions.Hosting")
-                                   ?? Type.GetType("Serilog.AspNetCore.DiagnosticContext, Serilog.AspNetCore");
-                    var ctor = diagType!.GetConstructors().OrderByDescending(c => c.GetParameters().Length).First();
-                    var args = ctor.GetParameters().Select(p =>
-                        p.ParameterType == typeof(Serilog.ILogger) ? (object?)logger
-                        : p.HasDefaultValue ? p.DefaultValue
-                        : null).ToArray();
-                    services.AddSingleton(diagType, ctor.Invoke(args));
-                })
-                .Configure(app =>
-                {
-                    // Swap the request body for a stream that throws on Read, but reports
-                    // CanSeek = true so it passes the enricher's gate and hits the read itself.
-                    app.Use(async (ctx, next) =>
+            using var host = new HostBuilder()
+                .ConfigureWebHost(web => web
+                    .UseTestServer()
+                    .ConfigureServices(services =>
                     {
-                        ctx.Request.EnableBuffering();
-                        ctx.Request.Body = new ThrowingOnReadBody(ctx.Request.Body);
-                        await next();
-                    });
-                    app.UseStepUpRequestLogging();
-                    app.Run(async ctx =>
+                        services.AddSingleton(Options.Create(opts));
+                        services.AddSingleton(logger);
+                        services.AddSingleton(sp => new StepUpLoggingController(opts, logger));
+                        var patterns = opts.RedactionRegexes
+                            .Select(p => new Regex(p, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100)))
+                            .ToArray();
+                        services.AddSingleton(new CompiledRedactionPatterns(patterns));
+                        services.AddSingleton(new DiagnosticContext(logger));
+                    })
+                    .Configure(app =>
                     {
-                        ctx.Response.StatusCode = 200;
-                        await ctx.Response.WriteAsync("ok");
-                    });
-                });
+                        // Swap the request body for a stream that throws on Read, but reports
+                        // CanSeek = true so it passes the enricher's gate and hits the read itself.
+                        app.Use(async (ctx, next) =>
+                        {
+                            ctx.Request.EnableBuffering();
+                            ctx.Request.Body = new ThrowingOnReadBody(ctx.Request.Body);
+                            await next();
+                        });
+                        app.UseStepUpRequestLogging();
+                        app.Run(async ctx =>
+                        {
+                            ctx.Response.StatusCode = 200;
+                            await ctx.Response.WriteAsync("ok");
+                        });
+                    }))
+                .Build();
 
-            using var server = new TestServer(builder);
-            using var client = server.CreateClient();
+            await host.StartAsync();
+            using var client = host.GetTestClient();
 
             var response = await client.PostAsync("/api/test", new StringContent("{\"x\":1}", Encoding.UTF8, "application/json"));
             response.EnsureSuccessStatusCode();

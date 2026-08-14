@@ -10,8 +10,10 @@ using Microsoft.AspNetCore.Http;
 using System.Text.RegularExpressions;
 using Lukdrasil.StepUpLogging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Serilog;
+using Serilog.Extensions.Hosting;
 using Serilog.Core;
 using Serilog.Events;
 using Xunit;
@@ -38,57 +40,54 @@ namespace Lukdrasil.StepUpLogging.Tests
             }
         }
 
-        private static TestServer CreateTestServer(CaptureSink captureSink, bool trustForwardedHeaders = false, string? jtiClaim = null, string[]? redactionRegexes = null)
+        private static async Task<IHost> CreateTestServerAsync(CaptureSink captureSink, bool trustForwardedHeaders = false, string? jtiClaim = null, string[]? redactionRegexes = null)
         {
             var summaryLogger = new LoggerConfiguration().WriteTo.Sink(captureSink).CreateLogger();
             var opts = new StepUpLoggingOptions { AlwaysLogRequestSummary = true, RequestSummaryLevel = "Information", TrustForwardedHeaders = trustForwardedHeaders, RedactionRegexes = redactionRegexes ?? new[] { "secret-[A-Za-z0-9]+" } };
 
-            var builder = new WebHostBuilder()
-                .ConfigureServices(services =>
-                {
-                    services.AddSingleton(Options.Create(opts));
-                    services.AddSingleton<Serilog.ILogger>(summaryLogger);
-                    services.AddSingleton(sp => new StepUpLoggingController(opts, summaryLogger));
-                    var patterns = opts.RedactionRegexes
-                        .Where(p => !string.IsNullOrWhiteSpace(p))
-                        .Select(p => new Regex(p, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100)))
-                        .ToArray();
-                    services.AddSingleton(new CompiledRedactionPatterns(patterns));
-                    var diagType = Type.GetType("Serilog.Extensions.Hosting.DiagnosticContext, Serilog.Extensions.Hosting")
-                                   ?? Type.GetType("Serilog.AspNetCore.DiagnosticContext, Serilog.AspNetCore");
-                    var ctor = diagType!.GetConstructors().OrderByDescending(c => c.GetParameters().Length).First();
-                    var args = ctor.GetParameters().Select(p =>
-                        p.ParameterType == typeof(Serilog.ILogger) ? (object?)summaryLogger
-                        : p.HasDefaultValue ? p.DefaultValue
-                        : null).ToArray();
-                    services.AddSingleton(diagType, ctor.Invoke(args));
-                })
-                .Configure(app =>
-                {
-                    // Give the in-memory connection a deterministic remote address and (optionally) a
-                    // jti claim, so the extraction contract can be asserted unambiguously.
-                    app.Use(async (ctx, next) =>
+            var host = new HostBuilder()
+                .ConfigureWebHost(web => web
+                    .UseTestServer()
+                    .ConfigureServices(services =>
                     {
-                        ctx.Connection.RemoteIpAddress = IPAddress.Parse(KnownRemoteIp);
-                        if (jtiClaim is not null)
+                        services.AddSingleton(Options.Create(opts));
+                        services.AddSingleton<Serilog.ILogger>(summaryLogger);
+                        services.AddSingleton(sp => new StepUpLoggingController(opts, summaryLogger));
+                        var patterns = opts.RedactionRegexes
+                            .Where(p => !string.IsNullOrWhiteSpace(p))
+                            .Select(p => new Regex(p, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100)))
+                            .ToArray();
+                        services.AddSingleton(new CompiledRedactionPatterns(patterns));
+                        services.AddSingleton(new DiagnosticContext(summaryLogger));
+                    })
+                    .Configure(app =>
+                    {
+                        // Give the in-memory connection a deterministic remote address and (optionally) a
+                        // jti claim, so the extraction contract can be asserted unambiguously.
+                        app.Use(async (ctx, next) =>
                         {
-                            ctx.User = new ClaimsPrincipal(new ClaimsIdentity(new[] { new Claim("jti", jtiClaim) }, "test"));
-                        }
-                        await next();
-                    });
+                            ctx.Connection.RemoteIpAddress = IPAddress.Parse(KnownRemoteIp);
+                            if (jtiClaim is not null)
+                            {
+                                ctx.User = new ClaimsPrincipal(new ClaimsIdentity(new[] { new Claim("jti", jtiClaim) }, "test"));
+                            }
+                            await next();
+                        });
 
-                    // The real production middleware — this is what actually invokes
-                    // ExtractClientAddresses/ExtractUserAgent, via the AlwaysLogRequestSummary branch.
-                    app.UseStepUpRequestLogging();
+                        // The real production middleware — this is what actually invokes
+                        // ExtractClientAddresses/ExtractUserAgent, via the AlwaysLogRequestSummary branch.
+                        app.UseStepUpRequestLogging();
 
-                    app.Run(async ctx =>
-                    {
-                        ctx.Response.StatusCode = 200;
-                        await ctx.Response.WriteAsync("OK");
-                    });
-                });
+                        app.Run(async ctx =>
+                        {
+                            ctx.Response.StatusCode = 200;
+                            await ctx.Response.WriteAsync("OK");
+                        });
+                    }))
+                .Build();
 
-            return new TestServer(builder);
+            await host.StartAsync();
+            return host;
         }
 
         private static string? StringProperty(LogEvent logEvent, string name) =>
@@ -98,8 +97,8 @@ namespace Lukdrasil.StepUpLogging.Tests
         public async Task EmitRequestSummary_RedactsUserAgent_WhenItMatchesAPattern()
         {
             var capture = new CaptureSink();
-            using var server = CreateTestServer(capture);
-            var client = server.CreateClient();
+            using var host = await CreateTestServerAsync(capture);
+            var client = host.GetTestClient();
 
             var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
             request.Headers.TryAddWithoutValidation("User-Agent", "Agent/1.0 token=secret-abc123");
@@ -121,8 +120,8 @@ namespace Lukdrasil.StepUpLogging.Tests
         public async Task EmitRequestSummary_OmitsUserAgent_WhenNotProvided()
         {
             var capture = new CaptureSink();
-            using var server = CreateTestServer(capture);
-            var client = server.CreateClient();
+            using var host = await CreateTestServerAsync(capture);
+            var client = host.GetTestClient();
 
             var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
             await client.SendAsync(request);
@@ -137,8 +136,8 @@ namespace Lukdrasil.StepUpLogging.Tests
         public async Task EmitRequestSummary_UsesRemoteIpAddress_WhenXForwardedForAbsent()
         {
             var capture = new CaptureSink();
-            using var server = CreateTestServer(capture);
-            var client = server.CreateClient();
+            using var host = await CreateTestServerAsync(capture);
+            var client = host.GetTestClient();
 
             var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
             await client.SendAsync(request);
@@ -155,8 +154,8 @@ namespace Lukdrasil.StepUpLogging.Tests
         public async Task EmitRequestSummary_ClientIpIsRemoteIp_NotXForwardedFor_ByDefault()
         {
             var capture = new CaptureSink();
-            using var server = CreateTestServer(capture);
-            var client = server.CreateClient();
+            using var host = await CreateTestServerAsync(capture);
+            var client = host.GetTestClient();
 
             var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
             request.Headers.Add("X-Forwarded-For", "203.0.113.42, 198.51.100.100");
@@ -176,8 +175,8 @@ namespace Lukdrasil.StepUpLogging.Tests
         public async Task EmitRequestSummary_EmitsForwardedFor_WhenXForwardedForPresent_ByDefault()
         {
             var capture = new CaptureSink();
-            using var server = CreateTestServer(capture);
-            var client = server.CreateClient();
+            using var host = await CreateTestServerAsync(capture);
+            var client = host.GetTestClient();
 
             var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
             request.Headers.Add("X-Forwarded-For", "203.0.113.42, 198.51.100.100");
@@ -196,8 +195,8 @@ namespace Lukdrasil.StepUpLogging.Tests
         public async Task EmitRequestSummary_ClientIpIsFirstXForwardedForEntry_WhenTrusted()
         {
             var capture = new CaptureSink();
-            using var server = CreateTestServer(capture, trustForwardedHeaders: true);
-            var client = server.CreateClient();
+            using var host = await CreateTestServerAsync(capture, trustForwardedHeaders: true);
+            var client = host.GetTestClient();
 
             var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
             request.Headers.Add("X-Forwarded-For", "203.0.113.42, 198.51.100.100");
@@ -215,8 +214,8 @@ namespace Lukdrasil.StepUpLogging.Tests
         public async Task EmitRequestSummary_TrustedMultipleXForwardedFor_TakesFirstTrimmed()
         {
             var capture = new CaptureSink();
-            using var server = CreateTestServer(capture, trustForwardedHeaders: true);
-            var client = server.CreateClient();
+            using var host = await CreateTestServerAsync(capture, trustForwardedHeaders: true);
+            var client = host.GetTestClient();
 
             var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
             request.Headers.Add("X-Forwarded-For", "192.0.2.1, 192.0.2.2, 192.0.2.3");
@@ -233,8 +232,8 @@ namespace Lukdrasil.StepUpLogging.Tests
         public async Task EmitRequestSummary_ForwardedForIsRedacted_WhenItMatchesAPattern()
         {
             var capture = new CaptureSink();
-            using var server = CreateTestServer(capture);
-            var client = server.CreateClient();
+            using var host = await CreateTestServerAsync(capture);
+            var client = host.GetTestClient();
 
             var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
             request.Headers.TryAddWithoutValidation("X-Forwarded-For", "secret-abc123");
@@ -254,8 +253,8 @@ namespace Lukdrasil.StepUpLogging.Tests
         public async Task EmitRequestSummary_FallsBackToRemoteIp_WhenXForwardedForIsWhitespace()
         {
             var capture = new CaptureSink();
-            using var server = CreateTestServer(capture, trustForwardedHeaders: true);
-            var client = server.CreateClient();
+            using var host = await CreateTestServerAsync(capture, trustForwardedHeaders: true);
+            var client = host.GetTestClient();
 
             var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
             request.Headers.TryAddWithoutValidation("X-Forwarded-For", "   ");
@@ -273,8 +272,8 @@ namespace Lukdrasil.StepUpLogging.Tests
         public async Task EmitRequestSummary_RedactsJti_WhenItMatchesAPattern()
         {
             var capture = new CaptureSink();
-            using var server = CreateTestServer(capture, jtiClaim: "secret-jti999");
-            var client = server.CreateClient();
+            using var host = await CreateTestServerAsync(capture, jtiClaim: "secret-jti999");
+            var client = host.GetTestClient();
 
             var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
             await client.SendAsync(request);
@@ -291,8 +290,8 @@ namespace Lukdrasil.StepUpLogging.Tests
         {
             var capture = new CaptureSink();
             // A pattern that WOULD match KnownRemoteIp if redaction were applied to it.
-            using var server = CreateTestServer(capture, trustForwardedHeaders: false, redactionRegexes: new[] { @"198\.51\.100\.7" });
-            var client = server.CreateClient();
+            using var host = await CreateTestServerAsync(capture, trustForwardedHeaders: false, redactionRegexes: new[] { @"198\.51\.100\.7" });
+            var client = host.GetTestClient();
 
             var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
             request.Headers.Add("X-Forwarded-For", "203.0.113.42");
@@ -315,8 +314,8 @@ namespace Lukdrasil.StepUpLogging.Tests
         {
             var capture = new CaptureSink();
             // A pattern that WOULD match KnownRemoteIp if redaction were applied to it.
-            using var server = CreateTestServer(capture, trustForwardedHeaders: true, redactionRegexes: new[] { @"198\.51\.100\.7" });
-            var client = server.CreateClient();
+            using var host = await CreateTestServerAsync(capture, trustForwardedHeaders: true, redactionRegexes: new[] { @"198\.51\.100\.7" });
+            var client = host.GetTestClient();
 
             var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
             // No X-Forwarded-For header: even with TrustForwardedHeaders=true, ExtractClientAddresses
