@@ -69,10 +69,11 @@ internal sealed class EncryptedSpoolOptionsValidator : IValidateOptions<Encrypte
     }
 
     /// <summary>
-    /// Non-empty, an absolute URI (the drain worker composes <c>{EndpointBaseUrl}/audit</c> by
-    /// string concatenation, so a relative value would surface as a bare <see cref="UriFormatException"/>
-    /// out of DI instead of here), and without a query or fragment (either would compose a nonsense
-    /// URI silently).
+    /// Non-empty, an absolute http or https URI (the drain worker composes <c>{EndpointBaseUrl}/audit</c>
+    /// by string concatenation, so a relative value would surface as a bare <see cref="UriFormatException"/>
+    /// out of DI instead of here — and on Unix a rooted path like <c>/relative/audit</c> parses as an
+    /// absolute <c>file:</c> URI, which the worker cannot post to), and without a query or fragment
+    /// (either would compose a nonsense URI silently).
     /// </summary>
     private static void RequireEndpointBaseUrl(string value, List<string> failures)
     {
@@ -84,9 +85,10 @@ internal sealed class EncryptedSpoolOptionsValidator : IValidateOptions<Encrypte
             return;
         }
 
-        if (!Uri.TryCreate(value, UriKind.Absolute, out var endpoint))
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var endpoint)
+            || (endpoint.Scheme != Uri.UriSchemeHttp && endpoint.Scheme != Uri.UriSchemeHttps))
         {
-            failures.Add($"{nameof(EncryptedSpoolOptions)}.{optionName} must be an absolute URI.");
+            failures.Add($"{nameof(EncryptedSpoolOptions)}.{optionName} must be an absolute http or https URI.");
             return;
         }
 
