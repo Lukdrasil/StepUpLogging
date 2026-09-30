@@ -1,3 +1,40 @@
+# Migrating to v5.0.0
+
+v5.0.0 is a **breaking** release with one change: `AddStepUpLogging` leaves Serilog's static
+`Log.Logger` unchanged. It compiles unchanged, so read this even if your build is green.
+
+## `Log.Logger` is no longer assigned by default
+
+**What changed.** Up to v4, `AddStepUpLogging` assigned the host's logger to `Log.Logger` when the
+host was built, and disposing the host called `Log.CloseAndFlush()`. It now does neither unless
+`SetStaticLogger` is `true`. `UseStepUpRequestLogging` writes request completion events to the
+DI `Serilog.ILogger`, so request logging keeps working either way.
+
+**Why.** `Log.Logger` is process-global. With two hosts in one process (integration tests, a
+worker next to a web host) the last host built owned every `Log.*` call, and disposing any host
+closed the static logger for all of them (issue #31).
+
+**Migrate.** Code that logs through DI `ILogger<T>` needs no change. Otherwise:
+
+- **Static `Log.*` callers.** Either move them to DI `ILogger<T>`, or restore the old behavior:
+
+  ```csharp
+  builder.AddStepUpLogging(o => o.SetStaticLogger = true);
+  ```
+
+  or in configuration:
+
+  ```json
+  { "SerilogStepUp": { "SetStaticLogger": true } }
+  ```
+
+- **Bootstrap logger.** A `ReloadableLogger` from `CreateBootstrapLogger()` in `Log.Logger` is no
+  longer reloaded or frozen by the host. It keeps its bootstrap configuration for the life of the
+  process. Set `SetStaticLogger` if you relied on it becoming the host's logger.
+
+- **`Log.CloseAndFlush()` in `Program`.** A `Log.CloseAndFlush()` / `Log.CloseAndFlushAsync()` call
+  at the end of `Program` no longer closes the host's logger, only whatever `Log.Logger` holds.
+
 # Migrating to v4.0.0
 
 v4.0.0 is a **breaking** release. It bundles four breaking changes to the audit logging contract

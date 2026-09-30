@@ -1073,6 +1073,8 @@ See full [performance test results](tests/k6/performance_test_results.md).
 | `AdditionalSensitiveHeaders` | `[]` | - | Custom header names to redact in request logging |
 | `TrustForwardedHeaders` | `false` | - | When `true`, `ClientIp` is taken from the first `X-Forwarded-For` entry (v2 behavior). Only enable behind a proxy you control with `ForwardedHeadersMiddleware`. See [Security](#security). |
 | `TreatServerErrorStatusAsError` | `true` | - | When `false`, a request completing with status >= 500 but **no** exception is logged at Warning instead of Error, so it does not trigger step-up. Set this in a reverse proxy / BFF where most 5xx are relayed from a backend. An unhandled exception is still Error. |
+| **Hosting** |
+| `SetStaticLogger` | `false` | - | When `true`, the built logger is assigned to Serilog's static `Log.Logger` and host dispose calls `Log.CloseAndFlush()` (pre-5.0.0 behavior). By default `Log.Logger` is left unchanged: log through DI `ILogger<T>`. Read once at registration. See [MIGRATION.md](MIGRATION.md#migrating-to-v500). |
 | **Service Identification** |
 | `ServiceVersion` | `null` | `APP_VERSION` | Service version for enrichment |
 
