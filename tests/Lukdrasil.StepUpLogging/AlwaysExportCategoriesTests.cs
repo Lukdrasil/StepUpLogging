@@ -63,11 +63,12 @@ public class AlwaysExportCategoriesTests
                 ["SerilogStepUp:RedactionRegexes:0"] = "token=[^&]+",
             },
             logger => logger.ForContext("SourceContext", LifetimeCategory).Information("started with {Secret}", "token=super-secret"),
-            "super-secret");
+            "super-secret", "started with");
 
         var evt = Assert.Single(collector.Events);
         Assert.True(LogProperties.HasFlag(evt, LogProperties.IsImmediate));
         Assert.Equal("[REDACTED]", ((ScalarValue)evt.Properties["Secret"]).Value);
+        Assert.Equal(1, counts["started with"]);
         Assert.Equal(0, counts["super-secret"]);
     }
 

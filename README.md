@@ -1137,7 +1137,9 @@ level, whatever the current step-up state. A matching event is marked `IsImmedia
 the same path as `LogImmediate`: the step-up gate skips it and the pre-error buffer never holds it,
 so a later error in the same trace does not export it a second time. Matching uses the same prefix
 rule as `NeverStepUpCategories`. With `RedactLogEventProperties` on, these events are redacted like
-any other. Blank entries are ignored. Default: empty.
+any other. Blank entries are ignored. Default: empty. A root `Serilog:MinimumLevel:Override` or a
+`Logging:LogLevel` filter set above the listed category's level still drops the event before the
+enricher sees it, so the list cannot bring such an event back.
 
 ```json
 {
