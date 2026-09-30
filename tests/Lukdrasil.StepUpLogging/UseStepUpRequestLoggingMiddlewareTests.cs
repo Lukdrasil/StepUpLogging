@@ -67,14 +67,14 @@ namespace Lukdrasil.StepUpLogging.Tests
                     }))
                 .Build();
 
-            await host.StartAsync();
+            await host.StartAsync(TestContext.Current.CancellationToken);
             using var client = host.GetTestClient();
 
-            var res = await client.GetAsync("/api/test");
+            var res = await client.GetAsync("/api/test", TestContext.Current.CancellationToken);
             res.EnsureSuccessStatusCode();
 
             // Allow some time for logging to propagate
-            await Task.Delay(50);
+            await Task.Delay(50, TestContext.Current.CancellationToken);
 
             Assert.NotNull(capture.LastEvent);
             Assert.True(capture.LastEvent!.Properties.ContainsKey("IsRequestSummary"));
@@ -133,8 +133,8 @@ namespace Lukdrasil.StepUpLogging.Tests
             });
 
             using var client = host.GetTestClient();
-            await client.GetAsync("/api/test");
-            await Task.Delay(50);
+            await client.GetAsync("/api/test", TestContext.Current.CancellationToken);
+            await Task.Delay(50, TestContext.Current.CancellationToken);
 
             Assert.NotNull(capture.LastEvent);
             Assert.True(capture.LastEvent!.Properties.TryGetValue("Jti", out var jtiProp));
@@ -152,8 +152,8 @@ namespace Lukdrasil.StepUpLogging.Tests
             });
 
             using var client = host.GetTestClient();
-            await client.GetAsync("/api/test");
-            await Task.Delay(50);
+            await client.GetAsync("/api/test", TestContext.Current.CancellationToken);
+            await Task.Delay(50, TestContext.Current.CancellationToken);
 
             Assert.NotNull(capture.LastEvent);
             Assert.False(capture.LastEvent!.Properties.ContainsKey("Jti"));
@@ -166,8 +166,8 @@ namespace Lukdrasil.StepUpLogging.Tests
             using var host = await BuildHostWithSummary(capture);
 
             using var client = host.GetTestClient();
-            await client.GetAsync("/api/test");
-            await Task.Delay(50);
+            await client.GetAsync("/api/test", TestContext.Current.CancellationToken);
+            await Task.Delay(50, TestContext.Current.CancellationToken);
 
             Assert.NotNull(capture.LastEvent);
             Assert.False(capture.LastEvent!.Properties.ContainsKey("Jti"));

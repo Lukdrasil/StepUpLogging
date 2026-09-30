@@ -1,4 +1,4 @@
-# ADR 0023: Static logger preserved by default
+# ADR 0025: Static logger preserved by default
 
 - Status: Accepted
 - Date: 2026-09-30

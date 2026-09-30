@@ -26,7 +26,7 @@ public class StepUpControllerTests
         Assert.Equal(LogEventLevel.Information, controller.LevelSwitch.MinimumLevel);
 
         // Wait a bit over the duration to allow the timer to restore the base level
-        await Task.Delay(TimeSpan.FromMilliseconds(1200));
+        await Task.Delay(TimeSpan.FromMilliseconds(1200), TestContext.Current.CancellationToken);
 
         Assert.False(controller.IsSteppedUp);
         Assert.Equal(LogEventLevel.Warning, controller.LevelSwitch.MinimumLevel);
@@ -137,7 +137,7 @@ public class StepUpControllerTests
         controller.Trigger();
 
         // Wait for timer to restore
-        await Task.Delay(TimeSpan.FromMilliseconds(5100));
+        await Task.Delay(TimeSpan.FromMilliseconds(5100), TestContext.Current.CancellationToken);
         Assert.False(controller.IsSteppedUp);
     }
 }

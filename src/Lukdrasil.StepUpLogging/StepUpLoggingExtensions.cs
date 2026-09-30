@@ -611,17 +611,12 @@ public static class StepUpLoggingExtensions
                         {
                             var qs = httpContext.Request.QueryString.HasValue ? httpContext.Request.QueryString.Value! : string.Empty;
                             var redactedQs = compiledPatterns.Redact(qs);
+                            var redactedPath = compiledPatterns.Redact(path);
 
                             IReadOnlyDictionary<string, object?>? routeParams = null;
                             if (httpContext.Request.RouteValues?.Count > 0)
                             {
-                                var rp = new Dictionary<string, object?>();
-                                foreach (var kvp in httpContext.Request.RouteValues)
-                                {
-                                    var value = kvp.Value?.ToString() ?? string.Empty;
-                                    rp[kvp.Key] = compiledPatterns.Redact(value);
-                                }
-                                routeParams = rp;
+                                routeParams = RequestPathRedaction.RedactRouteValues(httpContext.Request.RouteValues, path, redactedPath, compiledPatterns);
                             }
 
                             var rawUserAgent = ExtractUserAgent(httpContext.Request);
@@ -632,7 +627,7 @@ public static class StepUpLoggingExtensions
                             var statusCode = failed ? StatusCodes.Status500InternalServerError : (httpContext.Response?.StatusCode ?? 0);
                             stepUpController.EmitRequestSummary(
                                 httpContext.Request.Method,
-                                path,
+                                redactedPath,
                                 statusCode,
                                 sw.Elapsed.TotalMilliseconds,
                                 Activity.Current?.TraceId.ToString(),
@@ -678,7 +673,7 @@ public static class StepUpLoggingExtensions
                     : null;
 
                 activity?.SetTag("http.method", httpContext.Request.Method);
-                activity?.SetTag("http.target", httpContext.Request.Path.Value);
+                activity?.SetTag("http.target", compiledPatterns.Redact(httpContext.Request.Path.Value ?? string.Empty));
                 activity?.SetTag("http.scheme", httpContext.Request.Scheme);
                 activity?.SetTag("http.host", httpContext.Request.Host.Value);
 
@@ -699,7 +694,12 @@ public static class StepUpLoggingExtensions
 
                 var rawPath = httpContext.Request.Path.Value ?? string.Empty;
                 var path = rawPath.Length > 1 ? rawPath.TrimEnd('/') : rawPath;
-                diagnosticContext.Set("RequestPath", path);
+                var redactedPath = compiledPatterns.Redact(path);
+                if (!string.Equals(redactedPath, path, StringComparison.Ordinal))
+                {
+                    NoteRedaction("path");
+                }
+                diagnosticContext.Set("RequestPath", redactedPath);
 
                 var qs = httpContext.Request.QueryString.HasValue ? httpContext.Request.QueryString.Value! : string.Empty;
                 var redactedQs = compiledPatterns.Redact(qs);
@@ -711,17 +711,7 @@ public static class StepUpLoggingExtensions
 
                 if (httpContext.Request.RouteValues?.Count > 0)
                 {
-                    var routeParams = new Dictionary<string, object?>();
-                    foreach (var kvp in httpContext.Request.RouteValues)
-                    {
-                        var value = kvp.Value?.ToString() ?? string.Empty;
-                        var redactedValue = compiledPatterns.Redact(value);
-                        if (!string.Equals(redactedValue, value, StringComparison.Ordinal))
-                        {
-                            NoteRedaction($"route:{kvp.Key}");
-                        }
-                        routeParams[kvp.Key] = redactedValue;
-                    }
+                    var routeParams = RequestPathRedaction.RedactRouteValues(httpContext.Request.RouteValues, path, redactedPath, compiledPatterns, NoteRedaction);
                     diagnosticContext.Set("RouteParameters", routeParams);
                 }
 
@@ -841,6 +831,14 @@ public static class StepUpLoggingExtensions
                 if (status >= 400) return LogEventLevel.Warning;
                 return LogEventLevel.Information;
             };
+
+            options.GetMessageTemplateProperties = (httpContext, _, elapsedMs, statusCode) =>
+            [
+                new LogEventProperty("RequestMethod", new ScalarValue(httpContext.Request.Method)),
+                new LogEventProperty("RequestPath", new ScalarValue(compiledPatterns.Redact(httpContext.Request.Path.Value ?? string.Empty))),
+                new LogEventProperty("StatusCode", new ScalarValue(statusCode)),
+                new LogEventProperty("Elapsed", new ScalarValue(elapsedMs)),
+            ];
         });
 
         return app;
