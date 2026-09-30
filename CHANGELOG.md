@@ -13,6 +13,7 @@ Tags before 1.8.0 predate this file.
 
 ### Fixed
 - Pre-error buffering exported an event twice: once at the current level and again when an error in the same trace flushed the buffer, or at shutdown. The buffer now holds only events the step-up gate did not export, so every event is exported at most once. Held-back events are dropped at shutdown instead of exported. Fixes #29. See docs/adr/0023-prebuffer-exactly-once-and-drop-on-dispose.md.
+- A configured `ExcludePaths` now replaces the built-in defaults (`/healthz`, `/metrics`, `/health`) instead of being appended to them. List the defaults in your configuration to keep them. An explicit `[]` excludes nothing. The defaults apply only when `ExcludePaths` is not configured. Fixes #32.
 
 ## [4.0.0] - 2026-08-13
 

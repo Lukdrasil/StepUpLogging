@@ -33,7 +33,13 @@ public sealed class StepUpLoggingOptions
     public string StepUpLevel { get; set; } = "Information";
     public int DurationSeconds { get; set; } = 180;
 
-    public string[] ExcludePaths { get; set; } = ["/healthz", "/metrics", "/health"];
+    /// <summary>
+    /// Request paths excluded from request logging, matched case-insensitively. An entry ending in <c>*</c>
+    /// matches every path with that prefix. <see langword="null"/> means not configured, and the built-in
+    /// defaults <c>["/healthz", "/metrics", "/health"]</c> apply after configuration. A configured list
+    /// replaces the defaults, and an empty list excludes nothing.
+    /// </summary>
+    public string[]? ExcludePaths { get; set; }
 
     public string? ServiceVersion { get; set; }
 
