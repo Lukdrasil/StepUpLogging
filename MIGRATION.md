@@ -55,8 +55,8 @@ exclusion off (issue #32).
 ```
 
 **In code.** The property is now `string[]?` and is `null` inside `configureOptions` unless
-configuration sets it, because the defaults are applied after the callback runs. Assign the whole list, and do not read the old value to append
-to it:
+configuration sets it, because the defaults are applied after the callback runs. Assign the whole
+list, and do not read the old value to append to it:
 
 ```csharp
 builder.AddStepUpLogging(o => o.ExcludePaths = ["/healthz", "/metrics", "/health", "/ready"]);
