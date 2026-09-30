@@ -1279,7 +1279,10 @@ with your known proxies so `Connection.RemoteIpAddress` reflects the true client
 
 `RedactionRegexes` is always applied to the request path (summary `Path`, the "HTTP ..." event's
 `RequestPath` and the `LogRequest` span's `http.target`), query strings, route values, headers,
-and request bodies. `ExcludePaths` still matches the raw path. On its own it does **not** scan the rendered text of arbitrary log messages — a secret
+and request bodies. It also always covers the path-bearing properties of every exported event,
+the request summary and the pre-error buffer flush included: the `RequestPath` that ASP.NET Core's
+hosting log scope attaches to every event logged during a request, and the `Path` of
+`Microsoft.AspNetCore.Hosting.Diagnostics` events. `ExcludePaths` still matches the raw path. On its own it does **not** scan the rendered text of arbitrary log messages — a secret
 passed as a message-template argument (`logger.LogInformation("token={T}", secret)`) is left
 alone.
 

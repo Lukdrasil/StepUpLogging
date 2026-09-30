@@ -8,6 +8,11 @@ Tags before 1.8.0 predate this file.
 
 ## [Unreleased]
 
+## [5.0.2] - 2026-09-30
+
+### Fixed
+- The #30 fix missed the scope `RequestPath`: ASP.NET Core's hosting log scope attaches the raw request path as `RequestPath` to every event logged during a request, so a secret in the path still leaked through the request summary, the pre-error buffer flush and every application event, and through the `Path` of `Microsoft.AspNetCore.Hosting.Diagnostics` events. `RedactionRegexes` now applies to both on every exported event, whatever `RedactLogEventProperties` is set to. Fixes #66.
+
 ## [5.0.1] - 2026-09-30
 
 ### Fixed

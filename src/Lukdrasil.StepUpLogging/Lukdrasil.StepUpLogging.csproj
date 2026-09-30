@@ -8,8 +8,8 @@
     <!-- Package Metadata -->
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <PackageId>Lukdrasil.StepUpLogging</PackageId>
-    <Version>5.0.1</Version>
-    <PackageReleaseNotes>v5.0.1 - Fixed: the package no longer passes Microsoft.Extensions.Telemetry.Abstractions build assets and its source generators to consumers, so a consumer's [LoggerMessage] methods use the standard logging generator again. Every Telemetry.Abstractions analyzer is removed, Microsoft.Gen.Logging and Microsoft.Gen.Metrics included; a consumer that uses those generators should reference Microsoft.Extensions.Telemetry.Abstractions directly to keep them (#62). See CHANGELOG.md.</PackageReleaseNotes>
+    <Version>5.0.2</Version>
+    <PackageReleaseNotes>v5.0.2 - Fixed: RedactionRegexes now also redacts the RequestPath the ASP.NET Core hosting log scope attaches to every event, and the Path of Microsoft.AspNetCore.Hosting.Diagnostics events, on every exported event including the request summary, whatever RedactLogEventProperties is set to (#66). See CHANGELOG.md.</PackageReleaseNotes>
     <Authors>Lukdrasil</Authors>
     <Description>Dynamic step-up logging for ASP.NET Core with Serilog - automatically increase log verbosity when errors occur, with minimal performance overhead. Includes request body capture, sensitive data redaction, and OpenTelemetry metrics.</Description>
     <PackageTags>serilog;logging;aspnetcore;observability;otel;stepup;dynamic-logging;error-logging</PackageTags>
