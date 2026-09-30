@@ -1124,6 +1124,16 @@ list empty:
 }
 ```
 
+## Category Control
+
+### Category floors
+
+### Always-export categories
+
+### Never-trigger categories
+
+### Diagnostic mode
+
 ## Security
 
 Three security properties are worth understanding before you deploy:
