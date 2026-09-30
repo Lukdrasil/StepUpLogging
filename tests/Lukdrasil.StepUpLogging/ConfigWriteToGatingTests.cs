@@ -105,6 +105,43 @@ public class ConfigWriteToGatingTests
 
             var contents = File.ReadAllText(tempFile);
             Assert.Contains("not more verbose", contents);
+            Assert.Contains("in Auto mode", contents);
+        }
+        finally
+        {
+            if (File.Exists(tempFile)) File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
+    public void DiagnosticMode_WithBaseLevelEqualToStepUpLevel_LogsLevelOrderWarningNamingTheMode()
+    {
+        var tempFile = Path.Combine(Path.GetTempPath(), $"stepup-diag-warn-{Guid.NewGuid():N}.log");
+
+        try
+        {
+            var builder = Host.CreateApplicationBuilder();
+            builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["SerilogStepUp:EnableOtlpExporter"] = "false",
+                ["SerilogStepUp:Mode"] = "Diagnostic",
+                ["SerilogStepUp:BaseLevel"] = "Information",
+                ["SerilogStepUp:StepUpLevel"] = "Information",
+                ["Serilog:Using:0"] = "Serilog.Sinks.File",
+                ["Serilog:WriteTo:0:Name"] = "File",
+                ["Serilog:WriteTo:0:Args:path"] = tempFile,
+                ["Serilog:WriteTo:0:Args:shared"] = "true",
+            });
+            builder.AddStepUpLogging();
+
+            using (var host = builder.Build())
+            {
+                _ = host.Services.GetRequiredService<Serilog.ILogger>();
+            }
+
+            var contents = File.ReadAllText(tempFile);
+            Assert.Contains("not more verbose", contents);
+            Assert.Contains("in Diagnostic mode", contents);
         }
         finally
         {
