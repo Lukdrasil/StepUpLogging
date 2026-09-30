@@ -1075,6 +1075,8 @@ See full [performance test results](tests/k6/performance_test_results.md).
 | `AdditionalSensitiveHeaders` | `[]` | - | Custom header names to redact in request logging |
 | `TrustForwardedHeaders` | `false` | - | When `true`, `ClientIp` is taken from the first `X-Forwarded-For` entry (v2 behavior). Only enable behind a proxy you control with `ForwardedHeadersMiddleware`. See [Security](#security). |
 | `TreatServerErrorStatusAsError` | `true` | - | When `false`, a request completing with status >= 500 but **no** exception is logged at Warning instead of Error, so it does not trigger step-up. Set this in a reverse proxy / BFF where most 5xx are relayed from a backend. An unhandled exception is still Error. |
+| **Hosting** |
+| `SetStaticLogger` | `false` | - | When `true`, the built logger is assigned to Serilog's static `Log.Logger` and host dispose calls `Log.CloseAndFlush()` (pre-5.0.0 behavior). By default `Log.Logger` is left unchanged: log through DI `ILogger<T>`. Read once at registration. See [MIGRATION.md](MIGRATION.md#migrating-to-v500). |
 | **Service Identification** |
 | `ServiceVersion` | `null` | `APP_VERSION` | Service version for enrichment |
 
@@ -1150,8 +1152,9 @@ bakes the value into the template and produces no property, so it is logged verb
 flag says. It does not recurse into structures (`{@user}`), sequences or dictionaries. It skips
 the twelve properties the library stamps itself (`TraceId`, `SourceContext`,
 `ServiceInstanceId` and nine more — the `RedactLogEventProperties` XML doc lists them and the
-reason for each). And it never sees the two events the library writes straight to the bypass
-logger — the request summary and the startup level-ordering warning — which do not pass root
+reason for each). And it never sees the four events the library writes straight to the bypass
+logger — the request summary, the startup level-ordering warning, and the step-up and step-down
+warnings — which do not pass root
 enrichment. Do not log secrets in interpolated message templates.
 
 The flag has a running cost worth sizing before you enable it. The sweep sits on the root pipeline,

@@ -7,7 +7,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
-using Serilog;
 using Xunit;
 
 namespace Lukdrasil.StepUpLogging.Tests;
@@ -16,13 +15,8 @@ namespace Lukdrasil.StepUpLogging.Tests;
 /// DI wiring of <see cref="StepUpLoggingExtensions.AddAuditLogging{TSink}"/>: what it registers,
 /// with which lifetimes, and how it fails when a prerequisite is missing.
 /// </summary>
-public class AuditLoggingRegistrationTests : IDisposable
+public class AuditLoggingRegistrationTests
 {
-    // AddStepUpLogging assigns Serilog's static Log.Logger; restore it so the tests stay isolated.
-    private readonly Serilog.ILogger _previousLogger = Log.Logger;
-
-    public void Dispose() => Log.Logger = _previousLogger;
-
     private sealed class TestAuditSink : IAuditEventSink
     {
         public List<AuditEvent> Written { get; } = [];

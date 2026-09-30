@@ -108,8 +108,9 @@ public sealed class StepUpLoggingOptions
     /// which matches on <c>SourceContext</c>. The exclusion is by property NAME: a property of
     /// your own under one of those names wins over the library's stamp and then escapes redaction
     /// with it.</item>
-    /// <item>Events the library writes straight to the bypass logger — the request summary and the
-    /// startup warning about level ordering — which never pass root enrichment.</item>
+    /// <item>Events the library writes straight to the bypass logger — the request summary, the
+    /// startup warning about level ordering, and the step-up and step-down warnings — which never
+    /// pass root enrichment.</item>
     /// </list>
     /// </remarks>
     public bool RedactLogEventProperties { get; set; } = false;
@@ -228,6 +229,14 @@ public sealed class StepUpLoggingOptions
     /// is still logged at <c>Error</c> either way. Default: true (existing behaviour).
     /// </summary>
     public bool TreatServerErrorStatusAsError { get; set; } = true;
+
+    /// <summary>
+    /// When true, <c>AddStepUpLogging</c> assigns the built logger to Serilog's static <c>Log.Logger</c>,
+    /// and disposing the host calls <c>Log.CloseAndFlush()</c>, as before 5.0.0. Default: false, the
+    /// static logger is left unchanged; resolve <c>ILogger&lt;T&gt;</c> from DI instead.
+    /// Read once at registration from the configuration section and <c>configureOptions</c>.
+    /// </summary>
+    public bool SetStaticLogger { get; set; } = false;
 
     /// <summary>
     /// Upper bound, in seconds, on how long step-up may stay continuously active. When exceeded the
