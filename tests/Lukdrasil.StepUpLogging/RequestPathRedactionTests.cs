@@ -288,6 +288,26 @@ public class RequestPathRedactionTests
         Assert.DoesNotContain(secret, Assert.Single(captured.LogRequestSpans).GetTagItem("http.target") as string);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ActionLinksToken_LeaksIntoNoExportedEvent_OfAddStepUpLoggingHost(bool redactLogEventProperties)
+    {
+        var events = await PathHost.SendAsync(
+            ActionLinksPath,
+            null,
+            ("RedactionRegexes:0", ActionLinksPattern),
+            ("RedactLogEventProperties", redactLogEventProperties ? "true" : "false"));
+
+        var summary = Assert.Single(events, e => e.Properties.TryGetValue(LogProperties.IsRequestSummary, out var v) && v is ScalarValue { Value: true });
+        Assert.Equal(RedactedActionLinksPath, Scalar(summary, "RequestPath"));
+        Assert.Contains(events, e => Scalar(e, "SourceContext") == "Microsoft.AspNetCore.Hosting.Diagnostics" && Scalar(e, "Path") == RedactedActionLinksPath);
+        Assert.Contains(events, e => e.MessageTemplate.Text == PathHost.HandlerInformation && Scalar(e, "RequestPath") == RedactedActionLinksPath);
+        Assert.Contains(events, e => e.MessageTemplate.Text == PathHost.HandlerError && Scalar(e, "RequestPath") == RedactedActionLinksPath);
+        var exported = string.Join("\n", events.Select(e => e.RenderMessage() + "\n" + string.Join("\n", e.Properties.Select(p => p.Value.ToString()))));
+        Assert.Equal(0, Occurrences(exported, Token));
+    }
+
     [Fact]
     public async Task RouteValuesInsideRedactedSpan_AreRedacted_EvenWhenNotSecret()
     {

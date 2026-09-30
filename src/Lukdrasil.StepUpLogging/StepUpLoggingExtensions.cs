@@ -254,6 +254,7 @@ public static class StepUpLoggingExtensions
         {
             var stepUpController = services.GetRequiredService<StepUpLoggingController>();
             var opts = services.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
+            var redactionPatterns = services.GetRequiredService<CompiledRedactionPatterns>();
 
             // Split configuration so user-declared Serilog:WriteTo sinks attach to the gated inner
             // logger (behind the LevelSwitch) instead of the Verbose root — otherwise they would
@@ -265,7 +266,7 @@ public static class StepUpLoggingExtensions
             lc.ReadFrom.Configuration(rootConfig)
               .MinimumLevel.Verbose();
 
-            ApplyCommonEnrichers(lc, builder, opts);
+            ApplyCommonEnrichers(lc, builder, opts, redactionPatterns);
 
             var alwaysExport = (opts.AlwaysExportCategories ?? []).Where(c => !string.IsNullOrWhiteSpace(c)).ToArray();
             if (alwaysExport.Length > 0)
@@ -277,7 +278,7 @@ public static class StepUpLoggingExtensions
             // Built directly here (not via DI) to avoid a circular deadlock:
             // AddSerilog registers Serilog.ILogger as a factory that depends on ILoggerFactory,
             // which in turn depends on this very callback — resolving it inside the callback deadlocks.
-            var bypassLogger = CreateBypassLogger(builder, logFilePath, opts, gatedConfig);
+            var bypassLogger = CreateBypassLogger(builder, logFilePath, opts, gatedConfig, redactionPatterns);
             try { stepUpController.SetSummaryLogger(bypassLogger); } catch { }
 
             // ADR 0007 warn-not-fail: in Auto or Diagnostic mode a StepUpLevel that is not strictly more verbose than
@@ -364,10 +365,8 @@ public static class StepUpLoggingExtensions
             // enrichment here precedes every sink, so PreErrorBufferSink already buffers redacted
             // events and needs no second pass. With no pattern to apply the enricher would walk
             // every event's properties to no effect, so the flag alone does not earn the sweep;
-            // the pattern array is fixed at startup, so this decision cannot go stale. The flag is
-            // tested first so a consumer who leaves it off resolves nothing at all.
-            if (opts.RedactLogEventProperties
-                && services.GetRequiredService<CompiledRedactionPatterns>() is { Patterns.Length: > 0 } redactionPatterns)
+            // the pattern array is fixed at startup, so this decision cannot go stale.
+            if (opts.RedactLogEventProperties && redactionPatterns.Patterns.Length > 0)
             {
                 lc.Enrich.With(new RedactionEnricher(redactionPatterns));
             }
@@ -469,10 +468,16 @@ public static class StepUpLoggingExtensions
     /// Applies all configured enrichers to <paramref name="lc"/>. Called on both the root
     /// pipeline and the bypass logger to keep enrichment consistent.
     /// </summary>
-    private static void ApplyCommonEnrichers(LoggerConfiguration lc, IHostApplicationBuilder builder, StepUpLoggingOptions opts)
+    private static void ApplyCommonEnrichers(LoggerConfiguration lc, IHostApplicationBuilder builder, StepUpLoggingOptions opts, CompiledRedactionPatterns redactionPatterns)
     {
-        lc.Enrich.FromLogContext()
-          .Enrich.WithOpenTelemetryTraceId()
+        lc.Enrich.FromLogContext();
+
+        if (redactionPatterns.Patterns.Length > 0)
+        {
+            lc.Enrich.With(new PathPropertyRedactionEnricher(redactionPatterns));
+        }
+
+        lc.Enrich.WithOpenTelemetryTraceId()
           .Enrich.WithOpenTelemetrySpanId()
           .Enrich.With<ActivityContextEnricher>()
           .Enrich.WithProperty("Application", builder.Environment.ApplicationName);
@@ -533,10 +538,11 @@ public static class StepUpLoggingExtensions
         IHostApplicationBuilder builder,
         string? logFilePath,
         StepUpLoggingOptions opts,
-        IConfiguration gatedConfig)
+        IConfiguration gatedConfig,
+        CompiledRedactionPatterns redactionPatterns)
     {
         var cfg = new LoggerConfiguration().MinimumLevel.Verbose();
-        ApplyCommonEnrichers(cfg, builder, opts);
+        ApplyCommonEnrichers(cfg, builder, opts, redactionPatterns);
         cfg.ReadFrom.Configuration(gatedConfig);
         ConfigureOutputSinks(cfg, builder, logFilePath, opts);
         return cfg.CreateLogger();

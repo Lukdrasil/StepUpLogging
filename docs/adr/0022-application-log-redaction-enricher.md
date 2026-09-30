@@ -68,6 +68,15 @@ Three facts about the existing pipeline constrain the answer:
    fixing it here would change existing output for every consumer with patterns set — the silent
    upgrade break D3 exists to prevent.
 
+   > **Amended (2026-09-30, issue #66):** the residue above is gone: the #30 fix redacts the
+   > summary `{Path}`. It missed the scope `RequestPath`, which the hosting log scope attaches to
+   > every event, the summary included, and the `Path` of `Microsoft.AspNetCore.Hosting.Diagnostics`
+   > events. D4 now holds for `RedactionEnricher` only: the path-only `PathPropertyRedactionEnricher`
+   > does live in `ApplyCommonEnrichers`, registered right after `FromLogContext` whenever a pattern
+   > is compiled and whatever `RedactLogEventProperties` is set to, because the summary never passes
+   > the root. The second pass on events the root hands to the bypass logger is a no-op, since
+   > `Redact` is idempotent.
+
 5. **The enricher is registered last — after the consumer hook**
    `configure?.Invoke(services, lc)` (`StepUpLoggingExtensions.cs:287`), not at the library's own
    enricher block. A redaction sweep that runs before other enrichers can still add properties is
