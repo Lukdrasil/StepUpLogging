@@ -8,7 +8,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
-using Serilog;
 using Xunit;
 
 namespace Lukdrasil.StepUpLogging.Tests;
@@ -19,13 +18,8 @@ namespace Lukdrasil.StepUpLogging.Tests;
 /// and B08 left for it (a single shared <see cref="SpoolWriter"/>, a redirect-disabled delivery
 /// client, a health check under the <c>"audit"</c> tag).
 /// </summary>
-public class EncryptedSpoolRegistrationTests : IDisposable
+public class EncryptedSpoolRegistrationTests
 {
-    // AddStepUpLogging assigns Serilog's static Log.Logger; restore it so the tests stay isolated.
-    private readonly Serilog.ILogger _previousLogger = Log.Logger;
-
-    public void Dispose() => Log.Logger = _previousLogger;
-
     private static HostApplicationBuilder CreateHostBuilder()
     {
         var builder = Host.CreateApplicationBuilder();

@@ -259,7 +259,7 @@ public sealed class StepUpLoggingController : IDisposable
                 TriggerCounter.Add(1);
                 _activeStepUpCounter.Add(1);
 
-                Log.Warning("Logging step up: increased minimum level to {Level} for {DurationSeconds} seconds",
+                (_summaryLogger ?? Log.Logger).Warning("Logging step up: increased minimum level to {Level} for {DurationSeconds} seconds",
                     _stepUpLevel, (int)_duration.TotalSeconds);
 
                 ArmTimer();
@@ -330,7 +330,7 @@ public sealed class StepUpLoggingController : IDisposable
         StepUpDurationHistogram.Record(duration);
         _activeStepUpCounter.Add(-1);
 
-        Log.Warning("Logging step down: restored minimum level to {Level}", _baseLevel);
+        (_summaryLogger ?? Log.Logger).Warning("Logging step down: restored minimum level to {Level}", _baseLevel);
     }
 
     private static long ToStopwatchTicks(TimeSpan span)

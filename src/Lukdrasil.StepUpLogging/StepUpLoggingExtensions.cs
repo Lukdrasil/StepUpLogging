@@ -83,6 +83,10 @@ public static class StepUpLoggingExtensions
     /// <param name="configureOptions">Action to configure StepUpLoggingOptions (enable console output via <see cref="StepUpLoggingOptions.EnableConsoleLogging"/>)</param>
     /// <param name="configSectionName">Configuration section name (default: SerilogStepUp)</param>
     /// <param name="logFilePath">Optional file path for additional file sink</param>
+    /// <remarks>
+    /// Serilog's static <c>Log.Logger</c> is left unchanged unless <see cref="StepUpLoggingOptions.SetStaticLogger"/>
+    /// is true in the configuration section or in <paramref name="configureOptions"/>.
+    /// </remarks>
     public static IHostApplicationBuilder AddStepUpLogging(this IHostApplicationBuilder builder,
         Action<StepUpLoggingOptions>? configureOptions = null,
         string configSectionName = "SerilogStepUp",
@@ -99,6 +103,10 @@ public static class StepUpLoggingExtensions
     /// <param name="configure">Optional additional Serilog configuration; receives the resolved <see cref="IServiceProvider"/> (use it to resolve <see cref="IConfiguration"/>/<see cref="IHostEnvironment"/> if needed) and the root <see cref="LoggerConfiguration"/></param>
     /// <param name="configSectionName">Configuration section name (default: SerilogStepUp)</param>
     /// <param name="logFilePath">Optional file path for additional file sink</param>
+    /// <remarks>
+    /// Serilog's static <c>Log.Logger</c> is left unchanged unless <see cref="StepUpLoggingOptions.SetStaticLogger"/>
+    /// is true in the configuration section.
+    /// </remarks>
     public static IHostApplicationBuilder AddStepUpLogging(this IHostApplicationBuilder builder,
         Action<IServiceProvider, LoggerConfiguration>? configure,
         string configSectionName = "SerilogStepUp",
@@ -213,6 +221,10 @@ public static class StepUpLoggingExtensions
             return new StepUpLoggingController(opts);
         });
 
+        var staticLoggerSnapshot = new StepUpLoggingOptions();
+        builder.Configuration.GetSection(configSectionName).Bind(staticLoggerSnapshot);
+        configureOptions?.Invoke(staticLoggerSnapshot);
+
         builder.Services.AddSerilog((services, lc) =>
         {
             var stepUpController = services.GetRequiredService<StepUpLoggingController>();
@@ -298,7 +310,7 @@ public static class StepUpLoggingExtensions
             {
                 lc.Enrich.With(new RedactionEnricher(redactionPatterns));
             }
-        }, writeToProviders: false);
+        }, preserveStaticLogger: !staticLoggerSnapshot.SetStaticLogger, writeToProviders: false);
 
         return builder;
     }
@@ -474,6 +486,7 @@ public static class StepUpLoggingExtensions
     /// <summary>
     /// Adds Serilog request logging middleware with enriched context (route parameters, headers, body capture).
     /// Integrates with StepUp logging to capture detailed request information when logging is stepped-up (on errors).
+    /// Request completion events go to the DI <see cref="Serilog.ILogger"/>, not to the static <c>Log.Logger</c>.
     /// </summary>
     public static IApplicationBuilder UseStepUpRequestLogging(this IApplicationBuilder app)
     {
@@ -587,6 +600,7 @@ public static class StepUpLoggingExtensions
 
         app.UseSerilogRequestLogging(options =>
         {
+            options.Logger = services.GetService<Serilog.ILogger>();
             options.EnrichDiagnosticContext = (diagnosticContext, httpContext) =>
             {
                 using var activity = opts.EnableActivityInstrumentation

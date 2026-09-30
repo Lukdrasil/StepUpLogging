@@ -8,6 +8,11 @@ Tags before 1.8.0 predate this file.
 
 ## [Unreleased]
 
+BREAKING. See MIGRATION.md for migration steps.
+
+### Changed (breaking)
+- `AddStepUpLogging` no longer assigns Serilog's static `Log.Logger`, and disposing the host no longer calls `Log.CloseAndFlush()`. Every host logs through its own DI logger, so the last host built no longer owns `Log.*` calls and disposing one host no longer silences another. Set the new `SetStaticLogger` option (default `false`) to restore the old behavior. `UseStepUpRequestLogging` now writes request completion events to the DI `Serilog.ILogger`. Fixes #31. See docs/adr/0023-static-logger-preserved-by-default.md.
+
 ### Added
 - `RedactLogEventProperties` (default `false`). When set, `RedactionRegexes` is also applied to the string-valued scalar properties of application log events — not just request metadata — so a secret passed as a message-template argument (e.g. `logger.LogInformation("token={T}", secret)`) is masked too. Opt-in: nothing changes for a consumer who does not set it. Interpolated templates, exception messages, and structured/sequence/dictionary values remain out of scope either way. Fixes #20. See docs/adr/0022-application-log-redaction-enricher.md.
 

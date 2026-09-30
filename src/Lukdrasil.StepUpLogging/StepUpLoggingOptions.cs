@@ -218,6 +218,14 @@ public sealed class StepUpLoggingOptions
     public bool TreatServerErrorStatusAsError { get; set; } = true;
 
     /// <summary>
+    /// When true, <c>AddStepUpLogging</c> assigns the built logger to Serilog's static <c>Log.Logger</c>,
+    /// and disposing the host calls <c>Log.CloseAndFlush()</c>, as before 5.0.0. Default: false, the
+    /// static logger is left unchanged; resolve <c>ILogger&lt;T&gt;</c> from DI instead.
+    /// Read once at registration from the configuration section and <c>configureOptions</c>.
+    /// </summary>
+    public bool SetStaticLogger { get; set; } = false;
+
+    /// <summary>
     /// Upper bound, in seconds, on how long step-up may stay continuously active. When exceeded the
     /// level is forced back to BaseLevel and further triggers are ignored for StepUpCooldownSeconds.
     /// Default: 0 (no bound).
