@@ -1,11 +1,6 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
-using System.IO;
-using System.Linq;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 using Serilog.Events;
 
 namespace Lukdrasil.StepUpLogging.Tests;
@@ -105,45 +100,12 @@ public class AlwaysExportCategoriesTests
         Action<Serilog.ILogger> scenario,
         params string[] tokens)
     {
-        var tempFile = Path.Combine(Path.GetTempPath(), $"stepup-always-export-{Guid.NewGuid():N}.log");
-        var directory = Path.GetDirectoryName(tempFile)!;
-        var pattern = Path.GetFileNameWithoutExtension(tempFile) + "*";
-        try
-        {
-            var builder = Host.CreateApplicationBuilder();
-            builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["SerilogStepUp:EnableOtlpExporter"] = "false",
-                ["SerilogStepUp:EnablePreErrorBuffering"] = "true",
-                ["SerilogStepUp:Mode"] = "Auto",
-                ["SerilogStepUp:BaseLevel"] = "Warning",
-                ["SerilogStepUp:StepUpLevel"] = "Information",
-                ["SerilogStepUp:DurationSeconds"] = "300",
-            });
-            builder.Configuration.AddInMemoryCollection(settings);
-            var collector = new CollectingSink();
-            builder.AddStepUpLogging(
-                (_, lc) => lc.WriteTo.Sink(collector),
-                logFilePath: tempFile);
-
-            using var activity = new Activity("always-export");
-            activity.SetIdFormat(ActivityIdFormat.W3C);
-            activity.Start();
-
-            using (var host = builder.Build())
-            {
-                scenario(host.Services.GetRequiredService<Serilog.ILogger>());
-            }
-
-            var lines = Directory.GetFiles(directory, pattern).SelectMany(File.ReadAllLines).ToArray();
-            return (tokens.ToDictionary(t => t, t => lines.Count(l => l.Contains(t, StringComparison.Ordinal))), collector);
-        }
-        finally
-        {
-            foreach (var f in Directory.GetFiles(directory, pattern))
-            {
-                try { File.Delete(f); } catch { }
-            }
-        }
+        var collector = new CollectingSink();
+        var counts = TestHosts.RunInOneTrace(
+            settings,
+            (_, lc) => lc.WriteTo.Sink(collector),
+            services => scenario(services.GetRequiredService<Serilog.ILogger>()),
+            tokens);
+        return (counts, collector);
     }
 }

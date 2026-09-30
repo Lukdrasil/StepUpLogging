@@ -1,11 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Threading;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using Serilog.Events;
+using static Lukdrasil.StepUpLogging.Tests.TestHosts;
 
 namespace Lukdrasil.StepUpLogging.Tests;
 
@@ -116,12 +115,6 @@ public class CategoryFloorHostTests
 
             Assert.Equal(0, count("FLOOR_CASE_INFO"));
         });
-    }
-
-    private static void StepUp(StepUpLoggingController controller)
-    {
-        controller.Trigger();
-        Assert.True(SpinWait.SpinUntil(() => controller.LevelSwitch.MinimumLevel <= LogEventLevel.Information, 2000));
     }
 
     private static void RunInOneTrace(

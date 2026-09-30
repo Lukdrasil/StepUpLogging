@@ -1,25 +1,13 @@
-using System.Collections.Generic;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Xunit;
+using static Lukdrasil.StepUpLogging.Tests.TestHosts;
 
 namespace Lukdrasil.StepUpLogging.Tests;
 
 public class ConfigureOptionsOverloadTests
 {
-    private static HostApplicationBuilder NewBuilder()
-    {
-        var builder = Host.CreateApplicationBuilder();
-        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["SerilogStepUp:EnableOtlpExporter"] = "false",
-        });
-        return builder;
-    }
-
     [Fact]
     public void CombinedOverload_AppliesOptionsAndRunsConfigureCallback()
     {

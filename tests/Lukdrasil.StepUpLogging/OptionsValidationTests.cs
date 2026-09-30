@@ -323,6 +323,7 @@ public class OptionsValidationTests
         });
 
         Assert.Null(ResolveOptions(host).CategoryFloors);
+        host.Services.GetRequiredService<Serilog.ILogger>();
     }
 
     [Fact]
