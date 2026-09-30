@@ -8,8 +8,8 @@
     <!-- Package Metadata -->
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <PackageId>Lukdrasil.StepUpLogging</PackageId>
-    <Version>5.0.0</Version>
-    <PackageReleaseNotes>v5.0.0 - BREAKING. Two breaking changes. `Log.Logger` compiles unchanged, and `ExcludePaths` does for configuration-only hosts, while code that reads `ExcludePaths` sees `string[]?`. `AddStepUpLogging` no longer assigns Serilog's static `Log.Logger`, and disposing the host no longer calls `Log.CloseAndFlush()`, so each host logs through its own DI logger (#31); the step-up and step-down warnings now go through the bypass logger instead of `Log.Warning`, and the step-down warning now exports even when `BaseLevel` is above Warning - migrate static `Log.*` callers to DI `ILogger&lt;T&gt;`, or set `SetStaticLogger = true` to restore the old behavior. A configured `ExcludePaths` now replaces the built-in defaults (`/healthz`, `/metrics`, `/health`) instead of being appended to them, and an explicit `[]` excludes nothing (#32) - list the defaults in your configuration to keep them, and in code assign the whole list, since the property is `null` inside `configureOptions` unless configuration sets it. Added: `CategoryFloors` sets a per-category minimum level by `SourceContext` prefix, with `DiagnosticExemptCategories` keeping a floor during Diagnostic mode. `AlwaysExportCategories` exports matching categories once at any level through the immediate path (#35). `NeverTriggerCategories` names categories whose errors do not trigger step-up, and `sink_error_events_total` now counts only errors that requested a step-up trigger, so errors from these categories are not counted (#35). `Mode = Diagnostic` holds the switch at `DiagnosticLevel` for `DiagnosticDurationMinutes` at startup, then runs as Auto, and lifts the `NeverStepUpCategories` pin for that window, so EF `Database.Command` SQL is exported for the whole window - pin that category with `CategoryFloors` plus `DiagnosticExemptCategories` (#35). A new `AddStepUpLogging` overload takes both the options callback and the `(IServiceProvider, LoggerConfiguration)` callback (#35). `RedactLogEventProperties` opts in to applying `RedactionRegexes` to string and URI-like properties of application log events (#20, #34). Fixed: `RedactionRegexes` now reaches the request path in the summary, the request event and the `LogRequest` span (#30). The pre-error buffer exports every event at most once and drops held-back events at shutdown (#29). The encrypted spool's delivery client no longer inherits `ConfigureHttpClientDefaults` resilience handlers, and adds a dependency on `Microsoft.Extensions.Http.Resilience` (#33). See CHANGELOG.md and MIGRATION.md.</PackageReleaseNotes>
+    <Version>5.0.1</Version>
+    <PackageReleaseNotes>v5.0.1 - Fixed: the package no longer passes Microsoft.Extensions.Telemetry.Abstractions build assets and its source generators to consumers, so a consumer's [LoggerMessage] methods use the standard logging generator again. Every Telemetry.Abstractions analyzer is removed, Microsoft.Gen.Logging and Microsoft.Gen.Metrics included; a consumer that uses those generators should reference Microsoft.Extensions.Telemetry.Abstractions directly to keep them (#62). See CHANGELOG.md.</PackageReleaseNotes>
     <Authors>Lukdrasil</Authors>
     <Description>Dynamic step-up logging for ASP.NET Core with Serilog - automatically increase log verbosity when errors occur, with minimal performance overhead. Includes request body capture, sensitive data redaction, and OpenTelemetry metrics.</Description>
     <PackageTags>serilog;logging;aspnetcore;observability;otel;stepup;dynamic-logging;error-logging</PackageTags>
@@ -30,6 +30,7 @@
   <ItemGroup>
     <None Include="..\..\README.md" Pack="true" PackagePath="\" />
     <None Include="..\..\LICENSE" Pack="true" PackagePath="\" />
+    <None Update="buildTransitive\Lukdrasil.StepUpLogging.targets" Pack="true" PackagePath="buildTransitive/net10.0/Lukdrasil.StepUpLogging.targets" />
   </ItemGroup>
 
   <ItemGroup>
@@ -58,7 +59,7 @@
     <PackageReference Include="Serilog.Enrichers.Process" Version="3.0.0" />
     <PackageReference Include="Serilog.Enrichers.Environment" Version="3.0.1" />
     <PackageReference Include="Serilog.Enrichers.CallStack" Version="1.0.358" />
-    <PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="10.0.0" PrivateAssets="build;buildtransitive;analyzers;contentfiles" />
   </ItemGroup>
 
 </Project>

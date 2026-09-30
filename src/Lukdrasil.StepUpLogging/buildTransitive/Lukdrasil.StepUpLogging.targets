@@ -1,0 +1,11 @@
+<Project>
+
+  <Target Name="_LukdrasilStepUpLoggingRemoveTelemetryGenerators"
+          AfterTargets="ResolvePackageDependenciesForBuild;ResolveReferences"
+          Condition="'$(DisableMicrosoftExtensionsLoggingSourceGenerator)' != 'true'">
+    <ItemGroup>
+      <Analyzer Remove="@(Analyzer)" Condition="'%(Analyzer.NuGetPackageId)' == 'Microsoft.Extensions.Telemetry.Abstractions'" />
+    </ItemGroup>
+  </Target>
+
+</Project>
