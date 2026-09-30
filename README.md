@@ -1244,6 +1244,8 @@ deployment. It is entered only at startup; there is no runtime API.
 - A startup Warning is written when `DiagnosticLevel` is not more verbose than `BaseLevel`, since the
   mode then cannot increase verbosity.
 - `stepup_diagnostic_active` reads 1 during the window and 0 after it; `stepup_active` stays 0.
+- With `CaptureRequestBody=true`, request bodies are captured (still redacted) for the whole window,
+  because body capture follows `IsSteppedUp`.
 
 ## Security
 

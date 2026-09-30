@@ -84,9 +84,13 @@ public sealed class StepUpLoggingController : IDisposable
     }
 
     /// <summary>
-    /// Test-only constructor allowing a monotonic clock to be injected. The <paramref name="clock"/>
-    /// must return timestamps in <see cref="Stopwatch"/> tick units (as produced by <see cref="Stopwatch.GetTimestamp"/>).
+    /// Constructor allowing a monotonic clock and a time provider to be injected; used by tests and the DI factory.
+    /// The <paramref name="clock"/> must return timestamps in <see cref="Stopwatch"/> tick units (as produced by <see cref="Stopwatch.GetTimestamp"/>).
     /// </summary>
+    /// <param name="options">The step-up configuration.</param>
+    /// <param name="summaryLogger">The bypass logger for summaries and Warnings; the static <see cref="Log"/> when <see langword="null"/>.</param>
+    /// <param name="clock">The monotonic clock for step-up timing.</param>
+    /// <param name="timeProvider">Times the Diagnostic window only; <see cref="TimeProvider.System"/> when <see langword="null"/>.</param>
     internal StepUpLoggingController(StepUpLoggingOptions options, Serilog.ILogger? summaryLogger, Func<long> clock, TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -211,6 +215,9 @@ public sealed class StepUpLoggingController : IDisposable
         }
     }
 
+    /// <summary>
+    /// Gets whether logging is currently stepped up; always <see langword="true"/> while Diagnostic mode is active.
+    /// </summary>
     public bool IsSteppedUp => _mode switch
     {
         StepUpMode.AlwaysOn => true,
@@ -234,6 +241,9 @@ public sealed class StepUpLoggingController : IDisposable
         }
     }
 
+    /// <summary>
+    /// Raises the level to <c>StepUpLevel</c> and extends the step-down timer; a no-op in AlwaysOn and Disabled mode, during the post-cap cooldown, and while Diagnostic mode is active.
+    /// </summary>
     public void Trigger()
     {
         // Ignore triggers in AlwaysOn or Disabled mode
