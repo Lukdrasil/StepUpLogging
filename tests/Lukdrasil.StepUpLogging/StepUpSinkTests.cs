@@ -333,4 +333,82 @@ public class StepUpSinkTests
 
         Assert.Empty(collector.Events);
     }
+
+    private static (StepUpSink Sink, PreErrorBufferSink Buffer, CollectingSink Exported, CollectingSink Flushed) WithHeldBackBuffer(
+        LogEventLevel switchLevel, string[] neverStepUpCategories)
+    {
+        var exported = new CollectingSink();
+        var flushed = new CollectingSink();
+        var inner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(exported).CreateLogger();
+        var bypass = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(flushed).CreateLogger();
+        var buffer = new PreErrorBufferSink(bypass, capacityPerContext: 10, maxContexts: 16, minimumLevel: LogEventLevel.Information);
+        var sink = new StepUpSink(inner, new LoggingLevelSwitch(switchLevel), LogEventLevel.Warning, neverStepUpCategories, buffer);
+        return (sink, buffer, exported, flushed);
+    }
+
+    private static LogEvent Tagged(LogEventLevel level, string text, params LogEventProperty[] properties) =>
+        new(DateTimeOffset.UtcNow, level, null, new MessageTemplateParser().Parse(text), properties);
+
+    [Fact]
+    public void RejectedEvent_AtOrAboveStepUpLevel_ReachesTheBuffer()
+    {
+        var (sink, buffer, exported, flushed) = WithHeldBackBuffer(LogEventLevel.Warning, []);
+
+        sink.Emit(Tagged(LogEventLevel.Information, "rejected-info"));
+        buffer.Emit(Tagged(LogEventLevel.Error, "err"));
+
+        Assert.Empty(exported.Events);
+        Assert.Equal("rejected-info", Assert.Single(flushed.Events).MessageTemplate.Text);
+    }
+
+    [Fact]
+    public void ExportedEvent_DoesNotReachTheBuffer()
+    {
+        var (sink, buffer, exported, flushed) = WithHeldBackBuffer(LogEventLevel.Warning, []);
+
+        sink.Emit(Tagged(LogEventLevel.Warning, "exported-warn"));
+        sink.Emit(Tagged(LogEventLevel.Information, "rejected-info"));
+        buffer.Emit(Tagged(LogEventLevel.Error, "err"));
+
+        Assert.Equal("exported-warn", Assert.Single(exported.Events).MessageTemplate.Text);
+        Assert.Equal("rejected-info", Assert.Single(flushed.Events).MessageTemplate.Text);
+    }
+
+    [Fact]
+    public void SteppedUp_ExportedInformation_DoesNotReachTheBuffer()
+    {
+        var (sink, buffer, exported, flushed) = WithHeldBackBuffer(LogEventLevel.Information, []);
+
+        sink.Emit(Tagged(LogEventLevel.Information, "exported-info"));
+        buffer.Emit(Tagged(LogEventLevel.Error, "err"));
+
+        Assert.Single(exported.Events);
+        Assert.Empty(flushed.Events);
+    }
+
+    [Fact]
+    public void BypassMarkedEvent_DoesNotReachTheBuffer()
+    {
+        var (sink, buffer, exported, flushed) = WithHeldBackBuffer(LogEventLevel.Warning, []);
+
+        sink.Emit(Tagged(LogEventLevel.Information, "immediate", new LogEventProperty(LogProperties.IsImmediate, new ScalarValue(true))));
+        sink.Emit(Tagged(LogEventLevel.Information, "summary", new LogEventProperty(LogProperties.IsRequestSummary, new ScalarValue(true))));
+        sink.Emit(Tagged(LogEventLevel.Information, "rejected-info"));
+        buffer.Emit(Tagged(LogEventLevel.Error, "err"));
+
+        Assert.Empty(exported.Events);
+        Assert.Equal("rejected-info", Assert.Single(flushed.Events).MessageTemplate.Text);
+    }
+
+    [Fact]
+    public void SteppedUp_ListedCategory_RejectedInformation_ReachesTheBuffer()
+    {
+        var (sink, buffer, exported, flushed) = WithHeldBackBuffer(LogEventLevel.Information, [EfCommandCategory]);
+
+        sink.Emit(Tagged(LogEventLevel.Information, "ef-info", SourceContext(EfCommandCategory)));
+        buffer.Emit(Tagged(LogEventLevel.Error, "err"));
+
+        Assert.Empty(exported.Events);
+        Assert.Equal("ef-info", Assert.Single(flushed.Events).MessageTemplate.Text);
+    }
 }
