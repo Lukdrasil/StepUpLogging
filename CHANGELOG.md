@@ -8,10 +8,13 @@ Tags before 1.8.0 predate this file.
 
 ## [Unreleased]
 
+## [5.0.0] - 2026-09-30
+
 BREAKING. See MIGRATION.md for migration steps.
 
 ### Changed (breaking)
 - `AddStepUpLogging` no longer assigns Serilog's static `Log.Logger`, and disposing the host no longer calls `Log.CloseAndFlush()`. Every host logs through its own DI logger, so the last host built no longer owns `Log.*` calls and disposing one host no longer silences another. Set the new `SetStaticLogger` option (default `false`) to restore the old behavior. `UseStepUpRequestLogging` now writes request completion events to the DI `Serilog.ILogger`. Fixes #31. The "Logging step up..." and "Logging step down..." warnings are now written through the controller's bypass logger instead of the static `Log.Warning`, in both modes, so they no longer pass through the root pipeline (configure-hook sinks, root `Serilog:Filter`/`Enrich`/`Properties`) and the step-down warning now exports even when `BaseLevel` is above Warning. See docs/adr/0025-static-logger-preserved-by-default.md.
+- A configured `ExcludePaths` now replaces the built-in defaults (`/healthz`, `/metrics`, `/health`) instead of being appended to them. List the defaults in your configuration to keep them. An explicit `[]` excludes nothing. The defaults apply only when `ExcludePaths` is not configured. Fixes #32.
 
 ### Added
 - `CategoryFloors` (default `{}`) sets a per-category minimum level: a `SourceContext` prefix exports at `max(switch, floor)`, the most specific matching prefix decides, and an event a floor rejects is held back for the pre-error buffer. `DiagnosticExemptCategories` (default `[]`) names the prefixes that keep their floor during Diagnostic mode. See docs/adr/0024-category-floors-and-diagnostic-mode.md.
@@ -24,7 +27,6 @@ BREAKING. See MIGRATION.md for migration steps.
 ### Fixed
 - `RedactionRegexes` did not reach the request path, so a secret carried in the path leaked through the request summary `Path`, the "HTTP ..." event's `RequestPath`, the `LogRequest` span's `http.target` and the route values captured from it. All three now carry the redacted path, and a route value whose text sits inside a redacted part of the path is exported as `[REDACTED]`. `ExcludePaths` still matches the raw path. Fixes #30.
 - Pre-error buffering exported an event twice: once at the current level and again when an error in the same trace flushed the buffer, or at shutdown. The buffer now holds only events the step-up gate did not export, so every event is exported at most once. Held-back events are dropped at shutdown instead of exported. Fixes #29. See docs/adr/0023-prebuffer-exactly-once-and-drop-on-dispose.md.
-- A configured `ExcludePaths` now replaces the built-in defaults (`/healthz`, `/metrics`, `/health`) instead of being appended to them. List the defaults in your configuration to keep them. An explicit `[]` excludes nothing. The defaults apply only when `ExcludePaths` is not configured. Fixes #32.
 - The encrypted spool's delivery client no longer inherits resilience handlers from `ConfigureHttpClientDefaults`. A consumer's `AddStandardResilienceHandler()` used to retry the audit POST, override `DeliveryTimeout`, and log at Error; `DrainWorker` is now the only retrying layer. A handler you add to the delivery client after `AddEncryptedSpoolAuditSink` still applies. Adds a dependency on `Microsoft.Extensions.Http.Resilience` 10.0.0. Fixes #33. See docs/adr/0020-spool-durability-and-delivery-failures.md.
 
 ## [4.0.0] - 2026-08-13
