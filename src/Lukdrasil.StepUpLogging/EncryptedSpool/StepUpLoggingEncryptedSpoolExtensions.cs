@@ -41,6 +41,12 @@ public static class StepUpLoggingEncryptedSpoolExtensions
     /// <see cref="UnauthorizedAccessException"/>) — resolving the sink during start-up validation is
     /// what forces this to surface then, rather than on the first audited operation (B07 hand-off).
     /// </para>
+    /// <para>
+    /// The delivery client removes every resilience handler registered on it before this call,
+    /// including one inherited from <c>ConfigureHttpClientDefaults</c>, so <see cref="DrainWorker"/>
+    /// is the only retrying layer and <see cref="EncryptedSpoolOptions.DeliveryTimeout"/> the only
+    /// timeout (ADR 0020). A custom handler for that client must be added after this call.
+    /// </para>
     /// </remarks>
     /// <param name="builder">The host application builder.</param>
     /// <param name="configureOptions">
@@ -128,7 +134,10 @@ public static class StepUpLoggingEncryptedSpoolExtensions
 
     private static void AddDeliveryHttpClient(IServiceCollection services)
     {
+#pragma warning disable EXTEXP0001
         services.AddHttpClient(DrainWorker.HttpClientName)
+            .RemoveAllResilienceHandlers()
+#pragma warning restore EXTEXP0001
             .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
             {
                 // A followed redirect would turn the drain worker's POST into a body-less GET
