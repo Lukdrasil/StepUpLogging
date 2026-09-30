@@ -255,7 +255,7 @@ public static class StepUpLoggingExtensions
             // ADR 0007 warn-not-fail: in Auto or Diagnostic mode a StepUpLevel that is not strictly more verbose than
             // BaseLevel (numerically >= it, since a more verbose level is a LOWER LogEventLevel) means a
             // trigger cannot raise verbosity. AlwaysOn/Disabled ignore the ordering, so they never warn.
-            if (opts.Mode is StepUpMode.Auto or StepUpMode.Diagnostic && stepUpController.StepUpLevel >= stepUpController.BaseLevel)
+            if ((opts.Mode is StepUpMode.Auto or StepUpMode.Diagnostic) && stepUpController.StepUpLevel >= stepUpController.BaseLevel)
             {
                 bypassLogger.Warning(
                     "StepUpLevel {StepUpLevel} is not more verbose than BaseLevel {BaseLevel}; step-up cannot increase verbosity in {Mode:l} mode.",

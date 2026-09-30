@@ -11,22 +11,7 @@ namespace Lukdrasil.StepUpLogging.Tests;
 public class OptionsValidationTests
 {
     private static IHost BuildHost(params (string Key, string Value)[] settings)
-    {
-        var dict = new Dictionary<string, string?>
-        {
-            // Keep OTLP machinery out of the test host.
-            ["SerilogStepUp:EnableOtlpExporter"] = "false",
-        };
-        foreach (var (key, value) in settings)
-        {
-            dict[key] = value;
-        }
-
-        var builder = Host.CreateApplicationBuilder();
-        builder.Configuration.AddInMemoryCollection(dict);
-        builder.AddStepUpLogging();
-        return builder.Build();
-    }
+        => BuildHostWith(_ => { }, settings);
 
     [Fact]
     public void InvalidLevelString_FailsValidationOnStart()
