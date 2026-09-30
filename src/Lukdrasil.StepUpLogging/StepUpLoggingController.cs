@@ -117,15 +117,19 @@ public sealed class StepUpLoggingController : IDisposable
 
         if (_mode == StepUpMode.Diagnostic)
         {
-            var time = timeProvider ?? TimeProvider.System;
-            var diagnosticDuration = TimeSpan.FromMinutes(options.DiagnosticDurationMinutes);
-            DiagnosticExpiresAt = time.GetUtcNow() + diagnosticDuration;
-            lock (_gate)
-            {
-                Volatile.Write(ref _diagnosticActive, true);
-                DiagnosticActiveCounter.Add(1);
-                _diagnosticTimer = time.CreateTimer(_ => EndDiagnostic(), null, diagnosticDuration, Timeout.InfiniteTimeSpan);
-            }
+            DiagnosticExpiresAt = StartDiagnostic(timeProvider, TimeSpan.FromMinutes(options.DiagnosticDurationMinutes));
+        }
+    }
+
+    private DateTimeOffset StartDiagnostic(TimeProvider? timeProvider, TimeSpan duration)
+    {
+        var time = timeProvider ?? TimeProvider.System;
+        lock (_gate)
+        {
+            Volatile.Write(ref _diagnosticActive, true);
+            DiagnosticActiveCounter.Add(1);
+            _diagnosticTimer = time.CreateTimer(_ => EndDiagnostic(), null, duration, Timeout.InfiniteTimeSpan);
+            return time.GetUtcNow() + duration;
         }
     }
 
