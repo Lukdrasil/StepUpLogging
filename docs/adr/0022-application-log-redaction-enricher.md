@@ -25,10 +25,14 @@ Three facts about the existing pipeline constrain the answer:
 
 ## Decision
 
-1. **A new internal sealed `ILogEventEnricher` redacts string-valued scalar properties only.**
+1. **A new internal sealed `ILogEventEnricher` redacts string-valued and URI-like scalar properties only.**
    Each `LogEventPropertyValue` that is a `ScalarValue` wrapping a `string` is passed through
    `CompiledRedactionPatterns.Redact()`; a changed value is written back with
-   `AddOrUpdateProperty`. Non-string scalars, and structured, sequence and dictionary values, are
+   `AddOrUpdateProperty`. Amended in place (issue #34, unreleased): a `ScalarValue` wrapping a
+   URI-like value (`PathString`, `QueryString`, `HostString` or `Uri`) is redacted through its
+   `ToString()` form, for `Uri` the decoded form the exporter renders rather than
+   `OriginalString`, and replaced by the redacted string only when a pattern matched; an unmatched
+   one keeps its type. Other non-string scalars, and structured, sequence and dictionary values, are
    left untouched. Audit records written through `IAuditEventSink` are out of scope (issue #20
    non-goal) and `AuditLogger.cs:127` is not modified.
 
