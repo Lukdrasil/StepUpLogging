@@ -586,7 +586,7 @@ public class DrainWorkerTests
         // not enough to trigger the retry.
         harness.Time.Advance(harness.SpoolOptions.DrainInterval);
         await Task.Delay(20, TestContext.Current.CancellationToken);
-        Assert.Equal(1, harness.Receiver.Received.Count);
+        Assert.Single(harness.Receiver.Received);
 
         harness.Time.Advance(harness.SpoolOptions.DrainInterval);
         await Until(() => harness.Receiver.Received.Count == 2);

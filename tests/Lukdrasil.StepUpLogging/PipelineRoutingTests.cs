@@ -140,7 +140,7 @@ public class PipelineRoutingTests
         Assert.False(p.Controller.IsSteppedUp);
 
         p.Root.Write(MakeEvent(LogEventLevel.Error));
-        await Task.Delay(150); // let trigger channel process
+        await Task.Delay(150, TestContext.Current.CancellationToken); // let trigger channel process
 
         // Error goes through StepUpSink (Error >= Warning base level)
         Assert.Single(p.StepUpOutput.Events);
@@ -183,7 +183,7 @@ public class PipelineRoutingTests
         Assert.False(p.Controller.IsSteppedUp);
 
         p.Root.Write(MakeEvent(LogEventLevel.Error, Immediate()));
-        await Task.Delay(150);
+        await Task.Delay(150, TestContext.Current.CancellationToken);
 
         // Bypass receives it (ImmediateSink picks it up)
         Assert.Single(p.BypassOutput.Events);
@@ -260,7 +260,7 @@ public class PipelineRoutingTests
         p.Root.Write(MakeEvent(LogEventLevel.Information, Summary()));
 
         // Exactly one write to bypass (SummarySink), not two (which would happen if ImmediateSink also picked it up).
-        Assert.Equal(1, p.BypassOutput.Events.Count);
+        Assert.Single(p.BypassOutput.Events);
     }
 
     [Fact]
@@ -284,7 +284,7 @@ public class PipelineRoutingTests
 
         p.Root.Write(MakeEvent(LogEventLevel.Information, Immediate()));
 
-        Assert.Equal(1, p.BypassOutput.Events.Count);
+        Assert.Single(p.BypassOutput.Events);
     }
 
     // ─── 4. Pre-error buffer interaction ──────────────────────────────────────
@@ -495,7 +495,7 @@ public class PipelineRoutingTests
         Assert.False(controller.IsSteppedUp);
 
         logger.LogImmediateError("immediate error");
-        await Task.Delay(150); // let trigger channel process
+        await Task.Delay(150, TestContext.Current.CancellationToken); // let trigger channel process
 
         // Routed to bypass (IsImmediate), not step-up
         Assert.Single(bypassOutput.Events);

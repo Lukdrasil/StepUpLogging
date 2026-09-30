@@ -29,7 +29,7 @@ public class StepUpTriggerSinkTests
         sink.Emit(logEvent);
 
         // Allow background channel processor to run
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         Assert.True(controller.IsSteppedUp);
     }
@@ -54,7 +54,7 @@ public class StepUpTriggerSinkTests
             properties: Array.Empty<LogEventProperty>());
 
         sink.Emit(logEvent);
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         Assert.False(controller.IsSteppedUp);
     }
@@ -79,7 +79,7 @@ public class StepUpTriggerSinkTests
             properties: Array.Empty<LogEventProperty>());
 
         sink.Emit(logEvent);
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         Assert.True(controller.IsSteppedUp);
     }
@@ -110,7 +110,7 @@ public class StepUpTriggerSinkTests
             properties: Array.Empty<LogEventProperty>());
 
         sink.Emit(logEvent);
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         Assert.False(controller.IsSteppedUp);
     }
@@ -134,9 +134,9 @@ public class StepUpTriggerSinkTests
             properties: Array.Empty<LogEventProperty>());
 
         sink.Emit(logEvent);
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
         sink.Emit(logEvent);
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         Assert.Equal(2, callCount);
     }
@@ -160,7 +160,7 @@ public class StepUpTriggerSinkTests
             properties: Array.Empty<LogEventProperty>());
 
         sink.Emit(logEvent);
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         Assert.False(controller.IsSteppedUp);
     }

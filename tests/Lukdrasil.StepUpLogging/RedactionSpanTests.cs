@@ -98,8 +98,8 @@ public class RedactionSpanTests
             request.Headers.TryAddWithoutValidation("Authorization", "Bearer xyz");
             request.Headers.TryAddWithoutValidation("Cookie", "session=abc");
 
-            await client.SendAsync(request);
-            await Task.Delay(50);
+            await client.SendAsync(request, TestContext.Current.CancellationToken);
+            await Task.Delay(50, TestContext.Current.CancellationToken);
 
             Assert.Single(redactions);
             var span = redactions[0];
@@ -132,8 +132,8 @@ public class RedactionSpanTests
             using var host = await BuildServerAsync(logger);
             using var client = host.GetTestClient();
 
-            await client.GetAsync("http://localhost/test");
-            await Task.Delay(50);
+            await client.GetAsync("http://localhost/test", TestContext.Current.CancellationToken);
+            await Task.Delay(50, TestContext.Current.CancellationToken);
 
             Assert.Empty(redactions);
         }
