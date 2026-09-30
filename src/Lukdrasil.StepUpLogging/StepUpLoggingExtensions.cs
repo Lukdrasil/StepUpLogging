@@ -283,12 +283,19 @@ public static class StepUpLoggingExtensions
                 ? new PreErrorBufferSink(bypassLogger, opts.PreErrorBufferSize, opts.PreErrorMaxContexts, stepUpController.StepUpLevel)
                 : null;
 
+            var categoryFloors = new CategoryFloorMap(
+                (opts.CategoryFloors ?? [])
+                    .Where(f => !string.IsNullOrWhiteSpace(f.Key))
+                    .ToDictionary(f => f.Key, f => Enum.Parse<LogEventLevel>(f.Value, ignoreCase: true), StringComparer.Ordinal),
+                (opts.DiagnosticExemptCategories ?? []).Where(c => !string.IsNullOrWhiteSpace(c)).ToArray());
+
             lc.WriteTo.Sink(new StepUpSink(
                 stepUpInnerCfg.CreateLogger(),
                 stepUpController.LevelSwitch,
                 stepUpController.BaseLevel,
                 neverStepUp,
-                preErrorBuffer));
+                preErrorBuffer,
+                categoryFloors));
 
             if (preErrorBuffer is not null)
             {

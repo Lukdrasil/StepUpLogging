@@ -17,6 +17,8 @@ internal sealed class StepUpSink : ILogEventSink, IDisposable
     private readonly LogEventLevel _baseLevel;
     private readonly string[] _neverStepUpCategories;
     private readonly PreErrorBufferSink? _heldBackBuffer;
+    private readonly CategoryFloorMap? _categoryFloors;
+    private readonly Func<bool>? _isDiagnosticActive;
     private bool _disposed;
 
     /// <param name="innerLogger">Pre-configured output logger (OTLP / Console / File sinks). No enrichers needed — events arrive already enriched from the root pipeline.</param>
@@ -33,6 +35,8 @@ internal sealed class StepUpSink : ILogEventSink, IDisposable
         _baseLevel = baseLevel;
         _neverStepUpCategories = neverStepUpCategories ?? throw new ArgumentNullException(nameof(neverStepUpCategories));
         _heldBackBuffer = heldBackBuffer;
+        _categoryFloors = categoryFloors;
+        _isDiagnosticActive = isDiagnosticActive;
     }
 
     public void Emit(LogEvent logEvent)
@@ -45,9 +49,17 @@ internal sealed class StepUpSink : ILogEventSink, IDisposable
 
         // Gate by step-up level switch; listed categories are pinned to BaseLevel so the
         // step-up never raises them (the max keeps the deny-list from ever adding verbosity).
-        var minimum = CategoryPrefix.MatchesAny(logEvent, _neverStepUpCategories)
+        var diagnosticActive = _isDiagnosticActive?.Invoke() ?? false;
+        var minimum = !diagnosticActive && CategoryPrefix.MatchesAny(logEvent, _neverStepUpCategories)
             ? (LogEventLevel)Math.Max((int)_baseLevel, (int)_levelSwitch.MinimumLevel)
             : _levelSwitch.MinimumLevel;
+        if (_categoryFloors is not null
+            && CategoryPrefix.TryGetSourceContext(logEvent, out var source)
+            && _categoryFloors.TryGetFloor(source, diagnosticActive, out var floor)
+            && floor > minimum)
+        {
+            minimum = floor;
+        }
         if (logEvent.Level < minimum)
         {
             _heldBackBuffer?.Hold(logEvent);
