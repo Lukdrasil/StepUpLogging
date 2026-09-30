@@ -18,6 +18,9 @@ public static class KeyedCaptureSink
             ? events.Count(e => e.RenderMessage().Contains(token, StringComparison.Ordinal))
             : 0;
 
+    public static LogEvent[] Events(string key)
+        => Captured.TryGetValue(key, out var events) ? events.ToArray() : [];
+
     public static void Forget(string key) => Captured.TryRemove(key, out _);
 
     private sealed class Sink(ConcurrentQueue<LogEvent> events) : ILogEventSink

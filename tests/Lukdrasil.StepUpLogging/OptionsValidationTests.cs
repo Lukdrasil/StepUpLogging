@@ -326,7 +326,7 @@ public class OptionsValidationTests
     }
 
     [Fact]
-    public void DiagnosticMode_BindsFromConfigAndTriggerStepsUpAsInAuto()
+    public void DiagnosticMode_BindsFromConfigAndTriggerLeavesTheSwitchAtDiagnosticLevel()
     {
         using var host = BuildHost(("SerilogStepUp:Mode", "Diagnostic"));
         var controller = host.Services.GetRequiredService<StepUpLoggingController>();
@@ -335,7 +335,7 @@ public class OptionsValidationTests
 
         Assert.Equal(StepUpMode.Diagnostic, ResolveOptions(host).Mode);
         Assert.True(controller.IsSteppedUp);
-        Assert.Equal(Serilog.Events.LogEventLevel.Information, controller.LevelSwitch.MinimumLevel);
+        Assert.Equal(Serilog.Events.LogEventLevel.Debug, controller.LevelSwitch.MinimumLevel);
     }
 
     private static IEnumerable<string>? ResolveExcludePaths(string sectionJson, Action<StepUpLoggingOptions>? configureOptions = null)

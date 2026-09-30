@@ -47,6 +47,15 @@ rule moved out of `StepUpSink` unchanged.
 ADR 0021 D4: the sink stays free of any mode dependency, and the controller decides whether
 Diagnostic is active.
 
+**D8. Diagnostic is a startup-only, time-boxed window.** The switch starts at `DiagnosticLevel`,
+and when `DiagnosticDurationMinutes` elapse the controller runs as `Auto` at `BaseLevel`. A
+`DiagnosticReturnMode` option was rejected: it has no user. While the window is active,
+`Trigger()` is a no-op and `IsSteppedUp` is `true`, and nothing carries over after expiry. The
+window is timed by the `TimeProvider` from DI, falling back to `TimeProvider.System`, for the
+diagnostic timer only; step-up keeps its `Func<long>` clock and `Timer`, since a full migration
+belongs in its own task. The start and end Warnings go through the bypass logger, and the
+UpDownCounter `stepup_diagnostic_active` on meter `StepUpLogging` reports the window.
+
 ## Consequences
 
 - `StepUpMode.Diagnostic` and the six options (`CategoryFloors`, `DiagnosticExemptCategories`,
@@ -54,5 +63,7 @@ Diagnostic is active.
   `NeverTriggerCategories`) are validated at startup in every mode (ADR 0007). Blank list entries
   pass validation and are filtered at wiring.
 - The options land before their behaviour: until each feature ships, an option is validated but
-  has no effect, and `Diagnostic` runs exactly as `Auto`, including the level-order Warning.
+  has no effect.
+- With `CaptureRequestBody=true`, request bodies are captured (still redacted) for the whole
+  Diagnostic window, because body capture follows `IsSteppedUp`.
 - All additions are additive, a minor version.
