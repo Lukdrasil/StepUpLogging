@@ -40,6 +40,9 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
         <_Parameter1>Lukdrasil.StepUpLogging.Tests</_Parameter1>
     </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+        <_Parameter1>Lukdrasil.StepUpLogging.Benchmarks</_Parameter1>
+    </AssemblyAttribute>
 </ItemGroup>
 
   <ItemGroup>

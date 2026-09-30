@@ -18,6 +18,7 @@ on:
 env:
   PROJECT_PATH: 'src/Lukdrasil.StepUpLogging/Lukdrasil.StepUpLogging.csproj'
   TEST_PROJECT_PATH: 'tests/Lukdrasil.StepUpLogging/Lukdrasil.StepUpLogging.Tests.csproj'
+  BENCHMARK_PROJECT_PATH: 'tests/Lukdrasil.StepUpLogging.Benchmarks/Lukdrasil.StepUpLogging.Benchmarks.csproj'
 
 jobs:
   build-test-publish:
@@ -40,6 +41,9 @@ jobs:
 
     - name: Build tests
       run: dotnet build "${{ env.TEST_PROJECT_PATH }}" --configuration Release
+
+    - name: Build benchmarks
+      run: dotnet build "${{ env.BENCHMARK_PROJECT_PATH }}" --configuration Release
 
     - name: Run tests
       run: dotnet test --project "${{ env.TEST_PROJECT_PATH }}" --configuration Release
