@@ -11,6 +11,9 @@ Tags before 1.8.0 predate this file.
 ### Added
 - `RedactLogEventProperties` (default `false`). When set, `RedactionRegexes` is also applied to the string-valued scalar properties of application log events — not just request metadata — so a secret passed as a message-template argument (e.g. `logger.LogInformation("token={T}", secret)`) is masked too. Opt-in: nothing changes for a consumer who does not set it. Interpolated templates, exception messages, and structured/sequence/dictionary values remain out of scope either way. Fixes #20. See docs/adr/0022-application-log-redaction-enricher.md.
 
+### Fixed
+- A configured `ExcludePaths` now replaces the built-in defaults (`/healthz`, `/metrics`, `/health`) instead of being appended to them. List the defaults in your configuration to keep them. An explicit `[]` excludes nothing. The defaults apply only when `ExcludePaths` is not configured. Fixes #32.
+
 ## [4.0.0] - 2026-08-13
 
 BREAKING. See MIGRATION.md for rationale and migration steps.
