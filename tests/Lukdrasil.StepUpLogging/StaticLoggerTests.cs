@@ -169,4 +169,37 @@ public class StaticLoggerTests : IDisposable
             if (File.Exists(summaryFile)) File.Delete(summaryFile);
         }
     }
+
+    [Fact]
+    public void DefaultOptions_StepUpWarning_ReachesHostPipeline_WithStaticLoggerUnchanged()
+    {
+        using var sentinel = new LoggerConfiguration().CreateLogger();
+        Log.Logger = sentinel;
+        var logFile = Path.Combine(Path.GetTempPath(), $"stepup-static-trigger-{Guid.NewGuid():N}.log");
+        try
+        {
+            var builder = CreateHostBuilder(new Dictionary<string, string?>
+            {
+                ["Serilog:Using:0"] = "Serilog.Sinks.File",
+                ["Serilog:WriteTo:0:Name"] = "File",
+                ["Serilog:WriteTo:0:Args:path"] = logFile,
+                ["Serilog:WriteTo:0:Args:shared"] = "true",
+            });
+            builder.AddStepUpLogging();
+
+            using (var host = builder.Build())
+            {
+                host.Services.GetRequiredService<ILogger<StaticLoggerTests>>();
+                host.Services.GetRequiredService<StepUpLoggingController>().Trigger();
+                Assert.Same(sentinel, Log.Logger);
+            }
+
+            Assert.Contains(File.ReadAllLines(logFile), line =>
+                line.Contains("Logging step up", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (File.Exists(logFile)) File.Delete(logFile);
+        }
+    }
 }
