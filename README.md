@@ -822,6 +822,12 @@ needs (a bearer token, a client certificate) go on the delivery `HttpClient` via
 `options.ConfigureProducerCredentials`, not on the port and not in `EncryptedSpoolOptions` as a
 key — the drain worker sends what that client is set up to send and never inspects it.
 
+The drain worker is the only retrying layer on the delivery path. `AddEncryptedSpoolAuditSink`
+removes every resilience handler registered on the delivery `HttpClient` before it, including one
+inherited from `ConfigureHttpClientDefaults(h => h.AddStandardResilienceHandler())`, so the audit
+POST is never retried behind the worker's back and `DeliveryTimeout` is the only timeout. To add a
+custom handler to that client, register it after `AddEncryptedSpoolAuditSink`.
+
 ### Options
 
 `EncryptedSpoolOptions` is set in the `AddEncryptedSpoolAuditSink` lambda; unlike

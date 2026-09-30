@@ -73,6 +73,13 @@ application running by losing audit silently. This ADR rejects every one of them
    be parsed (corrupt), and a file that cannot be read after a bounded number of drain cycles
    (`UnreadableRetryLimit`) — an unbounded read-retry would recreate the head-of-line blocking
    this decision rejects.
+   - > **Amended (2026-09-30, issue #33):** `DrainWorker` is the only retrying layer on the
+     delivery path. The delivery client calls `RemoveAllResilienceHandlers()`, so a resilience
+     handler inherited from the consumer's `ConfigureHttpClientDefaults` (the Aspire
+     `AddStandardResilienceHandler()` pattern) no longer retries the POST, replaces
+     `DeliveryTimeout` with its own attempt timeout, or logs at Error. A consumer handler added to
+     the delivery client after `AddEncryptedSpoolAuditSink` stays in the pipeline; one added
+     before it is removed too.
 
 8. **Deletion of spool files by a compromised host is an accepted risk.** Encryption does nothing
    against it. The mitigation is to shorten the window: a short `DrainInterval`, so records sit on
