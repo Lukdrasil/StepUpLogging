@@ -30,7 +30,7 @@
   <ItemGroup>
     <None Include="..\..\README.md" Pack="true" PackagePath="\" />
     <None Include="..\..\LICENSE" Pack="true" PackagePath="\" />
-    <None Include="buildTransitive\Lukdrasil.StepUpLogging.targets" Pack="true" PackagePath="buildTransitive/net10.0/" />
+    <None Update="buildTransitive\Lukdrasil.StepUpLogging.targets" Pack="true" PackagePath="buildTransitive/net10.0/Lukdrasil.StepUpLogging.targets" />
   </ItemGroup>
 
   <ItemGroup>
