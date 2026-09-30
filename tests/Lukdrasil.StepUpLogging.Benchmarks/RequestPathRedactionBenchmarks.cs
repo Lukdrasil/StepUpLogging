@@ -1,4 +1,7 @@
 using BenchmarkDotNet.Attributes;
+using Serilog.Core;
+using Serilog.Events;
+using Serilog.Parsing;
 
 namespace Lukdrasil.StepUpLogging.Benchmarks;
 
@@ -8,6 +11,10 @@ public class RequestPathRedactionBenchmarks
 
     private CompiledRedactionPatterns _patterns = null!;
     private Dictionary<string, object?> _routeValues = null!;
+    private ILogEventEnricher _pathEnricher = null!;
+    private LogEvent _event = null!;
+    private LogEventProperty _rawRequestPath = null!;
+    private readonly PropertyFactory _propertyFactory = new();
 
     [GlobalSetup]
     public void Setup()
@@ -26,9 +33,40 @@ public class RequestPathRedactionBenchmarks
             ["itemId"] = "42",
             ["token"] = "xyz9",
         };
+        var enricherType = typeof(CompiledRedactionPatterns).Assembly.GetType("Lukdrasil.StepUpLogging.PathPropertyRedactionEnricher")
+            ?? throw new InvalidOperationException("Lukdrasil.StepUpLogging declares no PathPropertyRedactionEnricher");
+        _pathEnricher = (ILogEventEnricher)Activator.CreateInstance(
+            enricherType, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic,
+            null, [_patterns], null)!;
+        _rawRequestPath = new LogEventProperty("RequestPath", new ScalarValue(Path));
+        _event = new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Debug, null, new MessageTemplateParser().Parse("Handled {Item}"),
+        [
+            new LogEventProperty("SourceContext", new ScalarValue("MyApp.Orders.OrderHandler")),
+            _rawRequestPath,
+            new LogEventProperty("RequestId", new ScalarValue("0HN7ABCDEF:00000001")),
+            new LogEventProperty("ConnectionId", new ScalarValue("0HN7ABCDEF")),
+            new LogEventProperty("TraceId", new ScalarValue("4bf92f3577b34da6a3ce929d0e0e4736")),
+            new LogEventProperty("SpanId", new ScalarValue("00f067aa0ba902b7")),
+            new LogEventProperty("Application", new ScalarValue("Orders")),
+            new LogEventProperty("Item", new ScalarValue(42)),
+        ]);
     }
 
     [Benchmark]
     public Dictionary<string, object?> RedactPathAndRouteValues() =>
         RequestPathRedaction.RedactRouteValues(_routeValues, Path, _patterns.Redact(Path), _patterns);
+
+    [Benchmark]
+    public LogEvent EnrichRequestPath()
+    {
+        _event.AddOrUpdateProperty(_rawRequestPath);
+        _pathEnricher.Enrich(_event, _propertyFactory);
+        return _event;
+    }
+
+    private sealed class PropertyFactory : ILogEventPropertyFactory
+    {
+        public LogEventProperty CreateProperty(string name, object? value, bool destructureObjects = false) =>
+            new(name, new ScalarValue(value));
+    }
 }
