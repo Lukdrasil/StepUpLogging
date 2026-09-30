@@ -15,19 +15,20 @@ namespace Lukdrasil.StepUpLogging;
 internal sealed class StepUpTriggerSink : ILogEventSink, IAsyncDisposable, IDisposable
 {
     private readonly Action _trigger;
+    private readonly string[] _neverTriggerCategories;
     private readonly Channel<bool> _triggerChannel;
     private readonly Task _processingTask;
     private readonly CancellationTokenSource _cts;
     private bool _disposed;
 
     private static readonly Meter Meter = new("StepUpLogging.Sink", "1.0.0");
-    private static readonly Counter<long> ErrorEventsCounter = Meter.CreateCounter<long>("sink_error_events_total", "count", "Total number of error-level events observed");
+    private static readonly Counter<long> ErrorEventsCounter = Meter.CreateCounter<long>("sink_error_events_total", "count", "Number of error-level events that requested a step-up trigger");
     private static readonly Counter<long> DroppedEventsCounter = Meter.CreateCounter<long>("sink_dropped_events_total", "count", "Number of dropped events due to full channel");
     private static readonly Counter<long> ProcessedTriggersCounter = Meter.CreateCounter<long>("sink_processed_triggers_total", "count", "Number of triggers processed by background task");
     private static readonly Counter<long> FailedTriggersCounter = Meter.CreateCounter<long>("sink_failed_triggers_total", "count", "Number of triggers that threw and were skipped");
 
-    public StepUpTriggerSink(StepUpLoggingController controller)
-        : this(RequireTrigger(controller))
+    public StepUpTriggerSink(StepUpLoggingController controller, string[]? neverTriggerCategories = null)
+        : this(RequireTrigger(controller), neverTriggerCategories)
     {
     }
 
@@ -35,9 +36,10 @@ internal sealed class StepUpTriggerSink : ILogEventSink, IAsyncDisposable, IDisp
     /// Internal seam allowing tests to substitute a trigger delegate that can fail independently
     /// of a real <see cref="StepUpLoggingController"/>.
     /// </summary>
-    internal StepUpTriggerSink(Action trigger)
+    internal StepUpTriggerSink(Action trigger, string[]? neverTriggerCategories = null)
     {
         _trigger = trigger;
+        _neverTriggerCategories = neverTriggerCategories ?? [];
         _triggerChannel = Channel.CreateBounded<bool>(new BoundedChannelOptions(100)
         {
             FullMode = BoundedChannelFullMode.DropOldest
@@ -59,7 +61,7 @@ internal sealed class StepUpTriggerSink : ILogEventSink, IAsyncDisposable, IDisp
             return; // Ignore emissions after disposal
         }
 
-        if (logEvent.Level >= LogEventLevel.Error)
+        if (logEvent.Level >= LogEventLevel.Error && !CategoryPrefix.MatchesAny(logEvent, _neverTriggerCategories))
         {
             ErrorEventsCounter.Add(1);
             if (!_triggerChannel.Writer.TryWrite(true))

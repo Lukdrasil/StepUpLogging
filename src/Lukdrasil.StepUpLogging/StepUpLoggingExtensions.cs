@@ -116,6 +116,28 @@ public static class StepUpLoggingExtensions
     }
 
     /// <summary>
+    /// Adds StepUp logging with OpenTelemetry as the primary export mechanism, taking both an options callback and a Serilog configuration callback.
+    /// Configuration is loaded from appsettings.json section (default: "SerilogStepUp").
+    /// </summary>
+    /// <param name="builder">The host application builder</param>
+    /// <param name="configureOptions">Action to configure StepUpLoggingOptions, applied after the configuration section is bound</param>
+    /// <param name="configure">Additional Serilog configuration; receives the resolved <see cref="IServiceProvider"/> and the root <see cref="LoggerConfiguration"/></param>
+    /// <param name="configSectionName">Configuration section name (default: SerilogStepUp)</param>
+    /// <param name="logFilePath">Optional file path for additional file sink</param>
+    /// <remarks>
+    /// Serilog's static <c>Log.Logger</c> is left unchanged unless <see cref="StepUpLoggingOptions.SetStaticLogger"/>
+    /// is true in the configuration section or in <paramref name="configureOptions"/>.
+    /// </remarks>
+    public static IHostApplicationBuilder AddStepUpLogging(this IHostApplicationBuilder builder,
+        Action<StepUpLoggingOptions>? configureOptions,
+        Action<IServiceProvider, LoggerConfiguration>? configure,
+        string configSectionName = "SerilogStepUp",
+        string? logFilePath = null)
+    {
+        return AddStepUpLoggingInternal(builder, configureOptions, configure, configSectionName, logFilePath);
+    }
+
+    /// <summary>
     /// Adds audit logging: <typeparamref name="TSink"/> becomes the <see cref="IAuditEventSink"/>
     /// that every <see cref="IAuditLogger{T}"/> writes to. Requires <see cref="AddStepUpLogging(IHostApplicationBuilder, Action{StepUpLoggingOptions}?, string, string?)"/>.
     /// </summary>
@@ -245,6 +267,12 @@ public static class StepUpLoggingExtensions
 
             ApplyCommonEnrichers(lc, builder, opts);
 
+            var alwaysExport = (opts.AlwaysExportCategories ?? []).Where(c => !string.IsNullOrWhiteSpace(c)).ToArray();
+            if (alwaysExport.Length > 0)
+            {
+                lc.Enrich.With(new AlwaysExportEnricher(alwaysExport));
+            }
+
             // Bypass logger: exports at full verbosity independent of LevelSwitch.
             // Built directly here (not via DI) to avoid a circular deadlock:
             // AddSerilog registers Serilog.ILogger as a factory that depends on ILoggerFactory,
@@ -304,7 +332,9 @@ public static class StepUpLoggingExtensions
             }
 
             // Trigger sink: observes Error/Fatal events and calls controller.Trigger() asynchronously.
-            lc.WriteTo.Sink(new StepUpTriggerSink(stepUpController));
+            lc.WriteTo.Sink(new StepUpTriggerSink(
+                stepUpController,
+                (opts.NeverTriggerCategories ?? []).Where(c => !string.IsNullOrWhiteSpace(c)).ToArray()));
 
             // Summary sink: routes IsRequestSummary=true events to bypass logger.
             lc.WriteTo.Sink(new SummarySink(bypassLogger));

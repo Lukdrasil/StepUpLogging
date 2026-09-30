@@ -84,6 +84,14 @@ builder.AddStepUpLogging(opts =>
 });
 ```
 
+To set options and extend the Serilog configuration in one call, pass both callbacks:
+
+```csharp
+builder.AddStepUpLogging(
+    opts => opts.StepUpLevel = "Debug",
+    (services, lc) => lc.Enrich.WithProperty("Region", "eu-west"));
+```
+
 **Option 4: Aspire ServiceDefaults Integration**
 
 When using Aspire ServiceDefaults which already configures Serilog, use the `UseStepUpLogging()` extension method on `LoggerConfiguration`:
@@ -1164,7 +1172,46 @@ stepped up.
 
 ### Always-export categories
 
+`AlwaysExportCategories` lists `SourceContext` prefixes whose events are exported once, at any
+level, whatever the current step-up state. A matching event is marked `IsImmediate=true` and takes
+the same path as `LogImmediate`: the step-up gate skips it and the pre-error buffer never holds it,
+so a later error in the same trace does not export it a second time. Matching uses the same prefix
+rule as `NeverStepUpCategories`. With `RedactLogEventProperties` on, these events are redacted like
+any other. Blank entries are ignored. Default: empty. A root `Serilog:MinimumLevel:Override` or a
+`Logging:LogLevel` filter set above the listed category's level still drops the event before the
+enricher sees it, so the list cannot bring such an event back.
+
+```json
+{
+  "SerilogStepUp": {
+    "BaseLevel": "Warning",
+    "AlwaysExportCategories": [ "Microsoft.Hosting.Lifetime" ]
+  }
+}
+```
+
+With this configuration the host's "Application started" Information is exported although
+`BaseLevel` is Warning.
+
 ### Never-trigger categories
+
+`NeverTriggerCategories` (default `[]`) lists `SourceContext` prefixes whose `Error` and `Fatal`
+events never trigger step-up. Use it for a category that logs errors it recovers from itself,
+such as a retry library, so every transient failure does not raise the level for the whole
+service.
+
+Only the trigger is skipped. The error itself is exported, and it still flushes the held-back
+events of its trace from the pre-error buffer. Matching follows the same prefix rule as
+`NeverStepUpCategories`: the category equals the prefix, or starts with it followed by a `.`.
+Blank entries are ignored.
+
+```json
+{
+  "SerilogStepUp": {
+    "NeverTriggerCategories": ["Polly"]
+  }
+}
+```
 
 ### Diagnostic mode
 
