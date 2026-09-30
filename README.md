@@ -84,6 +84,14 @@ builder.AddStepUpLogging(opts =>
 });
 ```
 
+To set options and extend the Serilog configuration in one call, pass both callbacks:
+
+```csharp
+builder.AddStepUpLogging(
+    opts => opts.StepUpLevel = "Debug",
+    (services, lc) => lc.Enrich.WithProperty("Region", "eu-west"));
+```
+
 **Option 4: Aspire ServiceDefaults Integration**
 
 When using Aspire ServiceDefaults which already configures Serilog, use the `UseStepUpLogging()` extension method on `LoggerConfiguration`:

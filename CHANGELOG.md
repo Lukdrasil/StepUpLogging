@@ -15,6 +15,7 @@ BREAKING. See MIGRATION.md for migration steps.
 
 ### Added
 - `NeverTriggerCategories` (default `[]`): `SourceContext` prefixes whose `Error`/`Fatal` events do not trigger step-up. The error is still exported and still flushes its trace's pre-error buffer. Fixes #35.
+- `AddStepUpLogging(configureOptions, configure, configSectionName, logFilePath)` overload that takes both the options callback and the `(IServiceProvider, LoggerConfiguration)` callback. The two existing overloads are unchanged. Fixes #35.
 - `RedactLogEventProperties` (default `false`). When set, `RedactionRegexes` is also applied to the string-valued and URI-like (`PathString`, `QueryString`, `HostString`, `Uri`, the latter through its decoded `ToString()` form; #34) scalar properties of application log events — not just request metadata — so a secret passed as a message-template argument (e.g. `logger.LogInformation("token={T}", secret)`) is masked too. Opt-in: nothing changes for a consumer who does not set it. Interpolated templates, exception messages, and structured/sequence/dictionary values remain out of scope either way. Fixes #20. See docs/adr/0022-application-log-redaction-enricher.md.
 
 ### Fixed
