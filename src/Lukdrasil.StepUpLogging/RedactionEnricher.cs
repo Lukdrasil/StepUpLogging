@@ -1,15 +1,20 @@
 using System.Collections.Frozen;
+using Microsoft.AspNetCore.Http;
 using Serilog.Core;
 using Serilog.Events;
 
 namespace Lukdrasil.StepUpLogging;
 
 /// <summary>
-/// Applies <see cref="CompiledRedactionPatterns.Redact(string)"/> to the string-valued scalar
-/// properties of a log event other than <see cref="ExcludedProperties"/>, so a secret a consumer
-/// logs through an application log — not just through the HTTP request pipeline — is masked before
-/// export (ADR 0022 D1). Non-string scalars and structured, sequence and dictionary values are left
-/// untouched; recursing into them is out of scope.
+/// Applies <see cref="CompiledRedactionPatterns.Redact(string)"/> to the scalar properties of a log
+/// event other than <see cref="ExcludedProperties"/> whose value is a <see cref="string"/> or a
+/// URI-like value (<see cref="PathString"/>, <see cref="QueryString"/>, <see cref="HostString"/>,
+/// <see cref="Uri"/>), so a secret a consumer logs through an application log, not just through
+/// the HTTP request pipeline, is masked before export (ADR 0022 D1). A URI-like value is redacted
+/// through its <c>ToString()</c> form (for <see cref="Uri"/> the decoded form the exporter renders)
+/// and replaced by the redacted string only when a pattern matched; otherwise it keeps its type.
+/// Other non-string scalars and structured, sequence and dictionary values are left untouched;
+/// recursing into them is out of scope.
 /// </summary>
 internal sealed class RedactionEnricher(CompiledRedactionPatterns patterns) : ILogEventEnricher
 {
@@ -39,8 +44,9 @@ internal sealed class RedactionEnricher(CompiledRedactionPatterns patterns) : IL
         foreach (var property in logEvent.Properties.ToArray())
         {
             if (ExcludedProperties.Contains(property.Key)) continue;
-            if (property.Value is not ScalarValue { Value: string original }) continue;
+            if (property.Value is not ScalarValue { Value: string or PathString or QueryString or HostString or Uri } scalar) continue;
 
+            var original = scalar.Value.ToString()!;
             var redacted = patterns.Redact(original);
             if (!string.Equals(redacted, original, StringComparison.Ordinal))
             {
