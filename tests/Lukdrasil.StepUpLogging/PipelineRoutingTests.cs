@@ -676,7 +676,7 @@ public class PipelineRoutingTests
 
     // ─── 9. NeverTriggerCategories wiring ──────────────────────────────────────
 
-    private static string RunNeverTriggerHost(Dictionary<string, string?> settings, Action<Serilog.ILogger> log, out bool steppedUp)
+    private static string RunNeverTriggerHost(Dictionary<string, string?> settings, Action<Serilog.ILogger> log, int waitMs, out bool steppedUp)
     {
         var tempFile = Path.Combine(Path.GetTempPath(), $"stepup-nevertrigger-{Guid.NewGuid():N}.log");
         try
@@ -700,7 +700,7 @@ public class PipelineRoutingTests
             {
                 var controller = host.Services.GetRequiredService<StepUpLoggingController>();
                 log(host.Services.GetRequiredService<Serilog.ILogger>());
-                SpinWait.SpinUntil(() => controller.IsSteppedUp, 500);
+                SpinWait.SpinUntil(() => controller.IsSteppedUp, waitMs);
                 steppedUp = controller.IsSteppedUp;
             }
 
@@ -726,6 +726,7 @@ public class PipelineRoutingTests
                 logger.ForContext("SourceContext", "MyApp.Widget").Information(heldToken);
                 logger.ForContext("SourceContext", "Polly.Retry").Error(errorToken);
             },
+            waitMs: 500,
             out var steppedUp);
 
         Assert.False(steppedUp);
@@ -743,6 +744,7 @@ public class PipelineRoutingTests
                 ["SerilogStepUp:NeverTriggerCategories:1"] = "Polly",
             },
             logger => logger.ForContext("SourceContext", ".Weird").Error("rooted error"),
+            waitMs: 2000,
             out var steppedUp);
 
         Assert.True(steppedUp);
