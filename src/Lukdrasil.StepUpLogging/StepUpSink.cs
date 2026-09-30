@@ -4,8 +4,9 @@ using Serilog.Events;
 namespace Lukdrasil.StepUpLogging;
 
 /// <summary>
-/// Serilog sink that gates log events by the current <see cref="LoggingLevelSwitch"/>, except
-/// for <c>SourceContext</c> categories in the deny-list which are pinned to the base level and never stepped up.
+/// Serilog sink that exports an event at or above <c>max(switch, pin unless diagnostic, floor)</c>: the current
+/// <see cref="LoggingLevelSwitch"/> level; the base level for <c>SourceContext</c> categories in the NeverStepUp
+/// deny-list, skipped while diagnostic is active; and the <see cref="CategoryFloorMap"/> floor of the category.
 /// Suppresses events already routed to bypass sinks (marked <c>IsRequestSummary</c> or
 /// <c>IsImmediate</c>) to guarantee exactly-once delivery. Events it rejects are handed to the
 /// <see cref="PreErrorBufferSink"/>, when one is configured, as held-back events.
@@ -47,14 +48,17 @@ internal sealed class StepUpSink : ILogEventSink, IDisposable
         if (IsBoolTrue(logEvent, LogProperties.IsRequestSummary)) return;
         if (IsBoolTrue(logEvent, LogProperties.IsImmediate)) return;
 
-        // Gate by step-up level switch; listed categories are pinned to BaseLevel so the
-        // step-up never raises them (the max keeps the deny-list from ever adding verbosity).
+        // Export at max(switch, NeverStepUp pin unless diagnostic, category floor): the pin keeps
+        // listed categories at BaseLevel, a floor only raises the minimum, neither adds verbosity.
         var diagnosticActive = _isDiagnosticActive?.Invoke() ?? false;
-        var minimum = !diagnosticActive && CategoryPrefix.MatchesAny(logEvent, _neverStepUpCategories)
+        var source = string.Empty;
+        var hasSource = (_neverStepUpCategories.Length > 0 || _categoryFloors is not null)
+            && CategoryPrefix.TryGetSourceContext(logEvent, out source);
+        var minimum = hasSource && !diagnosticActive && CategoryPrefix.MatchesAny(source, _neverStepUpCategories)
             ? (LogEventLevel)Math.Max((int)_baseLevel, (int)_levelSwitch.MinimumLevel)
             : _levelSwitch.MinimumLevel;
-        if (_categoryFloors is not null
-            && CategoryPrefix.TryGetSourceContext(logEvent, out var source)
+        if (hasSource
+            && _categoryFloors is not null
             && _categoryFloors.TryGetFloor(source, diagnosticActive, out var floor)
             && floor > minimum)
         {

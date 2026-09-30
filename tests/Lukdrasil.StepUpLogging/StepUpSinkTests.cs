@@ -573,13 +573,15 @@ public class StepUpSinkTests
     [Fact]
     public void Diagnostic_EventBelowTheSwitch_IsStillHeldBack()
     {
-        var (sink, _, exported, _) = WithFloors(
+        var (sink, buffer, exported, flushed) = WithFloors(
             LogEventLevel.Information,
             [(FlooredCategory, LogEventLevel.Warning)],
             isDiagnosticActive: () => true);
 
         sink.Emit(Tagged(LogEventLevel.Debug, "floored-debug", SourceContext(FlooredCategory)));
+        buffer.Emit(Tagged(LogEventLevel.Error, "err"));
 
         Assert.Empty(exported.Events);
+        Assert.Equal(["floored-debug"], Texts(flushed));
     }
 }

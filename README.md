@@ -1156,7 +1156,8 @@ stepped up.
   `NeverStepUpCategories` entry apply, the higher minimum wins.
 - A floor above `Warning` fails startup, so a floor never hides an `Error`.
 - An event a floor rejects is a held-back event: with `EnablePreErrorBuffering` on, an `Error` in the
-  same trace exports it exactly once.
+  same trace exports it exactly once if it is at or above `StepUpLevel`. Below `StepUpLevel` it is
+  dropped, for example an exempt floored `Debug` event during Diagnostic mode.
 - During Diagnostic mode every floor is lifted except for categories under a
   `DiagnosticExemptCategories` prefix, which keep the floor of their most specific matching key.
   An exempt prefix that no `CategoryFloors` key matches fails startup.

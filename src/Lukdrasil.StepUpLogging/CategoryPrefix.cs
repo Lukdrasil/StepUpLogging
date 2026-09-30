@@ -30,9 +30,10 @@ internal static class CategoryPrefix
     }
 
     public static bool MatchesAny(LogEvent logEvent, string[] prefixes)
-    {
-        if (prefixes.Length == 0 || !TryGetSourceContext(logEvent, out var source)) return false;
+        => prefixes.Length != 0 && TryGetSourceContext(logEvent, out var source) && MatchesAny(source, prefixes);
 
+    public static bool MatchesAny(string source, string[] prefixes)
+    {
         foreach (var prefix in prefixes)
         {
             if (Matches(source, prefix)) return true;
