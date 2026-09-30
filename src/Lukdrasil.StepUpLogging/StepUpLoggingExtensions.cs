@@ -245,6 +245,12 @@ public static class StepUpLoggingExtensions
 
             ApplyCommonEnrichers(lc, builder, opts);
 
+            var alwaysExport = (opts.AlwaysExportCategories ?? []).Where(c => !string.IsNullOrWhiteSpace(c)).ToArray();
+            if (alwaysExport.Length > 0)
+            {
+                lc.Enrich.With(new AlwaysExportEnricher(alwaysExport));
+            }
+
             // Bypass logger: exports at full verbosity independent of LevelSwitch.
             // Built directly here (not via DI) to avoid a circular deadlock:
             // AddSerilog registers Serilog.ILogger as a factory that depends on ILoggerFactory,
