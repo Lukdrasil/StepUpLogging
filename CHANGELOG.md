@@ -12,6 +12,7 @@ Tags before 1.8.0 predate this file.
 - `RedactLogEventProperties` (default `false`). When set, `RedactionRegexes` is also applied to the string-valued scalar properties of application log events — not just request metadata — so a secret passed as a message-template argument (e.g. `logger.LogInformation("token={T}", secret)`) is masked too. Opt-in: nothing changes for a consumer who does not set it. Interpolated templates, exception messages, and structured/sequence/dictionary values remain out of scope either way. Fixes #20. See docs/adr/0022-application-log-redaction-enricher.md.
 
 ### Fixed
+- Pre-error buffering exported an event twice: once at the current level and again when an error in the same trace flushed the buffer, or at shutdown. The buffer now holds only events the step-up gate did not export, so every event is exported at most once. Held-back events are dropped at shutdown instead of exported. Fixes #29. See docs/adr/0023-prebuffer-exactly-once-and-drop-on-dispose.md.
 - The encrypted spool's delivery client no longer inherits resilience handlers from `ConfigureHttpClientDefaults`. A consumer's `AddStandardResilienceHandler()` used to retry the audit POST, override `DeliveryTimeout`, and log at Error; `DrainWorker` is now the only retrying layer. A handler you add to the delivery client after `AddEncryptedSpoolAuditSink` still applies. Adds a dependency on `Microsoft.Extensions.Http.Resilience` 10.0.0. Fixes #33. See docs/adr/0020-spool-durability-and-delivery-failures.md.
 
 ## [4.0.0] - 2026-08-13
