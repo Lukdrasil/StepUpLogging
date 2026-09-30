@@ -11,10 +11,10 @@ using Serilog.Events;
 namespace Lukdrasil.StepUpLogging;
 
 /// <summary>
-/// In-memory per-context ring buffer that captures recent log events at or above
-/// <paramref name="minimumLevel"/> and flushes them to an inner logger when an Error or
-/// Fatal event is observed. Events below <paramref name="minimumLevel"/> are dropped before
-/// buffering. Context is keyed by OpenTelemetry/Activity <c>TraceId</c> when available;
+/// In-memory per-context ring buffer of held-back events: events <see cref="StepUpSink"/> did not
+/// export, passed to <see cref="Hold"/> at or above <paramref name="minimumLevel"/>. They are
+/// flushed to an inner logger when an Error or Fatal event is observed and dropped on dispose.
+/// Events below <paramref name="minimumLevel"/> are dropped before buffering. Context is keyed by OpenTelemetry/Activity <c>TraceId</c> when available;
 /// otherwise a global buffer is used.
 /// Implements proper disposal to prevent memory leaks in LRU cache.
 ///
@@ -162,6 +162,11 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
     {
         lock (_lruGate)
         {
+            if (_disposed)
+            {
+                return;
+            }
+
             var buffer = _buffers.GetOrAdd(key, static (_, capacity) => new Buffer(capacity), _capacityPerContext);
             TouchLru(key);
             BeforeEnqueueTestHook?.Invoke();
