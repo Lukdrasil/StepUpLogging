@@ -110,34 +110,37 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
         }
     }
 
+    /// <summary>
+    /// Flushes the context's buffer to the bypass logger on an Error or Fatal event. Other events are ignored;
+    /// held-back events arrive through <see cref="Hold"/>.
+    /// </summary>
     public void Emit(LogEvent logEvent)
     {
-        if (logEvent is null || _disposed)
+        if (logEvent is null || _disposed || logEvent.Level < LogEventLevel.Error)
         {
             return;
         }
 
-        var key = GetContextKey(logEvent);
-
-        if (logEvent.Level >= LogEventLevel.Error)
+        // Flush only an EXISTING buffer; never allocate a buffer (or an LRU slot) for
+        // an error in a context we have never buffered — there is nothing to flush.
+        if (_buffers.TryGetValue(GetContextKey(logEvent), out var existing))
         {
-            // Flush only an EXISTING buffer; never allocate a buffer (or an LRU slot) for
-            // an error in a context we have never buffered — there is nothing to flush.
-            if (_buffers.TryGetValue(key, out var existing))
+            var flushed = existing.FlushTo(_bypassLogger);
+            if (flushed > 0)
             {
-                var flushed = existing.FlushTo(_bypassLogger);
-                if (flushed > 0)
-                {
-                    FlushCounter.Add(1);
-                    FlushedEventsCounter.Add(flushed);
-                }
+                FlushCounter.Add(1);
+                FlushedEventsCounter.Add(flushed);
             }
-
-            // No buffering of the error event itself
-            return;
         }
+    }
 
-        if (logEvent.Level < minimumLevel)
+    /// <summary>
+    /// Buffers an event <see cref="StepUpSink"/> did not export, under its trace key. Events below the minimum level,
+    /// Error/Fatal events and bypass-marked events are ignored.
+    /// </summary>
+    internal void Hold(LogEvent logEvent)
+    {
+        if (logEvent is null || _disposed || logEvent.Level >= LogEventLevel.Error || logEvent.Level < minimumLevel)
         {
             return;
         }
@@ -146,7 +149,7 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
         if (LogProperties.HasFlag(logEvent, LogProperties.IsImmediate) || LogProperties.HasFlag(logEvent, LogProperties.IsRequestSummary))
             return;
 
-        BufferEvent(key, logEvent);
+        BufferEvent(GetContextKey(logEvent), logEvent);
         BufferedEventsCounter.Add(1);
     }
 
@@ -217,7 +220,7 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
     }
 
     /// <summary>
-    /// Flushes all remaining buffered events and releases resources.
+    /// Drops all remaining held-back events without export and releases resources.
     /// </summary>
     public void Dispose()
     {
@@ -228,13 +231,8 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
 
         _disposed = true;
 
-        // Best effort flush all remaining buffers on dispose
         lock (_lruGate)
         {
-            foreach (var kvp in _buffers.ToArray())
-            {
-                kvp.Value.FlushTo(_bypassLogger);
-            }
             _buffers.Clear();
             _lru.Clear();
             _lruNodes.Clear();
