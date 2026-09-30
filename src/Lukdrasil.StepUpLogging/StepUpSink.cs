@@ -12,8 +12,6 @@ namespace Lukdrasil.StepUpLogging;
 /// </summary>
 internal sealed class StepUpSink : ILogEventSink, IDisposable
 {
-    private const string SourceContextPropertyName = "SourceContext";
-
     private readonly Serilog.ILogger _innerLogger;
     private readonly LoggingLevelSwitch _levelSwitch;
     private readonly LogEventLevel _baseLevel;
@@ -45,7 +43,7 @@ internal sealed class StepUpSink : ILogEventSink, IDisposable
 
         // Gate by step-up level switch; listed categories are pinned to BaseLevel so the
         // step-up never raises them (the max keeps the deny-list from ever adding verbosity).
-        var minimum = IsNeverStepUp(logEvent)
+        var minimum = CategoryPrefix.MatchesAny(logEvent, _neverStepUpCategories)
             ? (LogEventLevel)Math.Max((int)_baseLevel, (int)_levelSwitch.MinimumLevel)
             : _levelSwitch.MinimumLevel;
         if (logEvent.Level < minimum)
@@ -55,22 +53,6 @@ internal sealed class StepUpSink : ILogEventSink, IDisposable
         }
 
         _innerLogger.Write(logEvent);
-    }
-
-    private bool IsNeverStepUp(LogEvent evt)
-    {
-        if (_neverStepUpCategories.Length == 0) return false;
-        if (!evt.Properties.TryGetValue(SourceContextPropertyName, out var value)
-            || value is not ScalarValue { Value: string source }) return false;
-
-        foreach (var prefix in _neverStepUpCategories)
-        {
-            if (source.Equals(prefix, StringComparison.Ordinal)) return true;
-            if (source.Length > prefix.Length
-                && source[prefix.Length] == '.'
-                && source.StartsWith(prefix, StringComparison.Ordinal)) return true;
-        }
-        return false;
     }
 
     private static bool IsBoolTrue(LogEvent evt, string propertyName) =>

@@ -294,6 +294,8 @@ For other OTLP options (like additional headers or resource attributes), use env
 - Step-up mechanism is completely disabled
 - Error triggers are ignored
 
+**`Diagnostic`** runs exactly as `Auto` until the Diagnostic behaviour ships; see [Diagnostic mode](#diagnostic-mode).
+
 ```json
 // Development configuration example
 {
@@ -1123,6 +1125,16 @@ list empty:
   }
 }
 ```
+
+## Category Control
+
+### Category floors
+
+### Always-export categories
+
+### Never-trigger categories
+
+### Diagnostic mode
 
 ## Security
 
