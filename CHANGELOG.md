@@ -12,6 +12,7 @@ Tags before 1.8.0 predate this file.
 - `RedactLogEventProperties` (default `false`). When set, `RedactionRegexes` is also applied to the string-valued scalar properties of application log events — not just request metadata — so a secret passed as a message-template argument (e.g. `logger.LogInformation("token={T}", secret)`) is masked too. Opt-in: nothing changes for a consumer who does not set it. Interpolated templates, exception messages, and structured/sequence/dictionary values remain out of scope either way. Fixes #20. See docs/adr/0022-application-log-redaction-enricher.md.
 
 ### Fixed
+- `RedactionRegexes` did not reach the request path, so a secret carried in the path leaked through the request summary `Path`, the "HTTP ..." event's `RequestPath`, the `LogRequest` span's `http.target` and the route values captured from it. All three now carry the redacted path, and a route value whose text sits inside a redacted part of the path is exported as `[REDACTED]`. `ExcludePaths` still matches the raw path. Fixes #30.
 - Pre-error buffering exported an event twice: once at the current level and again when an error in the same trace flushed the buffer, or at shutdown. The buffer now holds only events the step-up gate did not export, so every event is exported at most once. Held-back events are dropped at shutdown instead of exported. Fixes #29. See docs/adr/0023-prebuffer-exactly-once-and-drop-on-dispose.md.
 
 ## [4.0.0] - 2026-08-13

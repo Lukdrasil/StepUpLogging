@@ -14,7 +14,7 @@
 ✅ **OpenTelemetry Activities** - Built-in distributed tracing with 6+ instrumentation points (default-enabled)  
 ✅ **Minimal overhead** - 18-29% faster than standard Serilog in baseline tests  
 ✅ **Request body capture** - Optional capture during step-up with configurable size limits  
-✅ **Sensitive data redaction** - Regex-based redaction for query strings and request bodies, with an opt-in sweep of application log properties too  
+✅ **Sensitive data redaction** - Regex-based redaction for the request path, query strings, route values and request bodies, with an opt-in sweep of application log properties too  
 ✅ **OpenTelemetry metrics** - Built-in metrics for monitoring step-up triggers and duration  
 ✅ **Manual control** - Expose endpoints to manually trigger or check step-up status  
 ✅ **.NET 10.0** - Built with modern C# 14 features
@@ -182,7 +182,7 @@ Nested keys use the same convention (each path segment separated by `__`), e.g.
 When "AlwaysLogRequestSummary" is enabled, the middleware emits a single structured summary event at the configured "RequestSummaryLevel" for every completed HTTP request. The summary contains:
 
 - **HTTP method** - GET, POST, etc.
-- **Request path** - URL path (trailing slashes normalized)
+- **Request path** - URL path (trailing slashes normalized, redacted based on `RedactionRegexes`)
 - **Response status code** - 200, 404, 500, etc.
 - **Elapsed milliseconds** - Request duration
 - **Trace ID** - Optional trace/correlation id
@@ -311,9 +311,9 @@ The `UseStepUpRequestLogging()` middleware enriches each request with detailed c
 
 ### Captured Information
 
-- **RequestPath** - Normalized request path (trailing slashes removed)
+- **RequestPath** - Normalized request path (trailing slashes removed, redacted based on `RedactionRegexes`)
 - **QueryString** - Query parameters (redacted based on `RedactionRegexes`)
-- **RouteParameters** - Route parameter values (e.g., `{id}`, `{role}`)
+- **RouteParameters** - Route parameter values (e.g., `{id}`, `{role}`), redacted based on `RedactionRegexes`; a value whose text sits inside a redacted part of the path becomes `[REDACTED]`
 - **Headers** - HTTP request headers with automatic redaction of sensitive headers
 - **RequestBody** - POST/PUT/PATCH bodies (when `CaptureRequestBody` is enabled and logging is stepped-up)
 
@@ -1134,8 +1134,9 @@ with your known proxies so `Connection.RemoteIpAddress` reflects the true client
 
 ### Redaction: always-on for request data, opt-in for application logs
 
-`RedactionRegexes` is always applied to query strings, route values, headers, and request
-bodies. On its own it does **not** scan the rendered text of arbitrary log messages — a secret
+`RedactionRegexes` is always applied to the request path (summary `Path`, the "HTTP ..." event's
+`RequestPath` and the `LogRequest` span's `http.target`), query strings, route values, headers,
+and request bodies. `ExcludePaths` still matches the raw path. On its own it does **not** scan the rendered text of arbitrary log messages — a secret
 passed as a message-template argument (`logger.LogInformation("token={T}", secret)`) is left
 alone.
 
