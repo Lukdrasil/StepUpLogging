@@ -1056,6 +1056,8 @@ See full [performance test results](tests/k6/performance_test_results.md).
 | `MaxContinuousStepUpSeconds` | `0` (disabled) | - | Upper bound on a single continuous step-up window; forces a step-down and opens a cooldown when exceeded. `0` disables the cap. Must be `0` or `>= DurationSeconds`. |
 | `StepUpCooldownSeconds` | `300` | - | Seconds triggers are ignored after the cap forces a step-down; ignored when the cap is disabled |
 | `NeverStepUpCategories` | `["Microsoft.EntityFrameworkCore.Database.Command"]` | - | `SourceContext` prefixes the step-up never raises above `BaseLevel` (see below) |
+| `CategoryFloors` | `{}` | - | `SourceContext` prefix to minimum level; a matching category exports at `max(switch, floor)`. Floors are capped at `Warning` (see Category floors) |
+| `DiagnosticExemptCategories` | `[]` | - | `CategoryFloors` prefixes that keep their floor during Diagnostic mode; each must be matched by a `CategoryFloors` key |
 | **Pre-Error Buffering** |
 | `EnablePreErrorBuffering` | `true` | - | Enable/disable pre-error buffering |
 | `PreErrorBufferSize` | `100` | - | Max events per request before oldest are dropped |
@@ -1129,6 +1131,35 @@ list empty:
 ## Category Control
 
 ### Category floors
+
+`CategoryFloors` maps a `SourceContext` prefix to a minimum level. A matching category exports at
+`max(switch, floor)`, so a floor only ever hides events, never adds them: a floor below the current
+switch level changes nothing. Use it to keep a noisy category quiet while the rest of the app is
+stepped up.
+
+```json
+{
+  "SerilogStepUp": {
+    "CategoryFloors": {
+      "Microsoft.AspNetCore": "Warning",
+      "Microsoft.AspNetCore.Hosting.Diagnostics": "Information"
+    }
+  }
+}
+```
+
+- A prefix matches a category equal to it, or one that begins with it followed by a `.`, ordinal and
+  case-sensitive, the same rule as `NeverStepUpCategories`.
+- When several keys match, the most specific (longest) one decides, so a sub-category can sit below
+  its parent's floor.
+- Floors apply in every `Mode`, `AlwaysOn` and `Disabled` included. When both a floor and a
+  `NeverStepUpCategories` entry apply, the higher minimum wins.
+- A floor above `Warning` fails startup, so a floor never hides an `Error`.
+- An event a floor rejects is a held-back event: with `EnablePreErrorBuffering` on, an `Error` in the
+  same trace exports it exactly once.
+- During Diagnostic mode every floor is lifted except for categories under a
+  `DiagnosticExemptCategories` prefix, which keep the floor of their most specific matching key.
+  An exempt prefix that no `CategoryFloors` key matches fails startup.
 
 ### Always-export categories
 
