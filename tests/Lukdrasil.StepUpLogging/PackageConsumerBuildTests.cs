@@ -19,7 +19,7 @@ public sealed class PackedStepUpLoggingPackage : IAsyncLifetime
         Directory.CreateDirectory(PackagesPath);
 
         var project = Path.Combine(FindRepositoryRoot(), "src", "Lukdrasil.StepUpLogging", "Lukdrasil.StepUpLogging.csproj");
-        var result = await RunDotnetAsync(Root,
+        var result = await RunDotnetAsync(Root, packagesPath: null,
             "build", project, "-c", "PackTest", $"-p:Version={Version}", $"-p:PackageOutputPath={FeedPath}",
             "-nologo", "-nodeReuse:false", "-p:UseSharedCompilation=false");
 
@@ -37,7 +37,10 @@ public sealed class PackedStepUpLoggingPackage : IAsyncLifetime
         return ValueTask.CompletedTask;
     }
 
-    public async Task<(int ExitCode, string Output, string StandardOutput)> RunDotnetAsync(string workingDirectory, params string[] arguments)
+    public Task<(int ExitCode, string Output, string StandardOutput)> RunConsumerDotnetAsync(string workingDirectory, params string[] arguments) =>
+        RunDotnetAsync(workingDirectory, PackagesPath, arguments);
+
+    private static async Task<(int ExitCode, string Output, string StandardOutput)> RunDotnetAsync(string workingDirectory, string? packagesPath, params string[] arguments)
     {
         var startInfo = new ProcessStartInfo("dotnet")
         {
@@ -57,7 +60,11 @@ public sealed class PackedStepUpLoggingPackage : IAsyncLifetime
             startInfo.Environment.Remove(key);
         }
 
-        startInfo.Environment["NUGET_PACKAGES"] = PackagesPath;
+        if (packagesPath is not null)
+        {
+            startInfo.Environment["NUGET_PACKAGES"] = packagesPath;
+        }
+
         startInfo.Environment["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
         startInfo.Environment["DOTNET_NOLOGO"] = "1";
 
@@ -121,8 +128,13 @@ public class PackageConsumerBuildTests(PackedStepUpLoggingPackage package) : ICl
         Assert.DoesNotContain("LOGGEN", build.Output, StringComparison.Ordinal);
         Assert.DoesNotContain("CS0757", build.Output, StringComparison.Ordinal);
 
-        foreach (var file in Directory.EnumerateFiles(Path.Combine(consumer, "obj"), "*.nuget.g.*")
-                     .Where(file => file.EndsWith(".props", StringComparison.Ordinal) || file.EndsWith(".targets", StringComparison.Ordinal)))
+        var nugetImports = Directory.EnumerateFiles(Path.Combine(consumer, "obj"), "*.nuget.g.*")
+            .Where(file => file.EndsWith(".props", StringComparison.Ordinal) || file.EndsWith(".targets", StringComparison.Ordinal))
+            .ToList();
+
+        Assert.NotEmpty(nugetImports);
+
+        foreach (var file in nugetImports)
         {
             Assert.DoesNotContain(TelemetryAbstractions, File.ReadAllText(file), StringComparison.OrdinalIgnoreCase);
         }
@@ -184,11 +196,11 @@ public class PackageConsumerBuildTests(PackedStepUpLoggingPackage package) : ICl
     }
 
     private Task<(int ExitCode, string Output, string StandardOutput)> BuildAsync(string consumer) =>
-        package.RunDotnetAsync(consumer, "build", "-nologo", "-nodeReuse:false", "-p:UseSharedCompilation=false");
+        package.RunConsumerDotnetAsync(consumer, "build", "-nologo", "-nodeReuse:false", "-p:UseSharedCompilation=false");
 
     private async Task<IReadOnlyList<(string FileName, string? PackageId)>> AnalyzerItemsAsync(string consumer)
     {
-        var result = await package.RunDotnetAsync(consumer,
+        var result = await package.RunConsumerDotnetAsync(consumer,
             "msbuild", "-t:Build", "-getItem:Analyzer", "-nologo", "-nodeReuse:false", "-p:UseSharedCompilation=false");
 
         Assert.True(result.ExitCode == 0, result.Output);
