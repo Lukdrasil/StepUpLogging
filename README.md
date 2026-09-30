@@ -1068,6 +1068,8 @@ See full [performance test results](tests/k6/performance_test_results.md).
 | `NeverStepUpCategories` | `["Microsoft.EntityFrameworkCore.Database.Command"]` | - | `SourceContext` prefixes the step-up never raises above `BaseLevel` (see below) |
 | `CategoryFloors` | `{}` | - | `SourceContext` prefix to minimum level; a matching category exports at `max(switch, floor)`. Floors are capped at `Warning` (see Category floors) |
 | `DiagnosticExemptCategories` | `[]` | - | `CategoryFloors` prefixes that keep their floor during Diagnostic mode; each must be matched by a `CategoryFloors` key |
+| `AlwaysExportCategories` | `[]` | - | `SourceContext` prefixes whose events are exported once, at any level, through the immediate path (see Always-export categories) |
+| `NeverTriggerCategories` | `[]` | - | `SourceContext` prefixes whose `Error`/`Fatal` events never trigger step-up; they still export and flush their trace buffer (see Never-trigger categories) |
 | **Pre-Error Buffering** |
 | `EnablePreErrorBuffering` | `true` | - | Enable/disable pre-error buffering |
 | `PreErrorBufferSize` | `100` | - | Max events per request before oldest are dropped |
