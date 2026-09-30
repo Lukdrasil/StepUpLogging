@@ -43,7 +43,8 @@ without touching enrichment or logger structure:
    bypass logger on it), it is always created before the root Serilog logger; MS DI disposes singletons
    in reverse *creation* order, so the container disposes the controller *after* the root logger — so the
    buffer/summary/immediate sinks (and
-   `PreErrorBufferSink.Dispose`'s best-effort flush *to* the bypass logger) all run first, then the
+   `PreErrorBufferSink.Dispose`, which since ADR 0023 drops held-back events and flushes nothing to
+   the bypass logger) all run first, then the
    bypass logger is disposed, flushing its async OTLP/File buffers. This ordering is exactly what
    the "disposal order matters" consequence requires, achieved with no new types and no
    `IHostApplicationLifetime` wiring. (Preferred over an `ApplicationStopped` hook, which would
