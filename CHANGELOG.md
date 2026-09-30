@@ -15,6 +15,7 @@ BREAKING. See MIGRATION.md for migration steps.
 
 ### Added
 - `AlwaysExportCategories` (default empty). Events whose `SourceContext` matches a listed prefix are exported once at any level through the immediate path, so for example `Microsoft.Hosting.Lifetime` startup messages reach the export while `BaseLevel` is Warning. A later error in the same trace does not export them again. Fixes #35. See docs/adr/0024-category-floors-and-diagnostic-mode.md.
+- `AddStepUpLogging(configureOptions, configure, configSectionName, logFilePath)` overload that takes both the options callback and the `(IServiceProvider, LoggerConfiguration)` callback. The two existing overloads are unchanged. Fixes #35.
 - `RedactLogEventProperties` (default `false`). When set, `RedactionRegexes` is also applied to the string-valued and URI-like (`PathString`, `QueryString`, `HostString`, `Uri`, the latter through its decoded `ToString()` form; #34) scalar properties of application log events — not just request metadata — so a secret passed as a message-template argument (e.g. `logger.LogInformation("token={T}", secret)`) is masked too. Opt-in: nothing changes for a consumer who does not set it. Interpolated templates, exception messages, and structured/sequence/dictionary values remain out of scope either way. Fixes #20. See docs/adr/0022-application-log-redaction-enricher.md.
 
 ### Fixed
