@@ -39,6 +39,12 @@ Two Serilog 10.0.0 facts constrain the fix:
    `SetStaticLogger` is false; with the option on, both loggers are the same pipeline, so the
    branch has no effect.
 
+4. **The step-up and step-down warnings go to the controller's bypass logger.**
+   `StepUpLoggingController` writes the "Logging step up..." and "Logging step down..." warnings
+   through `_summaryLogger ?? Log.Logger` instead of the static `Log.Warning`, in both modes.
+   With the static logger preserved, `Log.Warning` reaches Serilog's silent logger and the lines
+   would be lost.
+
 ## Consequences
 
 - Breaking for consumers who log through static `Log.*`, rely on a bootstrap `ReloadableLogger`
@@ -46,4 +52,8 @@ Two Serilog 10.0.0 facts constrain the fix:
   "Migrating to v5.0.0" lists the steps.
 - Hosts in one process are isolated: each logs to its own pipeline and survives the disposal of
   the others.
+- The step-up and step-down warnings no longer pass through the root pipeline. Sinks added in the
+  configure hook and root `Serilog:Filter`, `Enrich` and `Properties` do not see them, and neither
+  do `PreErrorBufferSink` or the trigger sink. The step-down warning now exports even when
+  `BaseLevel` is above Warning; before, it was written after the level was lowered and dropped.
 - `SetStaticLogger` is not reloadable. Changing it after registration has no effect.

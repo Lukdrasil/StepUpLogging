@@ -96,8 +96,9 @@ public sealed class StepUpLoggingOptions
     /// which matches on <c>SourceContext</c>. The exclusion is by property NAME: a property of
     /// your own under one of those names wins over the library's stamp and then escapes redaction
     /// with it.</item>
-    /// <item>Events the library writes straight to the bypass logger — the request summary and the
-    /// startup warning about level ordering — which never pass root enrichment.</item>
+    /// <item>Events the library writes straight to the bypass logger — the request summary, the
+    /// startup warning about level ordering, and the step-up and step-down warnings — which never
+    /// pass root enrichment.</item>
     /// </list>
     /// </remarks>
     public bool RedactLogEventProperties { get; set; } = false;

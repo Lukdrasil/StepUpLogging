@@ -1,7 +1,8 @@
 # Migrating to v5.0.0
 
-v5.0.0 is a **breaking** release with one change: `AddStepUpLogging` leaves Serilog's static
-`Log.Logger` unchanged. It compiles unchanged, so read this even if your build is green.
+v5.0.0 is a **breaking** release. `AddStepUpLogging` leaves Serilog's static `Log.Logger`
+unchanged, and the step-up and step-down warnings are now written through the bypass logger
+instead of the static `Log.Warning`. It compiles unchanged, so read this even if your build is green.
 
 ## `Log.Logger` is no longer assigned by default
 

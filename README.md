@@ -1147,8 +1147,9 @@ bakes the value into the template and produces no property, so it is logged verb
 flag says. It does not recurse into structures (`{@user}`), sequences or dictionaries. It skips
 the twelve properties the library stamps itself (`TraceId`, `SourceContext`,
 `ServiceInstanceId` and nine more — the `RedactLogEventProperties` XML doc lists them and the
-reason for each). And it never sees the two events the library writes straight to the bypass
-logger — the request summary and the startup level-ordering warning — which do not pass root
+reason for each). And it never sees the four events the library writes straight to the bypass
+logger — the request summary, the startup level-ordering warning, and the step-up and step-down
+warnings — which do not pass root
 enrichment. Do not log secrets in interpolated message templates.
 
 The flag has a running cost worth sizing before you enable it. The sweep sits on the root pipeline,
