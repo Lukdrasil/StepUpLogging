@@ -411,4 +411,175 @@ public class StepUpSinkTests
         Assert.Empty(exported.Events);
         Assert.Equal("ef-info", Assert.Single(flushed.Events).MessageTemplate.Text);
     }
+
+    private const string FlooredCategory = "Test.Floored";
+    private const string ExemptCategory = "Test.Exempt";
+
+    private static (StepUpSink Sink, PreErrorBufferSink Buffer, CollectingSink Exported, CollectingSink Flushed) WithFloors(
+        LogEventLevel switchLevel,
+        (string Key, LogEventLevel Floor)[] floors,
+        string[]? diagnosticExempt = null,
+        string[]? neverStepUpCategories = null,
+        LogEventLevel baseLevel = LogEventLevel.Warning,
+        Func<bool>? isDiagnosticActive = null)
+    {
+        var exported = new CollectingSink();
+        var flushed = new CollectingSink();
+        var inner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(exported).CreateLogger();
+        var bypass = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(flushed).CreateLogger();
+        var buffer = new PreErrorBufferSink(bypass, capacityPerContext: 10, maxContexts: 16, minimumLevel: LogEventLevel.Verbose);
+        var map = new CategoryFloorMap(floors.ToDictionary(f => f.Key, f => f.Floor, StringComparer.Ordinal), diagnosticExempt ?? []);
+        var sink = new StepUpSink(inner, new LoggingLevelSwitch(switchLevel), baseLevel, neverStepUpCategories ?? [], buffer, map, isDiagnosticActive);
+        return (sink, buffer, exported, flushed);
+    }
+
+    private static string[] Texts(CollectingSink sink) => sink.Events.Select(e => e.MessageTemplate.Text).ToArray();
+
+    [Fact]
+    public void SteppedUp_FlooredCategory_InformationBelowFloor_IsHeldBack()
+    {
+        var (sink, buffer, exported, flushed) = WithFloors(LogEventLevel.Information, [(FlooredCategory, LogEventLevel.Warning)]);
+
+        sink.Emit(Tagged(LogEventLevel.Information, "floored-info", SourceContext(FlooredCategory)));
+        buffer.Emit(Tagged(LogEventLevel.Error, "err"));
+
+        Assert.Empty(exported.Events);
+        Assert.Equal(["floored-info"], Texts(flushed));
+    }
+
+    [Fact]
+    public void SteppedUp_FlooredCategory_EventAtTheFloor_IsExported()
+    {
+        var (sink, _, exported, _) = WithFloors(LogEventLevel.Information, [(FlooredCategory, LogEventLevel.Warning)]);
+
+        sink.Emit(Tagged(LogEventLevel.Warning, "floored-warn", SourceContext(FlooredCategory + ".Child")));
+
+        Assert.Equal(["floored-warn"], Texts(exported));
+    }
+
+    [Fact]
+    public void SteppedUp_FloorBelowTheSwitch_ChangesNothing()
+    {
+        var (sink, _, exported, _) = WithFloors(LogEventLevel.Information, [(FlooredCategory, LogEventLevel.Debug)]);
+
+        sink.Emit(Tagged(LogEventLevel.Information, "floored-info", SourceContext(FlooredCategory)));
+        sink.Emit(Tagged(LogEventLevel.Debug, "floored-debug", SourceContext(FlooredCategory)));
+
+        Assert.Equal(["floored-info"], Texts(exported));
+    }
+
+    [Fact]
+    public void SteppedUp_UnflooredCategory_IsNotAffectedByAnotherCategorysFloor()
+    {
+        var (sink, _, exported, _) = WithFloors(LogEventLevel.Information, [(FlooredCategory, LogEventLevel.Warning)]);
+
+        sink.Emit(Tagged(LogEventLevel.Information, "other-info", SourceContext("Test.Other")));
+        sink.Emit(Tagged(LogEventLevel.Information, "no-context-info"));
+
+        Assert.Equal(["other-info", "no-context-info"], Texts(exported));
+    }
+
+    [Fact]
+    public void SteppedUp_MostSpecificFloorKeyDecides()
+    {
+        var (sink, _, exported, _) = WithFloors(
+            LogEventLevel.Information,
+            [("Test", LogEventLevel.Warning), (FlooredCategory, LogEventLevel.Information)]);
+
+        sink.Emit(Tagged(LogEventLevel.Information, "child-info", SourceContext(FlooredCategory + ".Child")));
+        sink.Emit(Tagged(LogEventLevel.Information, "other-info", SourceContext("Test.Other")));
+
+        Assert.Equal(["child-info"], Texts(exported));
+    }
+
+    [Fact]
+    public void NeverStepUpPinAboveTheFloor_PinWins()
+    {
+        var (sink, _, exported, _) = WithFloors(
+            LogEventLevel.Information,
+            [(FlooredCategory, LogEventLevel.Information)],
+            neverStepUpCategories: [FlooredCategory]);
+
+        sink.Emit(Tagged(LogEventLevel.Information, "pinned-info", SourceContext(FlooredCategory)));
+
+        Assert.Empty(exported.Events);
+    }
+
+    [Fact]
+    public void FloorAboveTheNeverStepUpPin_FloorWins()
+    {
+        var (sink, _, exported, _) = WithFloors(
+            LogEventLevel.Debug,
+            [(FlooredCategory, LogEventLevel.Warning)],
+            neverStepUpCategories: [FlooredCategory],
+            baseLevel: LogEventLevel.Information);
+
+        sink.Emit(Tagged(LogEventLevel.Information, "floored-info", SourceContext(FlooredCategory)));
+        sink.Emit(Tagged(LogEventLevel.Warning, "floored-warn", SourceContext(FlooredCategory)));
+
+        Assert.Equal(["floored-warn"], Texts(exported));
+    }
+
+    [Fact]
+    public void Diagnostic_NonExemptFlooredInformation_IsExported_ExemptOneIsHeldBack()
+    {
+        var (sink, buffer, exported, flushed) = WithFloors(
+            LogEventLevel.Information,
+            [(FlooredCategory, LogEventLevel.Warning), (ExemptCategory, LogEventLevel.Warning)],
+            diagnosticExempt: [ExemptCategory],
+            isDiagnosticActive: () => true);
+
+        sink.Emit(Tagged(LogEventLevel.Information, "floored-info", SourceContext(FlooredCategory)));
+        sink.Emit(Tagged(LogEventLevel.Information, "exempt-info", SourceContext(ExemptCategory)));
+        buffer.Emit(Tagged(LogEventLevel.Error, "err"));
+
+        Assert.Equal(["floored-info"], Texts(exported));
+        Assert.Equal(["exempt-info"], Texts(flushed));
+    }
+
+    [Fact]
+    public void Diagnostic_NeverStepUpIsNotApplied()
+    {
+        var (sink, _, exported, _) = WithFloors(
+            LogEventLevel.Information,
+            [],
+            neverStepUpCategories: [EfCommandCategory],
+            isDiagnosticActive: () => true);
+
+        sink.Emit(Tagged(LogEventLevel.Information, "ef-info", SourceContext(EfCommandCategory)));
+
+        Assert.Equal(["ef-info"], Texts(exported));
+    }
+
+    [Fact]
+    public void Diagnostic_FlagIsReadPerEvent()
+    {
+        var diagnostic = false;
+        var (sink, _, exported, _) = WithFloors(
+            LogEventLevel.Information,
+            [(FlooredCategory, LogEventLevel.Warning)],
+            neverStepUpCategories: [EfCommandCategory],
+            isDiagnosticActive: () => diagnostic);
+
+        sink.Emit(Tagged(LogEventLevel.Information, "floored-before", SourceContext(FlooredCategory)));
+        sink.Emit(Tagged(LogEventLevel.Information, "ef-before", SourceContext(EfCommandCategory)));
+        diagnostic = true;
+        sink.Emit(Tagged(LogEventLevel.Information, "floored-during", SourceContext(FlooredCategory)));
+        sink.Emit(Tagged(LogEventLevel.Information, "ef-during", SourceContext(EfCommandCategory)));
+
+        Assert.Equal(["floored-during", "ef-during"], Texts(exported));
+    }
+
+    [Fact]
+    public void Diagnostic_EventBelowTheSwitch_IsStillHeldBack()
+    {
+        var (sink, _, exported, _) = WithFloors(
+            LogEventLevel.Information,
+            [(FlooredCategory, LogEventLevel.Warning)],
+            isDiagnosticActive: () => true);
+
+        sink.Emit(Tagged(LogEventLevel.Debug, "floored-debug", SourceContext(FlooredCategory)));
+
+        Assert.Empty(exported.Events);
+    }
 }

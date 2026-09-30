@@ -24,7 +24,9 @@ internal sealed class StepUpSink : ILogEventSink, IDisposable
     /// <param name="baseLevel">The level the step-up raises from; listed categories are pinned to it.</param>
     /// <param name="neverStepUpCategories"><c>SourceContext</c> prefixes never raised above <paramref name="baseLevel"/> (already blank-filtered at the wiring site).</param>
     /// <param name="heldBackBuffer">Buffer that receives events this sink does not export; <see langword="null"/> when pre-error buffering is off.</param>
-    public StepUpSink(Serilog.ILogger innerLogger, LoggingLevelSwitch levelSwitch, LogEventLevel baseLevel, string[] neverStepUpCategories, PreErrorBufferSink? heldBackBuffer = null)
+    /// <param name="categoryFloors">Per-category floors; <see langword="null"/> when none are configured.</param>
+    /// <param name="isDiagnosticActive">Controller-owned diagnostic flag; <see langword="null"/> reads as never active.</param>
+    public StepUpSink(Serilog.ILogger innerLogger, LoggingLevelSwitch levelSwitch, LogEventLevel baseLevel, string[] neverStepUpCategories, PreErrorBufferSink? heldBackBuffer = null, CategoryFloorMap? categoryFloors = null, Func<bool>? isDiagnosticActive = null)
     {
         _innerLogger = innerLogger ?? throw new ArgumentNullException(nameof(innerLogger));
         _levelSwitch = levelSwitch ?? throw new ArgumentNullException(nameof(levelSwitch));
