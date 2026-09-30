@@ -37,6 +37,8 @@ public sealed class StepUpLoggingController : IDisposable
     // Authoritative record of step-up state. The LevelSwitch cannot stand in for it: when
     // BaseLevel == StepUpLevel the switch reads the same level whether stepped up or not.
     private bool _isSteppedUp;
+    private ITimer? _diagnosticTimer;
+    private bool _diagnosticActive;
 
     private static readonly Meter Meter = new("StepUpLogging", "1.0.0");
     private static readonly Counter<long> TriggerCounter = Meter.CreateCounter<long>("stepup_trigger_total", "count", "Total number of step-up triggers");
@@ -44,6 +46,7 @@ public sealed class StepUpLoggingController : IDisposable
     private static readonly Counter<long> CapReachedCounter = Meter.CreateCounter<long>("stepup_cap_reached_total", "count", "Number of forced step-downs after the continuous step-up cap was reached");
     private static readonly Counter<long> SuppressedTriggerCounter = Meter.CreateCounter<long>("stepup_trigger_suppressed_total", "count", "Number of triggers ignored while inside the post-cap cooldown window");
     private static readonly Histogram<double> StepUpDurationHistogram = Meter.CreateHistogram<double>("stepup_duration_seconds", "seconds", "Duration of step-up windows");
+    private static readonly UpDownCounter<int> DiagnosticActiveCounter = Meter.CreateUpDownCounter<int>("stepup_diagnostic_active", "state", "Whether Diagnostic mode is active (1) or not (0)");
     private readonly UpDownCounter<int> _activeStepUpCounter = Meter.CreateUpDownCounter<int>("stepup_active", "state", "Whether step-up is active (1) or not (0)");
 
     public LoggingLevelSwitch LevelSwitch { get; }
@@ -53,6 +56,15 @@ public sealed class StepUpLoggingController : IDisposable
 
     /// <summary>The resolved <c>StepUpLevel</c> — the level the switch is raised to on trigger.</summary>
     internal LogEventLevel StepUpLevel => _stepUpLevel;
+
+    /// <summary>The resolved <c>DiagnosticLevel</c>: the level the switch sits at while Diagnostic mode is active.</summary>
+    internal LogEventLevel DiagnosticLevel { get; }
+
+    /// <summary>When Diagnostic mode ends, fixed at construction. Unset outside <see cref="StepUpMode.Diagnostic"/>.</summary>
+    internal DateTimeOffset DiagnosticExpiresAt { get; }
+
+    /// <summary>True from construction in Diagnostic mode until its timer fires or the controller is disposed.</summary>
+    internal bool IsDiagnosticActive => Volatile.Read(ref _diagnosticActive);
 
     private readonly LogEventLevel _requestSummaryLevel;
     private Serilog.ILogger? _summaryLogger;
@@ -75,7 +87,7 @@ public sealed class StepUpLoggingController : IDisposable
     /// Test-only constructor allowing a monotonic clock to be injected. The <paramref name="clock"/>
     /// must return timestamps in <see cref="Stopwatch"/> tick units (as produced by <see cref="Stopwatch.GetTimestamp"/>).
     /// </summary>
-    internal StepUpLoggingController(StepUpLoggingOptions options, Serilog.ILogger? summaryLogger, Func<long> clock)
+    internal StepUpLoggingController(StepUpLoggingOptions options, Serilog.ILogger? summaryLogger, Func<long> clock, TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         _clock = clock;
@@ -91,15 +103,30 @@ public sealed class StepUpLoggingController : IDisposable
         _enableActivityInstrumentation = options.EnableActivityInstrumentation;
         _summaryLogger = summaryLogger;
         _requestSummaryLevel = Parse(options.RequestSummaryLevel, LogEventLevel.Information);
+        DiagnosticLevel = Parse(options.DiagnosticLevel, LogEventLevel.Debug);
 
         // Initialize level based on mode
         var initialLevel = _mode switch
         {
             StepUpMode.AlwaysOn => _stepUpLevel,
             StepUpMode.Disabled => _baseLevel,
+            StepUpMode.Diagnostic => DiagnosticLevel,
             _ => _baseLevel
         };
         LevelSwitch = new LoggingLevelSwitch(initialLevel);
+
+        if (_mode == StepUpMode.Diagnostic)
+        {
+            var time = timeProvider ?? TimeProvider.System;
+            var diagnosticDuration = TimeSpan.FromMinutes(options.DiagnosticDurationMinutes);
+            DiagnosticExpiresAt = time.GetUtcNow() + diagnosticDuration;
+            lock (_gate)
+            {
+                Volatile.Write(ref _diagnosticActive, true);
+                DiagnosticActiveCounter.Add(1);
+                _diagnosticTimer = time.CreateTimer(_ => EndDiagnostic(), null, diagnosticDuration, Timeout.InfiniteTimeSpan);
+            }
+        }
     }
 
     /// <summary>
@@ -184,8 +211,24 @@ public sealed class StepUpLoggingController : IDisposable
     {
         StepUpMode.AlwaysOn => true,
         StepUpMode.Disabled => false,
-        _ => _isSteppedUp
+        _ => IsDiagnosticActive || _isSteppedUp
     };
+
+    private void EndDiagnostic()
+    {
+        lock (_gate)
+        {
+            if (_disposed || !_diagnosticActive)
+            {
+                return;
+            }
+
+            Volatile.Write(ref _diagnosticActive, false);
+            LevelSwitch.MinimumLevel = _baseLevel;
+            DiagnosticActiveCounter.Add(-1);
+            (_summaryLogger ?? Log.ForContext<StepUpLoggingController>()).Warning("StepUp Diagnostic mode ended, running as Auto at {BaseLevel}", _baseLevel);
+        }
+    }
 
     public void Trigger()
     {
@@ -197,7 +240,7 @@ public sealed class StepUpLoggingController : IDisposable
 
         lock (_gate)
         {
-            if (_disposed)
+            if (_disposed || _diagnosticActive)
             {
                 return;
             }
@@ -380,6 +423,13 @@ public sealed class StepUpLoggingController : IDisposable
             }
 
             _disposed = true;
+            _diagnosticTimer?.Dispose();
+            _diagnosticTimer = null;
+            if (_diagnosticActive)
+            {
+                Volatile.Write(ref _diagnosticActive, false);
+                DiagnosticActiveCounter.Add(-1);
+            }
 
             // Dispose and null timer - prevents further scheduling
             _timer?.Dispose();

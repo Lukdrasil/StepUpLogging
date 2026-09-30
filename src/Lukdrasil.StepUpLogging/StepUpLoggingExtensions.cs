@@ -243,7 +243,7 @@ public static class StepUpLoggingExtensions
         builder.Services.AddSingleton<StepUpLoggingController>(sp =>
         {
             var opts = sp.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
-            return new StepUpLoggingController(opts);
+            return new StepUpLoggingController(opts, null, Stopwatch.GetTimestamp, sp.GetService<TimeProvider>());
         });
 
         var staticLoggerSnapshot = new StepUpLoggingOptions();
@@ -290,6 +290,20 @@ public static class StepUpLoggingExtensions
                     stepUpController.StepUpLevel, stepUpController.BaseLevel, opts.Mode.ToString());
             }
 
+            if (opts.Mode is StepUpMode.Diagnostic)
+            {
+                if (stepUpController.DiagnosticLevel >= stepUpController.BaseLevel)
+                {
+                    bypassLogger.Warning(
+                        "DiagnosticLevel {DiagnosticLevel} is not more verbose than BaseLevel {BaseLevel}; Diagnostic mode cannot increase verbosity.",
+                        stepUpController.DiagnosticLevel, stepUpController.BaseLevel);
+                }
+
+                bypassLogger.Warning(
+                    "StepUp Diagnostic mode active at {DiagnosticLevel} for {DurationMinutes} min until {ExpiresAt}",
+                    stepUpController.DiagnosticLevel, opts.DiagnosticDurationMinutes, stepUpController.DiagnosticExpiresAt);
+            }
+
             // Step-up sink: gated by LevelSwitch, drops bypass-marked events to prevent duplication.
             var stepUpInnerCfg = new LoggerConfiguration();
             // Config-declared WriteTo sinks join the library's own output sinks behind the LevelSwitch.
@@ -324,7 +338,8 @@ public static class StepUpLoggingExtensions
                 stepUpController.BaseLevel,
                 neverStepUp,
                 preErrorBuffer,
-                categoryFloors));
+                categoryFloors,
+                () => stepUpController.IsDiagnosticActive));
 
             if (preErrorBuffer is not null)
             {
