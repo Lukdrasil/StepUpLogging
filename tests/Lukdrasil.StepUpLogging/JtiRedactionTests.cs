@@ -86,9 +86,9 @@ public class JtiRedactionTests
             using var host = await BuildServerAsync(logger, "secret-jti999");
             using var client = host.GetTestClient();
 
-            var response = await client.GetAsync("/test");
+            var response = await client.GetAsync("/test", TestContext.Current.CancellationToken);
             response.EnsureSuccessStatusCode();
-            await Task.Delay(50);
+            await Task.Delay(50, TestContext.Current.CancellationToken);
 
             var evt = FindRequestFinishedEvent(capture);
             Assert.NotNull(evt);

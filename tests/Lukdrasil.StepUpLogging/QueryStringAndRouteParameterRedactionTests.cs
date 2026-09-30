@@ -88,9 +88,9 @@ public class QueryStringAndRouteParameterRedactionTests
             using var host = await BuildServerAsync(logger);
             using var client = host.GetTestClient();
 
-            var response = await client.GetAsync("/api/plain?token=secret-xyz789");
+            var response = await client.GetAsync("/api/plain?token=secret-xyz789", TestContext.Current.CancellationToken);
             response.EnsureSuccessStatusCode();
-            await Task.Delay(50);
+            await Task.Delay(50, TestContext.Current.CancellationToken);
 
             var evt = FindRequestFinishedEvent(capture);
             Assert.NotNull(evt);
@@ -118,9 +118,9 @@ public class QueryStringAndRouteParameterRedactionTests
             using var host = await BuildServerAsync(logger);
             using var client = host.GetTestClient();
 
-            var response = await client.GetAsync("/api/secret-abc123");
+            var response = await client.GetAsync("/api/secret-abc123", TestContext.Current.CancellationToken);
             response.EnsureSuccessStatusCode();
-            await Task.Delay(50);
+            await Task.Delay(50, TestContext.Current.CancellationToken);
 
             var evt = FindRequestFinishedEvent(capture);
             Assert.NotNull(evt);

@@ -54,19 +54,19 @@ public class RequestSummaryOnExceptionTests
                     }))
                 .Build();
 
-            await host.StartAsync();
+            await host.StartAsync(TestContext.Current.CancellationToken);
             using var client = host.GetTestClient();
 
             try
             {
-                await client.GetAsync("/api/explode");
+                await client.GetAsync("/api/explode", TestContext.Current.CancellationToken);
             }
             catch
             {
                 // The pipeline rethrows the handler's exception; that is expected. The summary
                 // must still have been emitted in the finally block.
             }
-            await Task.Delay(50);
+            await Task.Delay(50, TestContext.Current.CancellationToken);
 
             var summary = capture.Events.FirstOrDefault(e =>
                 e.Properties.TryGetValue(LogProperties.IsRequestSummary, out var flag)

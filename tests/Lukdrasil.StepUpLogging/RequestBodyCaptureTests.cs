@@ -93,9 +93,9 @@ public class RequestBodyCaptureTests
             using var client = host.GetTestClient();
 
             var body = "{\"user\":\"bob\",\"token\":\"secret-abc123\"}";
-            var response = await client.PostAsync("/api/test", new StringContent(body, Encoding.UTF8, "application/json"));
-            var echoed = await response.Content.ReadAsStringAsync();
-            await Task.Delay(50);
+            var response = await client.PostAsync("/api/test", new StringContent(body, Encoding.UTF8, "application/json"), TestContext.Current.CancellationToken);
+            var echoed = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+            await Task.Delay(50, TestContext.Current.CancellationToken);
 
             // The handler still received the full body (buffering did not steal it).
             Assert.Equal($"len={body.Length}", echoed);
@@ -126,9 +126,9 @@ public class RequestBodyCaptureTests
             using var client = host.GetTestClient();
 
             // Zero-length body on a POST while stepped up.
-            var response = await client.PostAsync("/api/test", new StringContent(string.Empty, Encoding.UTF8, "application/json"));
-            var echoed = await response.Content.ReadAsStringAsync();
-            await Task.Delay(50);
+            var response = await client.PostAsync("/api/test", new StringContent(string.Empty, Encoding.UTF8, "application/json"), TestContext.Current.CancellationToken);
+            var echoed = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+            await Task.Delay(50, TestContext.Current.CancellationToken);
 
             Assert.Equal("len=0", echoed);
 
@@ -159,9 +159,9 @@ public class RequestBodyCaptureTests
             // mid-token ("...xxsecret" with the hyphen past the cut), the pattern would no longer
             // match, and the "secret" prefix would leak. Redaction must run over the margin first.
             var body = new string('x', 34) + "secret-ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-            var response = await client.PostAsync("/api/test", new StringContent(body, Encoding.UTF8, "application/json"));
+            var response = await client.PostAsync("/api/test", new StringContent(body, Encoding.UTF8, "application/json"), TestContext.Current.CancellationToken);
             response.EnsureSuccessStatusCode();
-            await Task.Delay(50);
+            await Task.Delay(50, TestContext.Current.CancellationToken);
 
             var captured = FindRequestBody(capture);
             Assert.NotNull(captured);
@@ -188,8 +188,8 @@ public class RequestBodyCaptureTests
             using var client = host.GetTestClient();
 
             var body = "{\"user\":\"bob\"}";
-            await client.PostAsync("/api/test", new StringContent(body, Encoding.UTF8, "application/json"));
-            await Task.Delay(50);
+            await client.PostAsync("/api/test", new StringContent(body, Encoding.UTF8, "application/json"), TestContext.Current.CancellationToken);
+            await Task.Delay(50, TestContext.Current.CancellationToken);
 
             var captured = FindRequestBody(capture);
             Assert.NotNull(captured);
@@ -215,8 +215,8 @@ public class RequestBodyCaptureTests
             using var client = host.GetTestClient();
 
             var body = "{\"user\":\"bob\"}";
-            await client.PostAsync("/api/test", new StringContent(body, Encoding.UTF8, "application/json"));
-            await Task.Delay(50);
+            await client.PostAsync("/api/test", new StringContent(body, Encoding.UTF8, "application/json"), TestContext.Current.CancellationToken);
+            await Task.Delay(50, TestContext.Current.CancellationToken);
 
             var captured = FindRequestBody(capture);
             Assert.Null(captured);
@@ -303,13 +303,13 @@ public class RequestBodyCaptureTests
                     }))
                 .Build();
 
-            await host.StartAsync();
+            await host.StartAsync(TestContext.Current.CancellationToken);
             using var client = host.GetTestClient();
 
             var body = new string('a', 300) + "secret-TAILTOKEN";
-            var response = await client.PostAsync("/api/test", new StringContent(body, Encoding.UTF8, "application/json"));
+            var response = await client.PostAsync("/api/test", new StringContent(body, Encoding.UTF8, "application/json"), TestContext.Current.CancellationToken);
             response.EnsureSuccessStatusCode();
-            await Task.Delay(50);
+            await Task.Delay(50, TestContext.Current.CancellationToken);
 
             var captured = FindRequestBody(capture);
             Assert.NotNull(captured);
@@ -393,12 +393,12 @@ public class RequestBodyCaptureTests
                     }))
                 .Build();
 
-            await host.StartAsync();
+            await host.StartAsync(TestContext.Current.CancellationToken);
             using var client = host.GetTestClient();
 
-            var response = await client.PostAsync("/api/test", new StringContent("{\"x\":1}", Encoding.UTF8, "application/json"));
+            var response = await client.PostAsync("/api/test", new StringContent("{\"x\":1}", Encoding.UTF8, "application/json"), TestContext.Current.CancellationToken);
             response.EnsureSuccessStatusCode();
-            await Task.Delay(50);
+            await Task.Delay(50, TestContext.Current.CancellationToken);
 
             var captured = FindRequestBody(capture);
             Assert.Equal("[UNAVAILABLE]", captured);
