@@ -52,14 +52,16 @@ public sealed class StepUpLoggingOptions
 
     /// <summary>
     /// Regular expression patterns for redacting sensitive data in logs.
-    /// Patterns are applied to query strings, headers, route parameters, and request bodies, and,
+    /// Patterns are applied to the request path (including <c>http.target</c>), query strings,
+    /// headers, route parameters, and request bodies, and,
     /// when <see cref="RedactLogEventProperties"/> is also set, to the string-valued and URI-like
     /// (<c>PathString</c>, <c>QueryString</c>, <c>HostString</c>, <c>Uri</c>) scalar properties of
     /// application log events as well.
     /// </summary>
     /// <remarks>
-    /// SCOPE: on its own, this covers request metadata (query string, headers, route values, request
-    /// body) only — it does NOT scan the rendered text of arbitrary log messages, so e.g. a secret
+    /// SCOPE: on its own, this covers request metadata (request path, query string, headers, route
+    /// values, request body) only. A route value whose text sits inside a redacted part of the path
+    /// becomes <c>[REDACTED]</c>; <see cref="ExcludePaths"/> still matches the raw path — it does NOT scan the rendered text of arbitrary log messages, so e.g. a secret
     /// passed as a message template argument (<c>logger.LogInformation("token={T}", secret)</c>) is
     /// not redacted. Set <see cref="RedactLogEventProperties"/> to cover that case too; see its own
     /// doc for exactly what it does and does not reach. An interpolated template
