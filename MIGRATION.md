@@ -1,8 +1,11 @@
 # Migrating to v5.0.0
 
-v5.0.0 is a **breaking** release. `AddStepUpLogging` leaves Serilog's static `Log.Logger`
-unchanged, and the step-up and step-down warnings are now written through the bypass logger
-instead of the static `Log.Warning`. It compiles unchanged, so read this even if your build is green.
+v5.0.0 is a **breaking** release with two breaking changes. First, `AddStepUpLogging` no longer
+assigns Serilog's static `Log.Logger`, and the step-up and step-down warnings are now written
+through the bypass logger instead of the static `Log.Warning`. Second, a configured `ExcludePaths`
+now replaces the built-in defaults instead of being appended to them. `Log.Logger` compiles
+unchanged, and `ExcludePaths` does for configuration-only hosts, while code that reads
+`ExcludePaths` sees `string[]?`. Read this even if your build is green.
 
 ## `Log.Logger` is no longer assigned by default
 
@@ -35,6 +38,31 @@ closed the static logger for all of them (issue #31).
 
 - **`Log.CloseAndFlush()` in `Program`.** A `Log.CloseAndFlush()` / `Log.CloseAndFlushAsync()` call
   at the end of `Program` no longer closes the host's logger, only whatever `Log.Logger` holds.
+
+## `ExcludePaths` replaces the built-in defaults
+
+**What changed.** Up to v4, a configured `ExcludePaths` was appended to the built-in defaults
+(`/healthz`, `/metrics`, `/health`). It now replaces them. The defaults apply only when
+`ExcludePaths` is not configured.
+
+**Why.** Appending left no way to log a default path, and an explicit `[]` could not turn
+exclusion off (issue #32).
+
+**Migrate.** If you configure `ExcludePaths` and still want the default paths excluded, list them:
+
+```json
+{ "SerilogStepUp": { "ExcludePaths": [ "/healthz", "/metrics", "/health", "/your/path" ] } }
+```
+
+**In code.** The property is now `string[]?` and is `null` inside `configureOptions` unless
+configuration sets it, because the defaults are applied after the callback runs. Assign the whole
+list, and do not read the old value to append to it:
+
+```csharp
+builder.AddStepUpLogging(o => o.ExcludePaths = ["/healthz", "/metrics", "/health", "/ready"]);
+```
+
+An explicit `[]` excludes nothing. Hosts that do not configure `ExcludePaths` need no change.
 
 # Migrating to v4.0.0
 
