@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using Serilog.Events;
 using Serilog.Parsing;
@@ -163,5 +164,25 @@ public class StepUpTriggerSinkTests
         await Task.Delay(100);
 
         Assert.False(controller.IsSteppedUp);
+    }
+
+    [Fact]
+    public async Task Emit_Error_FromNeverTriggerCategory_DoesNotTrigger_UnlistedDoes()
+    {
+        var callCount = 0;
+        using var sink = new StepUpTriggerSink(() => Interlocked.Increment(ref callCount), ["Polly"]);
+
+        var parser = new MessageTemplateParser();
+        LogEvent ErrorFrom(string sourceContext) => new(DateTimeOffset.UtcNow, LogEventLevel.Error, exception: null,
+            messageTemplate: parser.Parse("err"),
+            properties: [new LogEventProperty("SourceContext", new ScalarValue(sourceContext))]);
+
+        sink.Emit(ErrorFrom("Polly.Retry"));
+        sink.Emit(ErrorFrom("MyApp.Widget"));
+
+        Assert.True(SpinWait.SpinUntil(() => Volatile.Read(ref callCount) >= 1, 2000));
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, Volatile.Read(ref callCount));
     }
 }

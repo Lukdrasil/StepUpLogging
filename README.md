@@ -1163,6 +1163,24 @@ With this configuration the host's "Application started" Information is exported
 
 ### Never-trigger categories
 
+`NeverTriggerCategories` (default `[]`) lists `SourceContext` prefixes whose `Error` and `Fatal`
+events never trigger step-up. Use it for a category that logs errors it recovers from itself,
+such as a retry library, so every transient failure does not raise the level for the whole
+service.
+
+Only the trigger is skipped. The error itself is exported, and it still flushes the held-back
+events of its trace from the pre-error buffer. Matching follows the same prefix rule as
+`NeverStepUpCategories`: the category equals the prefix, or starts with it followed by a `.`.
+Blank entries are ignored.
+
+```json
+{
+  "SerilogStepUp": {
+    "NeverTriggerCategories": ["Polly"]
+  }
+}
+```
+
 ### Diagnostic mode
 
 ## Security
