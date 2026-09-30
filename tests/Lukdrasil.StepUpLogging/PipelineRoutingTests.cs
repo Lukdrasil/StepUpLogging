@@ -673,4 +673,78 @@ public class PipelineRoutingTests
             if (File.Exists(tempFile)) File.Delete(tempFile);
         }
     }
+
+    // ─── 9. NeverTriggerCategories wiring ──────────────────────────────────────
+
+    private static string RunNeverTriggerHost(Dictionary<string, string?> settings, Action<Serilog.ILogger> log, out bool steppedUp)
+    {
+        var tempFile = Path.Combine(Path.GetTempPath(), $"stepup-nevertrigger-{Guid.NewGuid():N}.log");
+        try
+        {
+            var builder = Host.CreateApplicationBuilder();
+            builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>(settings)
+            {
+                ["SerilogStepUp:EnableOtlpExporter"] = "false",
+                ["SerilogStepUp:EnablePreErrorBuffering"] = "true",
+                ["SerilogStepUp:Mode"] = "Auto",
+                ["SerilogStepUp:BaseLevel"] = "Warning",
+                ["SerilogStepUp:StepUpLevel"] = "Information",
+                ["Serilog:Using:0"] = "Serilog.Sinks.File",
+                ["Serilog:WriteTo:0:Name"] = "File",
+                ["Serilog:WriteTo:0:Args:path"] = tempFile,
+                ["Serilog:WriteTo:0:Args:shared"] = "true",
+            });
+            builder.AddStepUpLogging();
+
+            using (var host = builder.Build())
+            {
+                var controller = host.Services.GetRequiredService<StepUpLoggingController>();
+                log(host.Services.GetRequiredService<Serilog.ILogger>());
+                SpinWait.SpinUntil(() => controller.IsSteppedUp, 500);
+                steppedUp = controller.IsSteppedUp;
+            }
+
+            return File.ReadAllText(tempFile);
+        }
+        finally
+        {
+            if (File.Exists(tempFile)) File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
+    public void Auto_NeverTriggerCategoryError_DoesNotStepUp_ExportsAndFlushesTraceBuffer()
+    {
+        const string heldToken = "NEVERTRIGGER_HELD_TOKEN";
+        const string errorToken = "NEVERTRIGGER_ERROR_TOKEN";
+
+        var contents = RunNeverTriggerHost(
+            new() { ["SerilogStepUp:NeverTriggerCategories:0"] = "Polly" },
+            logger =>
+            {
+                using var activity = new System.Diagnostics.Activity("never-trigger").Start();
+                logger.ForContext("SourceContext", "MyApp.Widget").Information(heldToken);
+                logger.ForContext("SourceContext", "Polly.Retry").Error(errorToken);
+            },
+            out var steppedUp);
+
+        Assert.False(steppedUp);
+        Assert.Contains(errorToken, contents);
+        Assert.Contains(heldToken, contents);
+    }
+
+    [Fact]
+    public void Auto_NeverTriggerBlankEntry_DoesNotSuppressDotRootedError()
+    {
+        RunNeverTriggerHost(
+            new()
+            {
+                ["SerilogStepUp:NeverTriggerCategories:0"] = "",
+                ["SerilogStepUp:NeverTriggerCategories:1"] = "Polly",
+            },
+            logger => logger.ForContext("SourceContext", ".Weird").Error("rooted error"),
+            out var steppedUp);
+
+        Assert.True(steppedUp);
+    }
 }
