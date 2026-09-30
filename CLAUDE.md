@@ -31,7 +31,7 @@ dotnet pack src/Lukdrasil.StepUpLogging/Lukdrasil.StepUpLogging.csproj --configu
 | File | Role |
 |---|---|
 | `StepUpLoggingController` | Public. Thread-safe state machine owning the `LoggingLevelSwitch`, a `Timer` for step-down, OTel counters, and a reference to the bypass logger. `Trigger()` raises the level; a timer callback lowers it after `DurationSeconds`. |
-| `StepUpTriggerSink` | Internal Serilog sink. Observes `Error`/`Fatal` events, skips those whose `SourceContext` matches a `NeverTriggerCategories` prefix, and enqueues to a bounded `Channel<bool>` processed by a background `Task` that calls `controller.Trigger()`. Non-blocking so it never stalls the logging pipeline. |
+| `StepUpTriggerSink` | Internal Serilog sink. Observes `Error`/`Fatal` events and enqueues to a bounded `Channel<bool>` processed by a background `Task` that calls `controller.Trigger()`. Non-blocking so it never stalls the logging pipeline. |
 | `PreErrorBufferSink` | Internal Serilog sink. Maintains a per-context ring buffer keyed by W3C TraceId (`Activity.Current`), buffering only held-back events `StepUpSink` hands it through `Hold` (events it did not export), at/above the resolved `StepUpLevel`. Dropped without export on dispose. On `Error`/`Fatal`, flushes buffered events to the bypass logger and clears the buffer. LRU eviction bounds memory. |
 | `SummarySink` | Internal Serilog sink. Forwards any event tagged `IsRequestSummary=true` to the bypass logger, so request summaries export at their own level independently of the step-up `LevelSwitch`. |
 | `ActivityContextEnricher` | Adds `ParentSpanId`, `TraceFlags`, `TraceState` from `Activity.Current` — fields not provided by `Serilog.Enrichers.OpenTelemetry`. |
