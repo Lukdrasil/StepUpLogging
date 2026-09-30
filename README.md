@@ -302,7 +302,7 @@ For other OTLP options (like additional headers or resource attributes), use env
 - Step-up mechanism is completely disabled
 - Error triggers are ignored
 
-**`Diagnostic`** runs exactly as `Auto` until the Diagnostic behaviour ships; see [Diagnostic mode](#diagnostic-mode).
+**`Diagnostic`** logs at `DiagnosticLevel` for `DiagnosticDurationMinutes` after startup, then runs as `Auto`; see [Diagnostic mode](#diagnostic-mode).
 
 ```json
 // Development configuration example
@@ -1057,12 +1057,14 @@ See full [performance test results](tests/k6/performance_test_results.md).
 | Option | Default | Environment Variable | Description |
 |---|---|---|---|
 | **Step-Up Behavior** |
-| `Mode` | `Auto` | - | Step-up mode: `Auto`, `AlwaysOn`, `Disabled` |
+| `Mode` | `Auto` | - | Step-up mode: `Auto`, `AlwaysOn`, `Disabled`, `Diagnostic` |
 | `BaseLevel` | `"Warning"` | - | Normal log level |
 | `StepUpLevel` | `"Information"` | - | Elevated log level during step-up |
 | `DurationSeconds` | `180` | - | How long step-up remains active (Auto mode) |
 | `MaxContinuousStepUpSeconds` | `0` (disabled) | - | Upper bound on a single continuous step-up window; forces a step-down and opens a cooldown when exceeded. `0` disables the cap. Must be `0` or `>= DurationSeconds`. |
 | `StepUpCooldownSeconds` | `300` | - | Seconds triggers are ignored after the cap forces a step-down; ignored when the cap is disabled |
+| `DiagnosticLevel` | `"Debug"` | - | Level the switch sits at while Diagnostic mode is active |
+| `DiagnosticDurationMinutes` | `30` | - | How long Diagnostic mode lasts after startup, from 1 to 120 minutes |
 | `NeverStepUpCategories` | `["Microsoft.EntityFrameworkCore.Database.Command"]` | - | `SourceContext` prefixes the step-up never raises above `BaseLevel` (see below) |
 | `CategoryFloors` | `{}` | - | `SourceContext` prefix to minimum level; a matching category exports at `max(switch, floor)`. Floors are capped at `Warning` (see Category floors) |
 | `DiagnosticExemptCategories` | `[]` | - | `CategoryFloors` prefixes that keep their floor during Diagnostic mode; each must be matched by a `CategoryFloors` key |
@@ -1215,6 +1217,34 @@ Blank entries are ignored.
 
 ### Diagnostic mode
 
+`Mode: "Diagnostic"` raises verbosity for a fixed window after startup, for example to watch a new
+deployment. It is entered only at startup; there is no runtime API.
+
+```json
+{
+  "SerilogStepUp": {
+    "Mode": "Diagnostic",
+    "DiagnosticLevel": "Debug",
+    "DiagnosticDurationMinutes": 30
+  }
+}
+```
+
+- The switch starts at `DiagnosticLevel` and stays there for `DiagnosticDurationMinutes` (1 to 120).
+  When the window ends, the controller runs as `Auto` at `BaseLevel`.
+- While Diagnostic is active, `Trigger()` does nothing and `IsSteppedUp` is `true`. Nothing carries
+  over: an error during the window does not start a step-up after it ends.
+- Every floor is lifted during the window except for `DiagnosticExemptCategories` prefixes (see
+  [Category floors](#category-floors)).
+- The window is timed by the `TimeProvider` registered in DI, or `TimeProvider.System` when none is.
+- A start Warning is written at startup and an end Warning when the window ends, both through the
+  bypass logger: `StepUp Diagnostic mode active at {DiagnosticLevel} for {DurationMinutes} min until {ExpiresAt}`
+  and `StepUp Diagnostic mode ended, running as Auto at {BaseLevel}`. Disposing the host before the
+  window ends writes no end Warning.
+- A startup Warning is written when `DiagnosticLevel` is not more verbose than `BaseLevel`, since the
+  mode then cannot increase verbosity.
+- `stepup_diagnostic_active` reads 1 during the window and 0 after it; `stepup_active` stays 0.
+
 ## Security
 
 Three security properties are worth understanding before you deploy:
@@ -1295,6 +1325,7 @@ Exposed metrics for monitoring:
 
 - `stepup_trigger_total` - Total number of step-up triggers
 - `stepup_active` - Whether step-up is currently active (0 or 1)
+- `stepup_diagnostic_active` - Whether Diagnostic mode is currently active (0 or 1); `stepup_active` stays 0 during Diagnostic
 - `stepup_duration_seconds` - Duration histogram of step-up windows
 - `request_body_captured_total` - Number of requests with captured body
 - `request_redaction_applied_total` - Number of requests with redaction applied
