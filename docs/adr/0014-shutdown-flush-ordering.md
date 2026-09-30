@@ -1,6 +1,6 @@
 # ADR 0014 — Buffered events survive shutdown
 
-- Status: Accepted
+- Status: Superseded by ADR 0023
 - Date: 2026-07-10
 
 ## Context

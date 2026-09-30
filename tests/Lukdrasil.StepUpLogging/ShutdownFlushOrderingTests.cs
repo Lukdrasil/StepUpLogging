@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -10,20 +11,17 @@ using Xunit;
 namespace Lukdrasil.StepUpLogging.Tests;
 
 /// <summary>
-/// Characterization pin for ADR 0014 (F11): the <see cref="PreErrorBufferSink"/> shutdown flush
-/// writes into the bypass logger, whose lifetime is owned by <see cref="StepUpLoggingController"/>.
-/// Both are disposed by the DI container in reverse registration order. If the controller were
-/// disposed first, the flush would write into a disposed <c>Serilog.Core.Logger</c> — a silent
-/// no-op — and the final buffered events would vanish. This test builds the real container and
-/// asserts they survive <see cref="ServiceProvider"/> disposal.
+/// ADR 0023 (supersedes ADR 0014): disposing the host drops held-back events without export. An
+/// event the gated output already exported is not exported a second time by the buffer.
 /// </summary>
 public class ShutdownFlushOrderingTests
 {
     [Fact]
-    public void BufferedEvents_SurviveServiceProviderDisposal_ReachBypassLogger()
+    public void HeldBackEvents_AreDroppedOnServiceProviderDisposal()
     {
         var tempFile = Path.Combine(Path.GetTempPath(), $"stepup-b07-{Guid.NewGuid():N}.log");
-        const string bufferedToken = "BUFFERED_SURVIVES_SHUTDOWN_b07";
+        const string exportedToken = "EXPORTED_WARNING_ONCE_b07";
+        const string heldBackToken = "HELD_BACK_DROPPED_b07";
 
         try
         {
@@ -32,13 +30,14 @@ public class ShutdownFlushOrderingTests
             {
                 ["SerilogStepUp:EnableOtlpExporter"] = "false",
                 ["SerilogStepUp:EnablePreErrorBuffering"] = "true",
+                ["SerilogStepUp:Mode"] = "Auto",
                 ["SerilogStepUp:BaseLevel"] = "Warning",
                 ["SerilogStepUp:StepUpLevel"] = "Information",
                 ["SerilogStepUp:DurationSeconds"] = "300",
             });
             builder.AddStepUpLogging(logFilePath: tempFile);
 
-            using var activity = new Activity("b07-shutdown-flush");
+            using var activity = new Activity("b07-shutdown-drop");
             activity.SetIdFormat(ActivityIdFormat.W3C);
             activity.Start();
 
@@ -46,19 +45,17 @@ public class ShutdownFlushOrderingTests
             {
                 var logger = host.Services.GetRequiredService<Serilog.ILogger>();
 
-                // Sub-BaseLevel events: gated out of the step-up sink, held only in the pre-error
-                // buffer. No Error is emitted, so nothing flushes during the run.
-                logger.Information("{Token} #1", bufferedToken);
-                logger.Information("{Token} #2", bufferedToken);
-                logger.Debug("{Token} #3", bufferedToken);
+                logger.Warning("{Token}", exportedToken);
+                logger.Information("{Token}", heldBackToken);
             }
 
-            var contents = string.Concat(Array.ConvertAll(
-                Directory.GetFiles(
+            var lines = Directory.GetFiles(
                     Path.GetDirectoryName(tempFile)!,
-                    Path.GetFileNameWithoutExtension(tempFile) + "*"),
-                File.ReadAllText));
-            Assert.Contains(bufferedToken, contents);
+                    Path.GetFileNameWithoutExtension(tempFile) + "*")
+                .SelectMany(File.ReadAllLines)
+                .ToArray();
+            Assert.Equal(1, lines.Count(l => l.Contains(exportedToken, StringComparison.Ordinal)));
+            Assert.Equal(0, lines.Count(l => l.Contains(heldBackToken, StringComparison.Ordinal)));
         }
         finally
         {

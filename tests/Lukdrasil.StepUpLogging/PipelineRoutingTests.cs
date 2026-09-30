@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
@@ -56,7 +57,8 @@ public class PipelineRoutingTests
             var stepUpInner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(StepUpOutput).CreateLogger();
             var bypassLogger = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(BypassOutput).CreateLogger();
 
-            _stepUpSink = new StepUpSink(stepUpInner, Controller.LevelSwitch, Controller.BaseLevel, []);
+            var buffer = withPreErrorBuffer ? new PreErrorBufferSink(bypassLogger, 50, 64, LogEventLevel.Verbose) : null;
+            _stepUpSink = new StepUpSink(stepUpInner, Controller.LevelSwitch, Controller.BaseLevel, [], buffer);
             _triggerSink = new StepUpTriggerSink(Controller);
 
             var cfg = new LoggerConfiguration()
@@ -66,9 +68,9 @@ public class PipelineRoutingTests
                 .WriteTo.Sink(new SummarySink(bypassLogger))
                 .WriteTo.Sink(new ImmediateSink(bypassLogger));
 
-            if (withPreErrorBuffer)
+            if (buffer is not null)
             {
-                cfg.WriteTo.Sink(new PreErrorBufferSink(bypassLogger, 50, 64, LogEventLevel.Verbose));
+                cfg.WriteTo.Sink(buffer);
             }
 
             Root = cfg.CreateLogger();
@@ -313,6 +315,19 @@ public class PipelineRoutingTests
         p.Root.Write(MakeEvent(LogEventLevel.Error));
 
         Assert.Equal(2, p.BypassOutput.Events.Count);
+    }
+
+    [Fact]
+    public void PreErrorBuffer_ExportedWarning_IsNotFlushedAgainOnError()
+    {
+        using var p = new Pipeline(withPreErrorBuffer: true);
+
+        p.Root.Write(MakeEvent(LogEventLevel.Warning));
+        p.Root.Write(MakeEvent(LogEventLevel.Debug));
+        p.Root.Write(MakeEvent(LogEventLevel.Error));
+
+        Assert.Equal([LogEventLevel.Warning, LogEventLevel.Error], p.StepUpOutput.Events.Select(e => e.Level));
+        Assert.Equal(LogEventLevel.Debug, Assert.Single(p.BypassOutput.Events).Level);
     }
 
     [Fact]

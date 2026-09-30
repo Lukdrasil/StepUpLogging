@@ -43,11 +43,13 @@ without touching enrichment or logger structure:
    bypass logger on it), it is always created before the root Serilog logger; MS DI disposes singletons
    in reverse *creation* order, so the container disposes the controller *after* the root logger — so the
    buffer/summary/immediate sinks (and
-   `PreErrorBufferSink.Dispose`'s best-effort flush *to* the bypass logger) all run first, then the
+   `PreErrorBufferSink.Dispose`, which since ADR 0023 drops held-back events and flushes nothing to
+   the bypass logger) all run first, then the
    bypass logger is disposed, flushing its async OTLP/File buffers. This ordering is exactly what
    the "disposal order matters" consequence requires, achieved with no new types and no
    `IHostApplicationLifetime` wiring. (Preferred over an `ApplicationStopped` hook, which would
-   dispose the bypass logger *before* the buffer sink's dispose-time flush and lose those events.)
+   dispose the bypass logger *before* the buffer sink's dispose-time flush and lose those events.
+   Amended by ADR 0023: there is no dispose-time buffer flush any more.)
 2. **File sink `shared: true`.** The bypass and step-up-inner loggers may both open the same
    file path; `shared: true` prevents the exclusive-lock self-log drop. (OTLP's two exporters are
    left as-is — harmless duplication, and deduping them would require the risky shared-logger

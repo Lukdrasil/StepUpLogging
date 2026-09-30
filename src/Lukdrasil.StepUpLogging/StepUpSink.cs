@@ -7,7 +7,8 @@ namespace Lukdrasil.StepUpLogging;
 /// Serilog sink that gates log events by the current <see cref="LoggingLevelSwitch"/>, except
 /// for <c>SourceContext</c> categories in the deny-list which are pinned to the base level and never stepped up.
 /// Suppresses events already routed to bypass sinks (marked <c>IsRequestSummary</c> or
-/// <c>IsImmediate</c>) to guarantee exactly-once delivery.
+/// <c>IsImmediate</c>) to guarantee exactly-once delivery. Events it rejects are handed to the
+/// <see cref="PreErrorBufferSink"/>, when one is configured, as held-back events.
 /// </summary>
 internal sealed class StepUpSink : ILogEventSink, IDisposable
 {
@@ -17,34 +18,41 @@ internal sealed class StepUpSink : ILogEventSink, IDisposable
     private readonly LoggingLevelSwitch _levelSwitch;
     private readonly LogEventLevel _baseLevel;
     private readonly string[] _neverStepUpCategories;
+    private readonly PreErrorBufferSink? _heldBackBuffer;
     private bool _disposed;
 
     /// <param name="innerLogger">Pre-configured output logger (OTLP / Console / File sinks). No enrichers needed — events arrive already enriched from the root pipeline.</param>
     /// <param name="levelSwitch">Shared switch managed by <see cref="StepUpLoggingController"/>.</param>
     /// <param name="baseLevel">The level the step-up raises from; listed categories are pinned to it.</param>
     /// <param name="neverStepUpCategories"><c>SourceContext</c> prefixes never raised above <paramref name="baseLevel"/> (already blank-filtered at the wiring site).</param>
-    public StepUpSink(Serilog.ILogger innerLogger, LoggingLevelSwitch levelSwitch, LogEventLevel baseLevel, string[] neverStepUpCategories)
+    /// <param name="heldBackBuffer">Buffer that receives events this sink does not export; <see langword="null"/> when pre-error buffering is off.</param>
+    public StepUpSink(Serilog.ILogger innerLogger, LoggingLevelSwitch levelSwitch, LogEventLevel baseLevel, string[] neverStepUpCategories, PreErrorBufferSink? heldBackBuffer = null)
     {
         _innerLogger = innerLogger ?? throw new ArgumentNullException(nameof(innerLogger));
         _levelSwitch = levelSwitch ?? throw new ArgumentNullException(nameof(levelSwitch));
         _baseLevel = baseLevel;
         _neverStepUpCategories = neverStepUpCategories ?? throw new ArgumentNullException(nameof(neverStepUpCategories));
+        _heldBackBuffer = heldBackBuffer;
     }
 
     public void Emit(LogEvent logEvent)
     {
         if (_disposed || logEvent is null) return;
 
+        // Drop bypass-routed markers to prevent duplication with SummarySink / ImmediateSink
+        if (IsBoolTrue(logEvent, LogProperties.IsRequestSummary)) return;
+        if (IsBoolTrue(logEvent, LogProperties.IsImmediate)) return;
+
         // Gate by step-up level switch; listed categories are pinned to BaseLevel so the
         // step-up never raises them (the max keeps the deny-list from ever adding verbosity).
         var minimum = IsNeverStepUp(logEvent)
             ? (LogEventLevel)Math.Max((int)_baseLevel, (int)_levelSwitch.MinimumLevel)
             : _levelSwitch.MinimumLevel;
-        if (logEvent.Level < minimum) return;
-
-        // Drop bypass-routed markers to prevent duplication with SummarySink / ImmediateSink
-        if (IsBoolTrue(logEvent, LogProperties.IsRequestSummary)) return;
-        if (IsBoolTrue(logEvent, LogProperties.IsImmediate)) return;
+        if (logEvent.Level < minimum)
+        {
+            _heldBackBuffer?.Hold(logEvent);
+            return;
+        }
 
         _innerLogger.Write(logEvent);
     }
