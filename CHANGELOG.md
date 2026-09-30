@@ -8,6 +8,11 @@ Tags before 1.8.0 predate this file.
 
 ## [Unreleased]
 
+## [5.0.1] - 2026-09-30
+
+### Fixed
+- The package passed the build assets of `Microsoft.Extensions.Telemetry.Abstractions`, a dependency of `Microsoft.Extensions.Http.Resilience`, to consumers. Its `buildTransitive` props set `DisableMicrosoftExtensionsLoggingSourceGenerator=true`, which replaced the standard `[LoggerMessage]` source generator with `Microsoft.Gen.Logging` in every consuming project. The `Microsoft.Extensions.Http.Resilience` reference is now `PrivateAssets="build;buildtransitive;analyzers;contentfiles"`, and a shipped `buildTransitive` targets file removes the `Microsoft.Gen.Logging` analyzers, so a consumer uses the standard generator again. A consumer that references `Microsoft.Extensions.Telemetry.Abstractions` itself (directly or through another package) keeps `Microsoft.Gen.Logging`. Fixes #62.
+
 ## [5.0.0] - 2026-09-30
 
 BREAKING. See MIGRATION.md for migration steps.
