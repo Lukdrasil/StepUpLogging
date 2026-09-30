@@ -1132,6 +1132,25 @@ list empty:
 
 ### Always-export categories
 
+`AlwaysExportCategories` lists `SourceContext` prefixes whose events are exported once, at any
+level, whatever the current step-up state. A matching event is marked `IsImmediate=true` and takes
+the same path as `LogImmediate`: the step-up gate skips it and the pre-error buffer never holds it,
+so a later error in the same trace does not export it a second time. Matching uses the same prefix
+rule as `NeverStepUpCategories`. With `RedactLogEventProperties` on, these events are redacted like
+any other. Blank entries are ignored. Default: empty.
+
+```json
+{
+  "SerilogStepUp": {
+    "BaseLevel": "Warning",
+    "AlwaysExportCategories": [ "Microsoft.Hosting.Lifetime" ]
+  }
+}
+```
+
+With this configuration the host's "Application started" Information is exported although
+`BaseLevel` is Warning.
+
 ### Never-trigger categories
 
 ### Diagnostic mode
