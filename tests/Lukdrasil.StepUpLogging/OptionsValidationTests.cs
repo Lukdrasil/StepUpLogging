@@ -164,7 +164,7 @@ public class OptionsValidationTests
             new StepUpLoggingOptions().NeverStepUpCategories);
     }
 
-    private static string[]? ResolveExcludePaths(string sectionJson, Action<StepUpLoggingOptions>? configureOptions = null)
+    private static IEnumerable<string>? ResolveExcludePaths(string sectionJson, Action<StepUpLoggingOptions>? configureOptions = null)
     {
         var json = $$"""{ "SerilogStepUp": { "EnableOtlpExporter": false {{sectionJson}} } }""";
         var builder = Host.CreateApplicationBuilder();

@@ -1067,7 +1067,7 @@ See full [performance test results](tests/k6/performance_test_results.md).
 | **Request Logging** |
 | `CaptureRequestBody` | `false` | - | Capture POST/PUT/PATCH bodies during step-up |
 | `MaxBodyCaptureBytes` | `16384` | - | Max bytes to capture from request body |
-| `ExcludePaths` | `["/health", "/metrics"]` | - | Paths to exclude from logging |
+| `ExcludePaths` | `["/healthz", "/metrics", "/health"]` (applied only when not configured) | - | Paths to exclude from logging. A configured list replaces the defaults, `[]` excludes nothing |
 | `RedactionRegexes` | `[]` | - | Regex patterns for redacting sensitive data. Always applied to request metadata and bodies; also applied to application log properties when `RedactLogEventProperties` is set — see [Security](#security) |
 | `RedactLogEventProperties` | `false` | - | Opt-in: also sweep the string-valued scalar properties of application log events with `RedactionRegexes`, not just request metadata. See [Security](#security) |
 | `AdditionalSensitiveHeaders` | `[]` | - | Custom header names to redact in request logging |
