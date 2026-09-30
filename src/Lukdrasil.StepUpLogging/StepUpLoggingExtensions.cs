@@ -296,7 +296,9 @@ public static class StepUpLoggingExtensions
             }
 
             // Trigger sink: observes Error/Fatal events and calls controller.Trigger() asynchronously.
-            lc.WriteTo.Sink(new StepUpTriggerSink(stepUpController));
+            lc.WriteTo.Sink(new StepUpTriggerSink(
+                stepUpController,
+                (opts.NeverTriggerCategories ?? []).Where(c => !string.IsNullOrWhiteSpace(c)).ToArray()));
 
             // Summary sink: routes IsRequestSummary=true events to bypass logger.
             lc.WriteTo.Sink(new SummarySink(bypassLogger));
