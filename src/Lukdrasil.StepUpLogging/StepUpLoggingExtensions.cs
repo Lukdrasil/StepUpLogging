@@ -191,6 +191,7 @@ public static class StepUpLoggingExtensions
         builder.Services.AddOptions<StepUpLoggingOptions>()
             .Bind(builder.Configuration.GetSection(configSectionName))
             .Configure(options => configureOptions?.Invoke(options))
+            .PostConfigure(options => options.ExcludePaths ??= ["/healthz", "/metrics", "/health"])
             .Validate(ValidateOptions, "Invalid SerilogStepUp options: DurationSeconds must be > 0, MaxBodyCaptureBytes must be > 0, MaxContinuousStepUpSeconds must be >= 0 and either 0 (disabled) or >= DurationSeconds, StepUpCooldownSeconds must be >= 0, PreErrorBufferSize and PreErrorMaxContexts must be > 0, and BaseLevel/StepUpLevel/RequestSummaryLevel must be valid Serilog levels.")
             .ValidateOnStart();
 

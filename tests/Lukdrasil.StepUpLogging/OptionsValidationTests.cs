@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Text;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -161,5 +162,43 @@ public class OptionsValidationTests
         Assert.Equal(
             new[] { "Microsoft.EntityFrameworkCore.Database.Command" },
             new StepUpLoggingOptions().NeverStepUpCategories);
+    }
+
+    private static IEnumerable<string>? ResolveExcludePaths(string sectionJson, Action<StepUpLoggingOptions>? configureOptions = null)
+    {
+        var json = $$"""{ "SerilogStepUp": { "EnableOtlpExporter": false {{sectionJson}} } }""";
+        var builder = Host.CreateApplicationBuilder();
+        builder.Configuration.AddJsonStream(new MemoryStream(Encoding.UTF8.GetBytes(json)));
+        builder.AddStepUpLogging(configureOptions);
+        using var host = builder.Build();
+        return host.Services.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value.ExcludePaths;
+    }
+
+    [Fact]
+    public void ExcludePathsNotConfigured_ResolvesToBuiltInDefaults()
+    {
+        Assert.Equal(["/healthz", "/metrics", "/health"], ResolveExcludePaths(""));
+    }
+
+    [Fact]
+    public void ExcludePathsConfigured_ReplacesBuiltInDefaults()
+    {
+        Assert.Equal(["/health", "/alive"], ResolveExcludePaths(""", "ExcludePaths": ["/health", "/alive"]"""));
+    }
+
+    [Fact]
+    public void ExcludePathsSetInCode_WinsOverConfiguration()
+    {
+        var resolved = ResolveExcludePaths(
+            """, "ExcludePaths": ["/health", "/alive"]""",
+            o => o.ExcludePaths = ["/ready"]);
+
+        Assert.Equal(["/ready"], resolved);
+    }
+
+    [Fact]
+    public void ExcludePathsConfiguredEmpty_ExcludesNothing()
+    {
+        Assert.Equal([], ResolveExcludePaths(""", "ExcludePaths": []"""));
     }
 }

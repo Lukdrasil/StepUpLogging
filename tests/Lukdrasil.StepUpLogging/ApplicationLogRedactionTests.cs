@@ -2,9 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.RegularExpressions;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Serilog;
 using Serilog.Core;
 using Serilog.Events;
@@ -132,6 +134,53 @@ public class ApplicationLogRedactionTests
         enricher.Enrich(logEvent, new SimpleLogEventPropertyFactory());
 
         Assert.Same(original, logEvent.Properties["Message"]);
+    }
+
+    [Theory]
+    [InlineData("PathString")]
+    [InlineData("QueryString")]
+    [InlineData("Uri")]
+    [InlineData("HostString")]
+    public void Enrich_MatchingUriLikeScalar_ReplacedByRedactedString(string kind)
+    {
+        var (value, pattern) = kind switch
+        {
+            "PathString" => ((object)new PathString("/api/v2/Public/ActionLinks/abc123"), "/Public/ActionLinks/[^/?]+"),
+            "QueryString" => (new QueryString("?next=/Public/ActionLinks/abc123"), "/Public/ActionLinks/[^/?&]+"),
+            "Uri" => (new Uri("https://h/api/v2/Public/ActionLinks/abc123"), "/Public/ActionLinks/[^/?]+"),
+            _ => (new HostString("abc123.example.com"), @"abc123\.example\.com"),
+        };
+        var enricher = new RedactionEnricher(new CompiledRedactionPatterns([Compile(pattern)]));
+        var logEvent = MakeEvent(new LogEventProperty("Value", new ScalarValue(value)));
+
+        enricher.Enrich(logEvent, new SimpleLogEventPropertyFactory());
+
+        var redacted = Assert.IsType<string>(((ScalarValue)logEvent.Properties["Value"]).Value);
+        Assert.Contains("[REDACTED]", redacted);
+        Assert.DoesNotContain("abc123", redacted);
+    }
+
+    [Fact]
+    public void Enrich_UnmatchedPathString_KeepsItsType()
+    {
+        var enricher = new RedactionEnricher(new CompiledRedactionPatterns([Compile("token=[^&]+")]));
+        var logEvent = MakeEvent(new LogEventProperty("Path", new ScalarValue(new PathString("/api/v2/orders"))));
+
+        enricher.Enrich(logEvent, new SimpleLogEventPropertyFactory());
+
+        Assert.Equal(new PathString("/api/v2/orders"), ((ScalarValue)logEvent.Properties["Path"]).Value);
+    }
+
+    [Fact]
+    public void Enrich_UnmatchedUri_KeepsItsType()
+    {
+        var uri = new Uri("https://h/api/v2/orders");
+        var enricher = new RedactionEnricher(new CompiledRedactionPatterns([Compile("token=[^&]+")]));
+        var logEvent = MakeEvent(new LogEventProperty("Target", new ScalarValue(uri)));
+
+        enricher.Enrich(logEvent, new SimpleLogEventPropertyFactory());
+
+        Assert.Same(uri, ((ScalarValue)logEvent.Properties["Target"]).Value);
     }
 
     // ─── end-to-end pipeline tests ─────────────────────────────────────────────
@@ -289,5 +338,60 @@ public class ApplicationLogRedactionTests
 
         var evt = Assert.Single(collector.Events);
         Assert.Equal("[REDACTED]", ((ScalarValue)evt.Properties["ConsumerStamped"]).Value);
+    }
+
+    private static LogEvent LogWarningThroughPipeline(object value)
+    {
+        var builder = Host.CreateApplicationBuilder();
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["SerilogStepUp:EnableOtlpExporter"] = "false",
+            ["SerilogStepUp:EnablePreErrorBuffering"] = "false",
+            ["SerilogStepUp:Mode"] = "AlwaysOn",
+            ["SerilogStepUp:RedactLogEventProperties"] = "true",
+            ["SerilogStepUp:RedactionRegexes:0"] = "(?i)/Public/ActionLinks/[^/?]+",
+        });
+        var collector = new CollectingSink();
+        builder.AddStepUpLogging((_, lc) => lc.WriteTo.Sink(collector));
+
+        using (var host = builder.Build())
+        {
+            var logger = host.Services.GetRequiredService<ILogger<ApplicationLogRedactionTests>>();
+            logger.LogWarning("Request to {Value}", value);
+        }
+
+        return Assert.Single(collector.Events);
+    }
+
+    [Fact]
+    public void FlagOn_PathStringValue_IsExportedRedacted()
+    {
+        var evt = LogWarningThroughPipeline(new PathString("/api/v2/Public/ActionLinks/abc123"));
+
+        Assert.DoesNotContain("abc123", evt.Properties["Value"].ToString());
+    }
+
+    [Fact]
+    public void FlagOn_QueryStringValue_IsExportedRedacted()
+    {
+        var evt = LogWarningThroughPipeline(new QueryString("?next=/Public/ActionLinks/abc123"));
+
+        Assert.DoesNotContain("abc123", evt.Properties["Value"].ToString());
+    }
+
+    [Fact]
+    public void FlagOn_UriValue_IsExportedRedacted()
+    {
+        var evt = LogWarningThroughPipeline(new Uri("https://h/api/v2/Public/ActionLinks/abc123"));
+
+        Assert.DoesNotContain("abc123", evt.Properties["Value"].ToString());
+    }
+
+    [Fact]
+    public void FlagOn_UriWithUnreservedPercentEscape_IsExportedRedacted()
+    {
+        var evt = LogWarningThroughPipeline(new Uri("https://h/api/v2/Public/Action%4Cinks/abc123"));
+
+        Assert.DoesNotContain("abc123", evt.Properties["Value"].ToString());
     }
 }

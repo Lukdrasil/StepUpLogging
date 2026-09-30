@@ -1075,9 +1075,9 @@ See full [performance test results](tests/k6/performance_test_results.md).
 | **Request Logging** |
 | `CaptureRequestBody` | `false` | - | Capture POST/PUT/PATCH bodies during step-up |
 | `MaxBodyCaptureBytes` | `16384` | - | Max bytes to capture from request body |
-| `ExcludePaths` | `["/health", "/metrics"]` | - | Paths to exclude from logging |
+| `ExcludePaths` | `["/healthz", "/metrics", "/health"]` (applied only when not configured) | - | Paths to exclude from logging. A configured list replaces the defaults, `[]` excludes nothing |
 | `RedactionRegexes` | `[]` | - | Regex patterns for redacting sensitive data. Always applied to request metadata and bodies; also applied to application log properties when `RedactLogEventProperties` is set — see [Security](#security) |
-| `RedactLogEventProperties` | `false` | - | Opt-in: also sweep the string-valued scalar properties of application log events with `RedactionRegexes`, not just request metadata. See [Security](#security) |
+| `RedactLogEventProperties` | `false` | - | Opt-in: also sweep the string-valued and URI-like (`PathString`, `QueryString`, `HostString`, `Uri`) scalar properties of application log events with `RedactionRegexes`, not just request metadata. See [Security](#security) |
 | `AdditionalSensitiveHeaders` | `[]` | - | Custom header names to redact in request logging |
 | `TrustForwardedHeaders` | `false` | - | When `true`, `ClientIp` is taken from the first `X-Forwarded-For` entry (v2 behavior). Only enable behind a proxy you control with `ForwardedHeadersMiddleware`. See [Security](#security). |
 | `TreatServerErrorStatusAsError` | `true` | - | When `false`, a request completing with status >= 500 but **no** exception is logged at Warning instead of Error, so it does not trigger step-up. Set this in a reverse proxy / BFF where most 5xx are relayed from a backend. An unhandled exception is still Error. |
@@ -1147,7 +1147,10 @@ alone.
 
 Set `RedactLogEventProperties: true` to also sweep the string-valued scalar properties of
 application log events with the same `RedactionRegexes`, so the example above **is** redacted
-once the flag is on. The sweep reaches properties and nothing else. It does not touch
+once the flag is on. URI-like values (`PathString`, `QueryString`, `HostString`, `Uri`) are swept
+too: each is matched on its `ToString()` form, for `Uri` the decoded form the exporter renders,
+and exported as the redacted string when a pattern matched. Other non-string scalars (numbers,
+GUIDs, dates) are left as they are. The sweep reaches properties and nothing else. It does not touch
 message-template text or exception messages: an interpolated `logger.LogInformation($"token={t}")`
 bakes the value into the template and produces no property, so it is logged verbatim whatever the
 flag says. It does not recurse into structures (`{@user}`), sequences or dictionaries. It skips
