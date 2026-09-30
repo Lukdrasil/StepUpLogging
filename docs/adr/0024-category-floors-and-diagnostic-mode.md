@@ -62,8 +62,6 @@ UpDownCounter `stepup_diagnostic_active` on meter `StepUpLogging` reports the wi
   `DiagnosticLevel`, `DiagnosticDurationMinutes`, `AlwaysExportCategories`,
   `NeverTriggerCategories`) are validated at startup in every mode (ADR 0007). Blank list entries
   pass validation and are filtered at wiring.
-- The options land before their behaviour: until each feature ships, an option is validated but
-  has no effect.
 - With `CaptureRequestBody=true`, request bodies are captured (still redacted) for the whole
   Diagnostic window, because body capture follows `IsSteppedUp`.
-- All additions are additive, a minor version.
+- All additions are additive: this change breaks nothing of its own.

@@ -1122,6 +1122,11 @@ continues with a `.` (so `…Database.Command` also covers `…Database.Command.
 The list has no effect in `StepUpMode.AlwaysOn`: that mode never steps up, so there is nothing
 to suppress, and a developer running it locally wants to see the SQL.
 
+`StepUpMode.Diagnostic` also lifts the pin for its whole window. With the default list, EF
+`Database.Command` SQL (and its parameters when `EnableSensitiveDataLogging` is on) is exported
+for up to 120 minutes. To keep it quiet during the window, add a `CategoryFloors` entry for the
+category and a `DiagnosticExemptCategories` entry for it (see [Diagnostic mode](#diagnostic-mode)).
+
 One caveat: the deny-list gates the export path only. The pre-error buffer is deliberately **not**
 filtered — when it flushes on an error it still carries the SQL that led up to that error, and
 unless you set `RedactLogEventProperties` it carries it **unredacted**: the SQL command text is a
@@ -1238,6 +1243,11 @@ deployment. It is entered only at startup; there is no runtime API.
   over: an error during the window does not start a step-up after it ends.
 - Every floor is lifted during the window except for `DiagnosticExemptCategories` prefixes (see
   [Category floors](#category-floors)).
+- The `NeverStepUpCategories` pin is lifted during the window. With the default list, EF
+  `Database.Command` SQL (and its parameters when `EnableSensitiveDataLogging` is on) is exported
+  for the whole window, up to 120 minutes. To keep it quiet, add a `CategoryFloors` entry for
+  `Microsoft.EntityFrameworkCore.Database.Command` (for example `"Warning"`) and list the same
+  prefix in `DiagnosticExemptCategories`.
 - The window is timed by the `TimeProvider` registered in DI, or `TimeProvider.System` when none is.
 - A start Warning is written at startup and an end Warning when the window ends, both through the
   bypass logger: `StepUp Diagnostic mode active at {DiagnosticLevel} for {DurationMinutes} min until {ExpiresAt}`

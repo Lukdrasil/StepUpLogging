@@ -28,7 +28,6 @@ public enum StepUpMode
     /// <summary>
     /// Entered only at startup: the switch sits at <see cref="StepUpLoggingOptions.DiagnosticLevel"/> for
     /// <see cref="StepUpLoggingOptions.DiagnosticDurationMinutes"/>, then the controller runs as <see cref="Auto"/>.
-    /// Until that behaviour ships it runs exactly as <see cref="Auto"/>.
     /// </summary>
     Diagnostic = 3
 }
