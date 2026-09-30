@@ -53,8 +53,9 @@ public sealed class StepUpLoggingOptions
     /// <summary>
     /// Regular expression patterns for redacting sensitive data in logs.
     /// Patterns are applied to query strings, headers, route parameters, and request bodies, and,
-    /// when <see cref="RedactLogEventProperties"/> is also set, to the string-valued scalar
-    /// properties of application log events as well.
+    /// when <see cref="RedactLogEventProperties"/> is also set, to the string-valued and URI-like
+    /// (<c>PathString</c>, <c>QueryString</c>, <c>HostString</c>, <c>Uri</c>) scalar properties of
+    /// application log events as well.
     /// </summary>
     /// <remarks>
     /// SCOPE: on its own, this covers request metadata (query string, headers, route values, request
@@ -68,8 +69,11 @@ public sealed class StepUpLoggingOptions
     public string[] RedactionRegexes { get; set; } = [];
 
     /// <summary>
-    /// When true, applies <see cref="RedactionRegexes"/> to the string-valued scalar properties of
-    /// log events on the root pipeline. Default: false.
+    /// When true, applies <see cref="RedactionRegexes"/> to the string-valued and URI-like
+    /// (<c>PathString</c>, <c>QueryString</c>, <c>HostString</c>, <c>Uri</c>) scalar properties of
+    /// log events on the root pipeline. A URI-like value is matched on its <c>ToString()</c> form
+    /// (for <c>Uri</c> the decoded form) and exported as the redacted string only when a pattern
+    /// matched. Default: false.
     /// </summary>
     /// <remarks>
     /// Sweeps log event properties for secrets logged through <c>ILogger</c>, <c>LogImmediate*</c>,
@@ -92,8 +96,10 @@ public sealed class StepUpLoggingOptions
     /// <item>Message template text and exception messages. An interpolated
     /// <c>logger.LogInformation($"token={t}")</c> bakes the value into the template itself and
     /// produces no property, so it is logged verbatim.</item>
-    /// <item>Anything that is not a string scalar: values held inside a structure
-    /// (<c>{@user}</c>), a sequence or a dictionary are not recursed into.</item>
+    /// <item>Anything that is not a string or URI-like scalar: other non-string scalars (numbers,
+    /// GUIDs, dates) are left as they are, and values held inside a structure
+    /// (<c>{@user}</c>, including <c>{@Path}</c>), a sequence or a dictionary are not recursed
+    /// into.</item>
     /// <item>The properties the library stamps itself — <c>TraceId</c>, <c>SpanId</c>,
     /// <c>ParentSpanId</c>, <c>TraceFlags</c>, <c>TraceState</c>, <c>SourceContext</c>,
     /// <c>Application</c>, <c>Environment</c>, <c>MachineName</c>, <c>ServiceVersion</c>,

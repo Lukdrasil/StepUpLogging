@@ -9,7 +9,7 @@ Tags before 1.8.0 predate this file.
 ## [Unreleased]
 
 ### Added
-- `RedactLogEventProperties` (default `false`). When set, `RedactionRegexes` is also applied to the string-valued scalar properties of application log events — not just request metadata — so a secret passed as a message-template argument (e.g. `logger.LogInformation("token={T}", secret)`) is masked too. Opt-in: nothing changes for a consumer who does not set it. Interpolated templates, exception messages, and structured/sequence/dictionary values remain out of scope either way. Fixes #20. See docs/adr/0022-application-log-redaction-enricher.md.
+- `RedactLogEventProperties` (default `false`). When set, `RedactionRegexes` is also applied to the string-valued and URI-like (`PathString`, `QueryString`, `HostString`, `Uri`, the latter through its decoded `ToString()` form; #34) scalar properties of application log events — not just request metadata — so a secret passed as a message-template argument (e.g. `logger.LogInformation("token={T}", secret)`) is masked too. Opt-in: nothing changes for a consumer who does not set it. Interpolated templates, exception messages, and structured/sequence/dictionary values remain out of scope either way. Fixes #20. See docs/adr/0022-application-log-redaction-enricher.md.
 
 ### Fixed
 - Pre-error buffering exported an event twice: once at the current level and again when an error in the same trace flushed the buffer, or at shutdown. The buffer now holds only events the step-up gate did not export, so every event is exported at most once. Held-back events are dropped at shutdown instead of exported. Fixes #29. See docs/adr/0023-prebuffer-exactly-once-and-drop-on-dispose.md.
