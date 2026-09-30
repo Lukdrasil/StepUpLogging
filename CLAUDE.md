@@ -30,12 +30,15 @@ dotnet pack src/Lukdrasil.StepUpLogging/Lukdrasil.StepUpLogging.csproj --configu
 
 | File | Role |
 |---|---|
-| `StepUpLoggingController` | Public. Thread-safe state machine owning the `LoggingLevelSwitch`, a `Timer` for step-down, OTel counters, and a reference to the bypass logger. `Trigger()` raises the level; a timer callback lowers it after `DurationSeconds`. |
-| `StepUpTriggerSink` | Internal Serilog sink. Observes `Error`/`Fatal` events and enqueues to a bounded `Channel<bool>` processed by a background `Task` that calls `controller.Trigger()`. Non-blocking so it never stalls the logging pipeline. |
+| `StepUpLoggingController` | Public. Thread-safe state machine owning the `LoggingLevelSwitch`, a `Timer` for step-down, OTel counters, and a reference to the bypass logger. `Trigger()` raises the level; a timer callback lowers it after `DurationSeconds`. In `Mode=Diagnostic` the switch starts at `DiagnosticLevel` and a `TimeProvider` timer returns it to Auto at `BaseLevel` after `DiagnosticDurationMinutes`; `Trigger()` is a no-op until then. |
+| `StepUpTriggerSink` | Internal Serilog sink. Observes `Error`/`Fatal` events, skips those whose `SourceContext` matches a `NeverTriggerCategories` prefix, and enqueues to a bounded `Channel<bool>` processed by a background `Task` that calls `controller.Trigger()`. Non-blocking so it never stalls the logging pipeline. |
 | `PreErrorBufferSink` | Internal Serilog sink. Maintains a per-context ring buffer keyed by W3C TraceId (`Activity.Current`), buffering only held-back events `StepUpSink` hands it through `Hold` (events it did not export), at/above the resolved `StepUpLevel`. Dropped without export on dispose. On `Error`/`Fatal`, flushes buffered events to the bypass logger and clears the buffer. LRU eviction bounds memory. |
+| `CategoryFloorMap` | Internal. Resolves the `CategoryFloors` floor of a `SourceContext`, built once at wiring and passed to `StepUpSink`, which exports at `max(switch, NeverStepUp pin, floor)`. The most specific (longest) matching key wins; while diagnostic is active only sources under a `DiagnosticExemptCategories` prefix get a floor. Allocation-free lookup. |
 | `SummarySink` | Internal Serilog sink. Forwards any event tagged `IsRequestSummary=true` to the bypass logger, so request summaries export at their own level independently of the step-up `LevelSwitch`. |
 | `ActivityContextEnricher` | Adds `ParentSpanId`, `TraceFlags`, `TraceState` from `Activity.Current` — fields not provided by `Serilog.Enrichers.OpenTelemetry`. |
 | `StepUpLoggingExtensions` | Public static class. Exposes `AddStepUpLogging()` and `UseStepUpRequestLogging()`, all three `ActivitySource` instances, `AddStepUpLoggingMeters()`, and `CompiledRedactionPatterns`. All Serilog pipeline wiring happens here. |
+| `AlwaysExportEnricher` | Internal root enricher, registered only when `AlwaysExportCategories` has a non-blank entry. Sets `IsImmediate=true` on a matching `SourceContext`, so `ImmediateSink` exports it once and `StepUpSink` and the pre-error buffer skip it. |
+| `CategoryPrefix` | Internal static class. The one `SourceContext` prefix rule for every category option (ADR 0021 D3): ordinal equal, or starts with prefix + `.`. |
 | `StepUpLoggingOptions` | All configuration knobs with defaults. Bound from `"SerilogStepUp"` appsettings section. |
 
 ### Serilog pipeline (wired in `AddStepUpLoggingInternal`)

@@ -1,13 +1,7 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
-using System.IO;
-using System.Linq;
-using System.Threading;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
-using Serilog.Events;
+using static Lukdrasil.StepUpLogging.Tests.TestHosts;
 
 namespace Lukdrasil.StepUpLogging.Tests;
 
@@ -83,53 +77,14 @@ public class PreErrorBufferExactlyOnceTests
         Assert.Equal(1, counts["EXACTLY_ONCE_EF_STEPPED_INFO_29"]);
     }
 
-    private static void StepUp(StepUpLoggingController controller)
-    {
-        controller.Trigger();
-        Assert.True(SpinWait.SpinUntil(() => controller.LevelSwitch.MinimumLevel <= LogEventLevel.Information, 2000));
-    }
-
     private static Dictionary<string, int> RunInOneTrace(
         Action<Serilog.ILogger, StepUpLoggingController> scenario,
-        params string[] tokens)
-    {
-        var tempFile = Path.Combine(Path.GetTempPath(), $"stepup-exactly-once-{Guid.NewGuid():N}.log");
-        var directory = Path.GetDirectoryName(tempFile)!;
-        var pattern = Path.GetFileNameWithoutExtension(tempFile) + "*";
-        try
-        {
-            var builder = Host.CreateApplicationBuilder();
-            builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["SerilogStepUp:EnableOtlpExporter"] = "false",
-                ["SerilogStepUp:EnablePreErrorBuffering"] = "true",
-                ["SerilogStepUp:Mode"] = "Auto",
-                ["SerilogStepUp:BaseLevel"] = "Warning",
-                ["SerilogStepUp:StepUpLevel"] = "Information",
-                ["SerilogStepUp:DurationSeconds"] = "300",
-            });
-            builder.AddStepUpLogging(logFilePath: tempFile);
-
-            using var activity = new Activity("exactly-once-29");
-            activity.SetIdFormat(ActivityIdFormat.W3C);
-            activity.Start();
-
-            using (var host = builder.Build())
-            {
-                scenario(
-                    host.Services.GetRequiredService<Serilog.ILogger>(),
-                    host.Services.GetRequiredService<StepUpLoggingController>());
-            }
-
-            var lines = Directory.GetFiles(directory, pattern).SelectMany(File.ReadAllLines).ToArray();
-            return tokens.ToDictionary(t => t, t => lines.Count(l => l.Contains(t, StringComparison.Ordinal)));
-        }
-        finally
-        {
-            foreach (var f in Directory.GetFiles(directory, pattern))
-            {
-                try { File.Delete(f); } catch { }
-            }
-        }
-    }
+        params string[] tokens) =>
+        TestHosts.RunInOneTrace(
+            [],
+            null,
+            services => scenario(
+                services.GetRequiredService<Serilog.ILogger>(),
+                services.GetRequiredService<StepUpLoggingController>()),
+            tokens);
 }

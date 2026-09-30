@@ -116,6 +116,28 @@ public static class StepUpLoggingExtensions
     }
 
     /// <summary>
+    /// Adds StepUp logging with OpenTelemetry as the primary export mechanism, taking both an options callback and a Serilog configuration callback.
+    /// Configuration is loaded from appsettings.json section (default: "SerilogStepUp").
+    /// </summary>
+    /// <param name="builder">The host application builder</param>
+    /// <param name="configureOptions">Action to configure StepUpLoggingOptions, applied after the configuration section is bound</param>
+    /// <param name="configure">Additional Serilog configuration; receives the resolved <see cref="IServiceProvider"/> and the root <see cref="LoggerConfiguration"/></param>
+    /// <param name="configSectionName">Configuration section name (default: SerilogStepUp)</param>
+    /// <param name="logFilePath">Optional file path for additional file sink</param>
+    /// <remarks>
+    /// Serilog's static <c>Log.Logger</c> is left unchanged unless <see cref="StepUpLoggingOptions.SetStaticLogger"/>
+    /// is true in the configuration section or in <paramref name="configureOptions"/>.
+    /// </remarks>
+    public static IHostApplicationBuilder AddStepUpLogging(this IHostApplicationBuilder builder,
+        Action<StepUpLoggingOptions>? configureOptions,
+        Action<IServiceProvider, LoggerConfiguration>? configure,
+        string configSectionName = "SerilogStepUp",
+        string? logFilePath = null)
+    {
+        return AddStepUpLoggingInternal(builder, configureOptions, configure, configSectionName, logFilePath);
+    }
+
+    /// <summary>
     /// Adds audit logging: <typeparamref name="TSink"/> becomes the <see cref="IAuditEventSink"/>
     /// that every <see cref="IAuditLogger{T}"/> writes to. Requires <see cref="AddStepUpLogging(IHostApplicationBuilder, Action{StepUpLoggingOptions}?, string, string?)"/>.
     /// </summary>
@@ -200,8 +222,10 @@ public static class StepUpLoggingExtensions
             .Bind(builder.Configuration.GetSection(configSectionName))
             .Configure(options => configureOptions?.Invoke(options))
             .PostConfigure(options => options.ExcludePaths ??= ["/healthz", "/metrics", "/health"])
-            .Validate(ValidateOptions, "Invalid SerilogStepUp options: DurationSeconds must be > 0, MaxBodyCaptureBytes must be > 0, MaxContinuousStepUpSeconds must be >= 0 and either 0 (disabled) or >= DurationSeconds, StepUpCooldownSeconds must be >= 0, PreErrorBufferSize and PreErrorMaxContexts must be > 0, and BaseLevel/StepUpLevel/RequestSummaryLevel must be valid Serilog levels.")
+            .Validate(ValidateOptions, "Invalid SerilogStepUp options: DurationSeconds must be > 0, MaxBodyCaptureBytes must be > 0, MaxContinuousStepUpSeconds must be >= 0 and either 0 (disabled) or >= DurationSeconds, StepUpCooldownSeconds must be >= 0, PreErrorBufferSize and PreErrorMaxContexts must be > 0, and BaseLevel/StepUpLevel/RequestSummaryLevel must be valid Serilog levels. CategoryFloors keys must be non-blank with valid levels no higher than Warning, DiagnosticLevel must be a valid level, DiagnosticDurationMinutes must be 1-120, and each DiagnosticExemptCategories entry must match a CategoryFloors key.")
             .ValidateOnStart();
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IValidateOptions<StepUpLoggingOptions>, CategoryFloorCeilingValidator>());
 
         builder.Services.ConfigureOpenTelemetryMeterProvider(metrics =>
             metrics.AddStepUpLoggingMeters());
@@ -219,7 +243,7 @@ public static class StepUpLoggingExtensions
         builder.Services.AddSingleton<StepUpLoggingController>(sp =>
         {
             var opts = sp.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
-            return new StepUpLoggingController(opts);
+            return new StepUpLoggingController(opts, null, Stopwatch.GetTimestamp, sp.GetService<TimeProvider>());
         });
 
         var staticLoggerSnapshot = new StepUpLoggingOptions();
@@ -243,6 +267,12 @@ public static class StepUpLoggingExtensions
 
             ApplyCommonEnrichers(lc, builder, opts);
 
+            var alwaysExport = (opts.AlwaysExportCategories ?? []).Where(c => !string.IsNullOrWhiteSpace(c)).ToArray();
+            if (alwaysExport.Length > 0)
+            {
+                lc.Enrich.With(new AlwaysExportEnricher(alwaysExport));
+            }
+
             // Bypass logger: exports at full verbosity independent of LevelSwitch.
             // Built directly here (not via DI) to avoid a circular deadlock:
             // AddSerilog registers Serilog.ILogger as a factory that depends on ILoggerFactory,
@@ -250,14 +280,28 @@ public static class StepUpLoggingExtensions
             var bypassLogger = CreateBypassLogger(builder, logFilePath, opts, gatedConfig);
             try { stepUpController.SetSummaryLogger(bypassLogger); } catch { }
 
-            // ADR 0007 warn-not-fail: in Auto mode a StepUpLevel that is not strictly more verbose than
+            // ADR 0007 warn-not-fail: in Auto or Diagnostic mode a StepUpLevel that is not strictly more verbose than
             // BaseLevel (numerically >= it, since a more verbose level is a LOWER LogEventLevel) means a
             // trigger cannot raise verbosity. AlwaysOn/Disabled ignore the ordering, so they never warn.
-            if (opts.Mode == StepUpMode.Auto && stepUpController.StepUpLevel >= stepUpController.BaseLevel)
+            if ((opts.Mode is StepUpMode.Auto or StepUpMode.Diagnostic) && stepUpController.StepUpLevel >= stepUpController.BaseLevel)
             {
                 bypassLogger.Warning(
-                    "StepUpLevel {StepUpLevel} is not more verbose than BaseLevel {BaseLevel}; step-up cannot increase verbosity in Auto mode.",
-                    stepUpController.StepUpLevel, stepUpController.BaseLevel);
+                    "StepUpLevel {StepUpLevel} is not more verbose than BaseLevel {BaseLevel}; step-up cannot increase verbosity in {Mode:l} mode.",
+                    stepUpController.StepUpLevel, stepUpController.BaseLevel, opts.Mode.ToString());
+            }
+
+            if (opts.Mode is StepUpMode.Diagnostic)
+            {
+                if (stepUpController.DiagnosticLevel >= stepUpController.BaseLevel)
+                {
+                    bypassLogger.Warning(
+                        "DiagnosticLevel {DiagnosticLevel} is not more verbose than BaseLevel {BaseLevel}; Diagnostic mode cannot increase verbosity.",
+                        stepUpController.DiagnosticLevel, stepUpController.BaseLevel);
+                }
+
+                bypassLogger.Warning(
+                    "StepUp Diagnostic mode active at {DiagnosticLevel} for {DurationMinutes} min until {ExpiresAt}",
+                    stepUpController.DiagnosticLevel, opts.DiagnosticDurationMinutes, stepUpController.DiagnosticExpiresAt);
             }
 
             // Step-up sink: gated by LevelSwitch, drops bypass-marked events to prevent duplication.
@@ -281,12 +325,21 @@ public static class StepUpLoggingExtensions
                 ? new PreErrorBufferSink(bypassLogger, opts.PreErrorBufferSize, opts.PreErrorMaxContexts, stepUpController.StepUpLevel)
                 : null;
 
+            var floors = (opts.CategoryFloors ?? [])
+                .Where(f => !string.IsNullOrWhiteSpace(f.Key))
+                .ToDictionary(f => f.Key, f => Enum.Parse<LogEventLevel>(f.Value, ignoreCase: true), StringComparer.Ordinal);
+            var categoryFloors = floors.Count == 0
+                ? null
+                : new CategoryFloorMap(floors, (opts.DiagnosticExemptCategories ?? []).Where(c => !string.IsNullOrWhiteSpace(c)).ToArray());
+
             lc.WriteTo.Sink(new StepUpSink(
                 stepUpInnerCfg.CreateLogger(),
                 stepUpController.LevelSwitch,
                 stepUpController.BaseLevel,
                 neverStepUp,
-                preErrorBuffer));
+                preErrorBuffer,
+                categoryFloors,
+                () => stepUpController.IsDiagnosticActive));
 
             if (preErrorBuffer is not null)
             {
@@ -294,7 +347,9 @@ public static class StepUpLoggingExtensions
             }
 
             // Trigger sink: observes Error/Fatal events and calls controller.Trigger() asynchronously.
-            lc.WriteTo.Sink(new StepUpTriggerSink(stepUpController));
+            lc.WriteTo.Sink(new StepUpTriggerSink(
+                stepUpController,
+                (opts.NeverTriggerCategories ?? []).Where(c => !string.IsNullOrWhiteSpace(c)).ToArray()));
 
             // Summary sink: routes IsRequestSummary=true events to bypass logger.
             lc.WriteTo.Sink(new SummarySink(bypassLogger));
@@ -376,10 +431,19 @@ public static class StepUpLoggingExtensions
            && o.PreErrorMaxContexts > 0
            && IsValidLevel(o.BaseLevel)
            && IsValidLevel(o.StepUpLevel)
-           && IsValidLevel(o.RequestSummaryLevel);
+           && IsValidLevel(o.RequestSummaryLevel)
+           && IsValidLevel(o.DiagnosticLevel)
+           && o.DiagnosticDurationMinutes is >= 1 and <= 120
+           && (o.CategoryFloors ?? []).All(f => !string.IsNullOrWhiteSpace(f.Key) && IsValidFloor(f.Value))
+           && (o.DiagnosticExemptCategories ?? [])
+               .Where(e => !string.IsNullOrWhiteSpace(e))
+               .All(e => (o.CategoryFloors ?? []).Keys.Any(k => CategoryPrefix.Matches(e, k)));
 
     private static bool IsValidLevel(string? value)
         => !string.IsNullOrWhiteSpace(value) && Enum.TryParse<LogEventLevel>(value, true, out _);
+
+    internal static bool IsValidFloor(string? value)
+        => IsValidLevel(value) && Enum.Parse<LogEventLevel>(value!, true) <= LogEventLevel.Warning;
 
     /// <summary>
     /// Compiles a redaction pattern with <see cref="RegexOptions.NonBacktracking"/> so matching is
@@ -983,6 +1047,23 @@ public static class StepUpLoggingExtensions
 /// pipeline's <c>ValidateOnStart</c>, which is what makes the host refuse to start.
 /// </summary>
 internal sealed class AuditLoggingPrerequisites;
+
+/// <summary>
+/// Names each <see cref="StepUpLoggingOptions.CategoryFloors"/> key whose floor is not a valid level
+/// at most <c>Warning</c>, so a floor can never hide an Error; the fixed-message check cannot name it.
+/// </summary>
+internal sealed class CategoryFloorCeilingValidator : IValidateOptions<StepUpLoggingOptions>
+{
+    /// <inheritdoc />
+    public ValidateOptionsResult Validate(string? name, StepUpLoggingOptions options)
+    {
+        var invalid = (options.CategoryFloors ?? [])
+            .Where(f => !StepUpLoggingExtensions.IsValidFloor(f.Value))
+            .Select(f => $"CategoryFloors:{f.Key} must be a valid level no higher than Warning, got '{f.Value}'.")
+            .ToList();
+        return invalid.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(invalid);
+    }
+}
 
 internal sealed record CompiledRedactionPatterns(Regex[] Patterns)
 {

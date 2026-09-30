@@ -37,6 +37,8 @@ public sealed class StepUpLoggingController : IDisposable
     // Authoritative record of step-up state. The LevelSwitch cannot stand in for it: when
     // BaseLevel == StepUpLevel the switch reads the same level whether stepped up or not.
     private bool _isSteppedUp;
+    private ITimer? _diagnosticTimer;
+    private bool _diagnosticActive;
 
     private static readonly Meter Meter = new("StepUpLogging", "1.0.0");
     private static readonly Counter<long> TriggerCounter = Meter.CreateCounter<long>("stepup_trigger_total", "count", "Total number of step-up triggers");
@@ -44,6 +46,7 @@ public sealed class StepUpLoggingController : IDisposable
     private static readonly Counter<long> CapReachedCounter = Meter.CreateCounter<long>("stepup_cap_reached_total", "count", "Number of forced step-downs after the continuous step-up cap was reached");
     private static readonly Counter<long> SuppressedTriggerCounter = Meter.CreateCounter<long>("stepup_trigger_suppressed_total", "count", "Number of triggers ignored while inside the post-cap cooldown window");
     private static readonly Histogram<double> StepUpDurationHistogram = Meter.CreateHistogram<double>("stepup_duration_seconds", "seconds", "Duration of step-up windows");
+    private static readonly UpDownCounter<int> DiagnosticActiveCounter = Meter.CreateUpDownCounter<int>("stepup_diagnostic_active", "state", "Whether Diagnostic mode is active (1) or not (0)");
     private readonly UpDownCounter<int> _activeStepUpCounter = Meter.CreateUpDownCounter<int>("stepup_active", "state", "Whether step-up is active (1) or not (0)");
 
     public LoggingLevelSwitch LevelSwitch { get; }
@@ -53,6 +56,15 @@ public sealed class StepUpLoggingController : IDisposable
 
     /// <summary>The resolved <c>StepUpLevel</c> — the level the switch is raised to on trigger.</summary>
     internal LogEventLevel StepUpLevel => _stepUpLevel;
+
+    /// <summary>The resolved <c>DiagnosticLevel</c>: the level the switch sits at while Diagnostic mode is active.</summary>
+    internal LogEventLevel DiagnosticLevel { get; }
+
+    /// <summary>When Diagnostic mode ends, fixed at construction. Unset outside <see cref="StepUpMode.Diagnostic"/>.</summary>
+    internal DateTimeOffset DiagnosticExpiresAt { get; }
+
+    /// <summary>True from construction in Diagnostic mode until its timer fires or the controller is disposed.</summary>
+    internal bool IsDiagnosticActive => Volatile.Read(ref _diagnosticActive);
 
     private readonly LogEventLevel _requestSummaryLevel;
     private Serilog.ILogger? _summaryLogger;
@@ -72,10 +84,14 @@ public sealed class StepUpLoggingController : IDisposable
     }
 
     /// <summary>
-    /// Test-only constructor allowing a monotonic clock to be injected. The <paramref name="clock"/>
-    /// must return timestamps in <see cref="Stopwatch"/> tick units (as produced by <see cref="Stopwatch.GetTimestamp"/>).
+    /// Constructor allowing a monotonic clock and a time provider to be injected; used by tests and the DI factory.
+    /// The <paramref name="clock"/> must return timestamps in <see cref="Stopwatch"/> tick units (as produced by <see cref="Stopwatch.GetTimestamp"/>).
     /// </summary>
-    internal StepUpLoggingController(StepUpLoggingOptions options, Serilog.ILogger? summaryLogger, Func<long> clock)
+    /// <param name="options">The step-up configuration.</param>
+    /// <param name="summaryLogger">The bypass logger for summaries and Warnings; the static <see cref="Log"/> when <see langword="null"/>.</param>
+    /// <param name="clock">The monotonic clock for step-up timing.</param>
+    /// <param name="timeProvider">Times the Diagnostic window only; <see cref="TimeProvider.System"/> when <see langword="null"/>.</param>
+    internal StepUpLoggingController(StepUpLoggingOptions options, Serilog.ILogger? summaryLogger, Func<long> clock, TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         _clock = clock;
@@ -91,15 +107,34 @@ public sealed class StepUpLoggingController : IDisposable
         _enableActivityInstrumentation = options.EnableActivityInstrumentation;
         _summaryLogger = summaryLogger;
         _requestSummaryLevel = Parse(options.RequestSummaryLevel, LogEventLevel.Information);
+        DiagnosticLevel = Parse(options.DiagnosticLevel, LogEventLevel.Debug);
 
         // Initialize level based on mode
         var initialLevel = _mode switch
         {
             StepUpMode.AlwaysOn => _stepUpLevel,
             StepUpMode.Disabled => _baseLevel,
+            StepUpMode.Diagnostic => DiagnosticLevel,
             _ => _baseLevel
         };
         LevelSwitch = new LoggingLevelSwitch(initialLevel);
+
+        if (_mode == StepUpMode.Diagnostic)
+        {
+            DiagnosticExpiresAt = StartDiagnostic(timeProvider, TimeSpan.FromMinutes(options.DiagnosticDurationMinutes));
+        }
+    }
+
+    private DateTimeOffset StartDiagnostic(TimeProvider? timeProvider, TimeSpan duration)
+    {
+        var time = timeProvider ?? TimeProvider.System;
+        lock (_gate)
+        {
+            Volatile.Write(ref _diagnosticActive, true);
+            DiagnosticActiveCounter.Add(1);
+            _diagnosticTimer = time.CreateTimer(_ => EndDiagnostic(), null, duration, Timeout.InfiniteTimeSpan);
+            return time.GetUtcNow() + duration;
+        }
     }
 
     /// <summary>
@@ -180,13 +215,35 @@ public sealed class StepUpLoggingController : IDisposable
         }
     }
 
+    /// <summary>
+    /// Gets whether logging is currently stepped up; always <see langword="true"/> while Diagnostic mode is active.
+    /// </summary>
     public bool IsSteppedUp => _mode switch
     {
         StepUpMode.AlwaysOn => true,
         StepUpMode.Disabled => false,
-        _ => _isSteppedUp
+        _ => IsDiagnosticActive || _isSteppedUp
     };
 
+    private void EndDiagnostic()
+    {
+        lock (_gate)
+        {
+            if (_disposed || !_diagnosticActive)
+            {
+                return;
+            }
+
+            Volatile.Write(ref _diagnosticActive, false);
+            LevelSwitch.MinimumLevel = _baseLevel;
+            DiagnosticActiveCounter.Add(-1);
+            (_summaryLogger ?? Log.ForContext<StepUpLoggingController>()).Warning("StepUp Diagnostic mode ended, running as Auto at {BaseLevel}", _baseLevel);
+        }
+    }
+
+    /// <summary>
+    /// Raises the level to <c>StepUpLevel</c> and extends the step-down timer; a no-op in AlwaysOn and Disabled mode, during the post-cap cooldown, and while Diagnostic mode is active.
+    /// </summary>
     public void Trigger()
     {
         // Ignore triggers in AlwaysOn or Disabled mode
@@ -197,7 +254,7 @@ public sealed class StepUpLoggingController : IDisposable
 
         lock (_gate)
         {
-            if (_disposed)
+            if (_disposed || _diagnosticActive)
             {
                 return;
             }
@@ -380,6 +437,13 @@ public sealed class StepUpLoggingController : IDisposable
             }
 
             _disposed = true;
+            _diagnosticTimer?.Dispose();
+            _diagnosticTimer = null;
+            if (_diagnosticActive)
+            {
+                Volatile.Write(ref _diagnosticActive, false);
+                DiagnosticActiveCounter.Add(-1);
+            }
 
             // Dispose and null timer - prevents further scheduling
             _timer?.Dispose();

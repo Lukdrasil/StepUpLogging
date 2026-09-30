@@ -23,7 +23,13 @@ public enum StepUpMode
     /// Disable step-up mechanism, always log at BaseLevel (minimal logging).
     /// Step-up triggers are ignored.
     /// </summary>
-    Disabled = 2
+    Disabled = 2,
+
+    /// <summary>
+    /// Entered only at startup: the switch sits at <see cref="StepUpLoggingOptions.DiagnosticLevel"/> for
+    /// <see cref="StepUpLoggingOptions.DiagnosticDurationMinutes"/>, then the controller runs as <see cref="Auto"/>.
+    /// </summary>
+    Diagnostic = 3
 }
 
 public sealed class StepUpLoggingOptions
@@ -270,4 +276,38 @@ public sealed class StepUpLoggingOptions
     /// is also set, carry unredacted SQL.
     /// </remarks>
     public string[] NeverStepUpCategories { get; set; } = ["Microsoft.EntityFrameworkCore.Database.Command"];
+
+    /// <summary>
+    /// <c>SourceContext</c> prefix to level. A floor raises the category's minimum to
+    /// <c>max(switch, floor)</c> and never makes it more verbose; the most specific prefix wins.
+    /// Keys must be non-blank and values valid levels no higher than <c>Warning</c>. Default: empty.
+    /// </summary>
+    public Dictionary<string, string> CategoryFloors { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Prefixes that keep their floor during <see cref="StepUpMode.Diagnostic"/>. Each non-blank entry
+    /// must be matched by a <see cref="CategoryFloors"/> key. Default: empty.
+    /// </summary>
+    public string[] DiagnosticExemptCategories { get; set; } = [];
+
+    /// <summary>
+    /// The level the switch sits at during <see cref="StepUpMode.Diagnostic"/>. Default: <c>"Debug"</c>.
+    /// </summary>
+    public string DiagnosticLevel { get; set; } = "Debug";
+
+    /// <summary>
+    /// How long <see cref="StepUpMode.Diagnostic"/> lasts, in minutes, from 1 to 120. Default: 30.
+    /// </summary>
+    public int DiagnosticDurationMinutes { get; set; } = 30;
+
+    /// <summary>
+    /// Prefixes whose events are exported once, at any level, through the immediate path. Default: empty.
+    /// </summary>
+    public string[] AlwaysExportCategories { get; set; } = [];
+
+    /// <summary>
+    /// Prefixes whose <c>Error</c>/<c>Fatal</c> events never trigger step-up; they still export and
+    /// flush their trace buffer. Default: empty.
+    /// </summary>
+    public string[] NeverTriggerCategories { get; set; } = [];
 }

@@ -84,6 +84,10 @@ check inside the sink: `StepUpSink` stays free of any `StepUpMode` dependency. I
 `Disabled` and `Auto` the list applies (in `Disabled` it is a no-op, since the switch never
 leaves `BaseLevel`).
 
+> **Amended by ADR 0024 (2026-09-30):** the list does not apply in `Diagnostic` either, and
+> `StepUpSink` learns that from a controller-owned diagnostic flag, never from `StepUpMode`.
+> See ADR 0024 D7.
+
 **5. Blank entries are filtered out at wiring time**, mirroring how `RedactionRegexes`
 filters empty patterns. A blank entry is a configuration typo: an empty-string prefix
 matches dot-rooted `SourceContext` values (those starting with `.`) and costs a comparison

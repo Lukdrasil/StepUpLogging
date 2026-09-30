@@ -84,6 +84,14 @@ builder.AddStepUpLogging(opts =>
 });
 ```
 
+To set options and extend the Serilog configuration in one call, pass both callbacks:
+
+```csharp
+builder.AddStepUpLogging(
+    opts => opts.StepUpLevel = "Debug",
+    (services, lc) => lc.Enrich.WithProperty("Region", "eu-west"));
+```
+
 **Option 4: Aspire ServiceDefaults Integration**
 
 When using Aspire ServiceDefaults which already configures Serilog, use the `UseStepUpLogging()` extension method on `LoggerConfiguration`:
@@ -293,6 +301,8 @@ For other OTLP options (like additional headers or resource attributes), use env
 - Always logs at `BaseLevel` (Warning)
 - Step-up mechanism is completely disabled
 - Error triggers are ignored
+
+**`Diagnostic`** logs at `DiagnosticLevel` for `DiagnosticDurationMinutes` after startup, then runs as `Auto`; see [Diagnostic mode](#diagnostic-mode).
 
 ```json
 // Development configuration example
@@ -1047,13 +1057,19 @@ See full [performance test results](tests/k6/performance_test_results.md).
 | Option | Default | Environment Variable | Description |
 |---|---|---|---|
 | **Step-Up Behavior** |
-| `Mode` | `Auto` | - | Step-up mode: `Auto`, `AlwaysOn`, `Disabled` |
+| `Mode` | `Auto` | - | Step-up mode: `Auto`, `AlwaysOn`, `Disabled`, `Diagnostic` |
 | `BaseLevel` | `"Warning"` | - | Normal log level |
 | `StepUpLevel` | `"Information"` | - | Elevated log level during step-up |
 | `DurationSeconds` | `180` | - | How long step-up remains active (Auto mode) |
 | `MaxContinuousStepUpSeconds` | `0` (disabled) | - | Upper bound on a single continuous step-up window; forces a step-down and opens a cooldown when exceeded. `0` disables the cap. Must be `0` or `>= DurationSeconds`. |
 | `StepUpCooldownSeconds` | `300` | - | Seconds triggers are ignored after the cap forces a step-down; ignored when the cap is disabled |
+| `DiagnosticLevel` | `"Debug"` | - | Level the switch sits at while Diagnostic mode is active |
+| `DiagnosticDurationMinutes` | `30` | - | How long Diagnostic mode lasts after startup, from 1 to 120 minutes |
 | `NeverStepUpCategories` | `["Microsoft.EntityFrameworkCore.Database.Command"]` | - | `SourceContext` prefixes the step-up never raises above `BaseLevel` (see below) |
+| `CategoryFloors` | `{}` | - | `SourceContext` prefix to minimum level; a matching category exports at `max(switch, floor)`. Floors are capped at `Warning` (see Category floors) |
+| `DiagnosticExemptCategories` | `[]` | - | `CategoryFloors` prefixes that keep their floor during Diagnostic mode; each must be matched by a `CategoryFloors` key |
+| `AlwaysExportCategories` | `[]` | - | `SourceContext` prefixes whose events are exported once, at any level, through the immediate path (see Always-export categories) |
+| `NeverTriggerCategories` | `[]` | - | `SourceContext` prefixes whose `Error`/`Fatal` events never trigger step-up; they still export and flush their trace buffer (see Never-trigger categories) |
 | **Pre-Error Buffering** |
 | `EnablePreErrorBuffering` | `true` | - | Enable/disable pre-error buffering |
 | `PreErrorBufferSize` | `100` | - | Max events per request before oldest are dropped |
@@ -1106,6 +1122,11 @@ continues with a `.` (so `…Database.Command` also covers `…Database.Command.
 The list has no effect in `StepUpMode.AlwaysOn`: that mode never steps up, so there is nothing
 to suppress, and a developer running it locally wants to see the SQL.
 
+`StepUpMode.Diagnostic` also lifts the pin for its whole window. With the default list, EF
+`Database.Command` SQL (and its parameters when `EnableSensitiveDataLogging` is on) is exported
+for up to 120 minutes. To keep it quiet during the window, add a `CategoryFloors` entry for the
+category and a `DiagnosticExemptCategories` entry for it (see [Diagnostic mode](#diagnostic-mode)).
+
 One caveat: the deny-list gates the export path only. The pre-error buffer is deliberately **not**
 filtered — when it flushes on an error it still carries the SQL that led up to that error, and
 unless you set `RedactLogEventProperties` it carries it **unredacted**: the SQL command text is a
@@ -1123,6 +1144,120 @@ list empty:
   }
 }
 ```
+
+## Category Control
+
+### Category floors
+
+`CategoryFloors` maps a `SourceContext` prefix to a minimum level. A matching category exports at
+`max(switch, floor)`, so a floor only ever hides events, never adds them: a floor below the current
+switch level changes nothing. Use it to keep a noisy category quiet while the rest of the app is
+stepped up.
+
+```json
+{
+  "SerilogStepUp": {
+    "CategoryFloors": {
+      "Microsoft.AspNetCore": "Warning",
+      "Microsoft.AspNetCore.Hosting.Diagnostics": "Information"
+    }
+  }
+}
+```
+
+- A prefix matches a category equal to it, or one that begins with it followed by a `.`, ordinal and
+  case-sensitive, the same rule as `NeverStepUpCategories`.
+- When several keys match, the most specific (longest) one decides, so a sub-category can sit below
+  its parent's floor.
+- Floors apply in every `Mode`, `AlwaysOn` and `Disabled` included. When both a floor and a
+  `NeverStepUpCategories` entry apply, the higher minimum wins.
+- A floor above `Warning` fails startup, so a floor never hides an `Error`.
+- An event a floor rejects is a held-back event: with `EnablePreErrorBuffering` on, an `Error` in the
+  same trace exports it exactly once if it is at or above `StepUpLevel`. Below `StepUpLevel` it is
+  dropped, for example an exempt floored `Debug` event during Diagnostic mode.
+- During Diagnostic mode every floor is lifted except for categories under a
+  `DiagnosticExemptCategories` prefix, which keep the floor of their most specific matching key.
+  An exempt prefix that no `CategoryFloors` key matches fails startup.
+
+### Always-export categories
+
+`AlwaysExportCategories` lists `SourceContext` prefixes whose events are exported once, at any
+level, whatever the current step-up state. A matching event is marked `IsImmediate=true` and takes
+the same path as `LogImmediate`: the step-up gate skips it and the pre-error buffer never holds it,
+so a later error in the same trace does not export it a second time. Matching uses the same prefix
+rule as `NeverStepUpCategories`. With `RedactLogEventProperties` on, these events are redacted like
+any other. Blank entries are ignored. Default: empty. A root `Serilog:MinimumLevel:Override` or a
+`Logging:LogLevel` filter set above the listed category's level still drops the event before the
+enricher sees it, so the list cannot bring such an event back.
+
+```json
+{
+  "SerilogStepUp": {
+    "BaseLevel": "Warning",
+    "AlwaysExportCategories": [ "Microsoft.Hosting.Lifetime" ]
+  }
+}
+```
+
+With this configuration the host's "Application started" Information is exported although
+`BaseLevel` is Warning.
+
+### Never-trigger categories
+
+`NeverTriggerCategories` (default `[]`) lists `SourceContext` prefixes whose `Error` and `Fatal`
+events never trigger step-up. Use it for a category that logs errors it recovers from itself,
+such as a retry library, so every transient failure does not raise the level for the whole
+service.
+
+Only the trigger is skipped. The error itself is exported, and it still flushes the held-back
+events of its trace from the pre-error buffer. Matching follows the same prefix rule as
+`NeverStepUpCategories`: the category equals the prefix, or starts with it followed by a `.`.
+Blank entries are ignored.
+
+```json
+{
+  "SerilogStepUp": {
+    "NeverTriggerCategories": ["Polly"]
+  }
+}
+```
+
+### Diagnostic mode
+
+`Mode: "Diagnostic"` raises verbosity for a fixed window after startup, for example to watch a new
+deployment. It is entered only at startup; there is no runtime API.
+
+```json
+{
+  "SerilogStepUp": {
+    "Mode": "Diagnostic",
+    "DiagnosticLevel": "Debug",
+    "DiagnosticDurationMinutes": 30
+  }
+}
+```
+
+- The switch starts at `DiagnosticLevel` and stays there for `DiagnosticDurationMinutes` (1 to 120).
+  When the window ends, the controller runs as `Auto` at `BaseLevel`.
+- While Diagnostic is active, `Trigger()` does nothing and `IsSteppedUp` is `true`. Nothing carries
+  over: an error during the window does not start a step-up after it ends.
+- Every floor is lifted during the window except for `DiagnosticExemptCategories` prefixes (see
+  [Category floors](#category-floors)).
+- The `NeverStepUpCategories` pin is lifted during the window. With the default list, EF
+  `Database.Command` SQL (and its parameters when `EnableSensitiveDataLogging` is on) is exported
+  for the whole window, up to 120 minutes. To keep it quiet, add a `CategoryFloors` entry for
+  `Microsoft.EntityFrameworkCore.Database.Command` (for example `"Warning"`) and list the same
+  prefix in `DiagnosticExemptCategories`.
+- The window is timed by the `TimeProvider` registered in DI, or `TimeProvider.System` when none is.
+- A start Warning is written at startup and an end Warning when the window ends, both through the
+  bypass logger: `StepUp Diagnostic mode active at {DiagnosticLevel} for {DurationMinutes} min until {ExpiresAt}`
+  and `StepUp Diagnostic mode ended, running as Auto at {BaseLevel}`. Disposing the host before the
+  window ends writes no end Warning.
+- A startup Warning is written when `DiagnosticLevel` is not more verbose than `BaseLevel`, since the
+  mode then cannot increase verbosity.
+- `stepup_diagnostic_active` reads 1 during the window and 0 after it; `stepup_active` stays 0.
+- With `CaptureRequestBody=true`, request bodies are captured (still redacted) for the whole window,
+  because body capture follows `IsSteppedUp`.
 
 ## Security
 
@@ -1205,6 +1340,7 @@ Exposed metrics for monitoring:
 
 - `stepup_trigger_total` - Total number of step-up triggers
 - `stepup_active` - Whether step-up is currently active (0 or 1)
+- `stepup_diagnostic_active` - Whether Diagnostic mode is currently active (0 or 1); `stepup_active` stays 0 during Diagnostic
 - `stepup_duration_seconds` - Duration histogram of step-up windows
 - `request_body_captured_total` - Number of requests with captured body
 - `request_redaction_applied_total` - Number of requests with redaction applied
