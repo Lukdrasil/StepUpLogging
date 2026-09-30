@@ -30,7 +30,7 @@ public class DiagnosticContextRegistrationTests
         app.UseStepUpRequestLogging();
         app.MapGet("/ping", () => "pong");
 
-        await app.StartAsync();
+        await app.StartAsync(TestContext.Current.CancellationToken);
 
         using var client = app.GetTestClient();
 
@@ -38,9 +38,9 @@ public class DiagnosticContextRegistrationTests
         // the first request; that middleware requires a DiagnosticContext from DI.
         // If DiagnosticContext were unregistered, the request would fault instead of
         // returning 200 — so a successful response proves the middleware activated.
-        var response = await client.GetAsync("/ping");
+        var response = await client.GetAsync("/ping", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
-        await app.StopAsync();
+        await app.StopAsync(TestContext.Current.CancellationToken);
     }
 }

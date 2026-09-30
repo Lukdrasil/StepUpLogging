@@ -103,7 +103,7 @@ namespace Lukdrasil.StepUpLogging.Tests
             var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
             request.Headers.TryAddWithoutValidation("User-Agent", "Agent/1.0 token=secret-abc123");
 
-            await client.SendAsync(request);
+            await client.SendAsync(request, TestContext.Current.CancellationToken);
 
             Assert.NotNull(capture.LastEvent);
             var logEvent = capture.LastEvent;
@@ -124,7 +124,7 @@ namespace Lukdrasil.StepUpLogging.Tests
             var client = host.GetTestClient();
 
             var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
-            await client.SendAsync(request);
+            await client.SendAsync(request, TestContext.Current.CancellationToken);
 
             Assert.NotNull(capture.LastEvent);
             var logEvent = capture.LastEvent;
@@ -140,7 +140,7 @@ namespace Lukdrasil.StepUpLogging.Tests
             var client = host.GetTestClient();
 
             var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
-            await client.SendAsync(request);
+            await client.SendAsync(request, TestContext.Current.CancellationToken);
 
             Assert.NotNull(capture.LastEvent);
             var logEvent = capture.LastEvent;
@@ -160,7 +160,7 @@ namespace Lukdrasil.StepUpLogging.Tests
             var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
             request.Headers.Add("X-Forwarded-For", "203.0.113.42, 198.51.100.100");
 
-            await client.SendAsync(request);
+            await client.SendAsync(request, TestContext.Current.CancellationToken);
 
             Assert.NotNull(capture.LastEvent);
             var logEvent = capture.LastEvent;
@@ -181,7 +181,7 @@ namespace Lukdrasil.StepUpLogging.Tests
             var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
             request.Headers.Add("X-Forwarded-For", "203.0.113.42, 198.51.100.100");
 
-            await client.SendAsync(request);
+            await client.SendAsync(request, TestContext.Current.CancellationToken);
 
             Assert.NotNull(capture.LastEvent);
             var logEvent = capture.LastEvent;
@@ -201,7 +201,7 @@ namespace Lukdrasil.StepUpLogging.Tests
             var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
             request.Headers.Add("X-Forwarded-For", "203.0.113.42, 198.51.100.100");
 
-            await client.SendAsync(request);
+            await client.SendAsync(request, TestContext.Current.CancellationToken);
 
             Assert.NotNull(capture.LastEvent);
             var logEvent = capture.LastEvent;
@@ -220,7 +220,7 @@ namespace Lukdrasil.StepUpLogging.Tests
             var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
             request.Headers.Add("X-Forwarded-For", "192.0.2.1, 192.0.2.2, 192.0.2.3");
 
-            await client.SendAsync(request);
+            await client.SendAsync(request, TestContext.Current.CancellationToken);
 
             Assert.NotNull(capture.LastEvent);
             var logEvent = capture.LastEvent;
@@ -238,7 +238,7 @@ namespace Lukdrasil.StepUpLogging.Tests
             var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
             request.Headers.TryAddWithoutValidation("X-Forwarded-For", "secret-abc123");
 
-            await client.SendAsync(request);
+            await client.SendAsync(request, TestContext.Current.CancellationToken);
 
             Assert.NotNull(capture.LastEvent);
             var logEvent = capture.LastEvent;
@@ -259,7 +259,7 @@ namespace Lukdrasil.StepUpLogging.Tests
             var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
             request.Headers.TryAddWithoutValidation("X-Forwarded-For", "   ");
 
-            await client.SendAsync(request);
+            await client.SendAsync(request, TestContext.Current.CancellationToken);
 
             Assert.NotNull(capture.LastEvent);
             var logEvent = capture.LastEvent;
@@ -276,7 +276,7 @@ namespace Lukdrasil.StepUpLogging.Tests
             var client = host.GetTestClient();
 
             var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
-            await client.SendAsync(request);
+            await client.SendAsync(request, TestContext.Current.CancellationToken);
 
             Assert.NotNull(capture.LastEvent);
             var jti = StringProperty(capture.LastEvent!, "Jti");
@@ -296,7 +296,7 @@ namespace Lukdrasil.StepUpLogging.Tests
             var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
             request.Headers.Add("X-Forwarded-For", "203.0.113.42");
 
-            await client.SendAsync(request);
+            await client.SendAsync(request, TestContext.Current.CancellationToken);
 
             Assert.NotNull(capture.LastEvent);
             var logEvent = capture.LastEvent;
@@ -320,7 +320,7 @@ namespace Lukdrasil.StepUpLogging.Tests
             var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
             // No X-Forwarded-For header: even with TrustForwardedHeaders=true, ExtractClientAddresses
             // falls back to the same unredacted Connection.RemoteIpAddress branch.
-            await client.SendAsync(request);
+            await client.SendAsync(request, TestContext.Current.CancellationToken);
 
             Assert.NotNull(capture.LastEvent);
             var logEvent = capture.LastEvent;

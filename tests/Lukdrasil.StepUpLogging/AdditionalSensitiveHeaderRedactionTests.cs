@@ -69,12 +69,12 @@ namespace Lukdrasil.StepUpLogging.Tests
                         }))
                     .Build();
 
-                await host.StartAsync();
+                await host.StartAsync(TestContext.Current.CancellationToken);
                 using var client = host.GetTestClient();
                 // Client sends a different casing than the configured "X-Api-Token".
                 client.DefaultRequestHeaders.Add("x-api-token", secret);
-                await client.GetAsync("/api/test");
-                await Task.Delay(50);
+                await client.GetAsync("/api/test", TestContext.Current.CancellationToken);
+                await Task.Delay(50, TestContext.Current.CancellationToken);
 
                 // Log.Logger is global and xunit runs test classes in parallel, so other tests'
                 // completion events can land in this sink. Select the event carrying our header.
