@@ -3,8 +3,9 @@
 v5.0.0 is a **breaking** release with two breaking changes. First, `AddStepUpLogging` no longer
 assigns Serilog's static `Log.Logger`, and the step-up and step-down warnings are now written
 through the bypass logger instead of the static `Log.Warning`. Second, a configured `ExcludePaths`
-now replaces the built-in defaults instead of being appended to them. Both compile unchanged, so
-read this even if your build is green.
+now replaces the built-in defaults instead of being appended to them. `Log.Logger` compiles
+unchanged, and `ExcludePaths` does for configuration-only hosts, while code that reads
+`ExcludePaths` sees `string[]?`. Read this even if your build is green.
 
 ## `Log.Logger` is no longer assigned by default
 
@@ -51,6 +52,14 @@ exclusion off (issue #32).
 
 ```json
 { "SerilogStepUp": { "ExcludePaths": [ "/healthz", "/metrics", "/health", "/your/path" ] } }
+```
+
+**In code.** The property is now `string[]?` and is `null` inside `configureOptions` unless
+configuration sets it, because the defaults are applied after the callback runs. Assign the whole
+list, and do not read the old value to append to it:
+
+```csharp
+builder.AddStepUpLogging(o => o.ExcludePaths = ["/healthz", "/metrics", "/health", "/ready"]);
 ```
 
 An explicit `[]` excludes nothing. Hosts that do not configure `ExcludePaths` need no change.
