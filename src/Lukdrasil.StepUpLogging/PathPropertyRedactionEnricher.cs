@@ -28,8 +28,8 @@ internal sealed class PathPropertyRedactionEnricher(CompiledRedactionPatterns pa
 
     private void Redact(LogEvent logEvent, ILogEventPropertyFactory propertyFactory, string name)
     {
-        if (!logEvent.Properties.TryGetValue(name, out var value)
-            || value is not ScalarValue { Value: string or PathString } scalar)
+        var scalar = logEvent.Properties.GetValueOrDefault(name) as ScalarValue;
+        if (scalar?.Value is not (string or PathString))
         {
             return;
         }
