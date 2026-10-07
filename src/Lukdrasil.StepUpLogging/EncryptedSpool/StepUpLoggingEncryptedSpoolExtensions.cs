@@ -31,7 +31,7 @@ public static class StepUpLoggingEncryptedSpoolExtensions
     /// The consumer's own <see cref="IAuditPayloadEncryptor"/> — which owns all key handling — is
     /// registered separately, in <c>Program.cs</c>; this method resolves it but never configures or
     /// touches key material (ADR 0017 D3). Register it as a singleton, thread-safe: the sink that
-    /// calls it is itself a singleton, calling it concurrently outside its own write gate. A
+    /// calls it is itself a singleton, calling it concurrently from many writers. A
     /// <c>Scoped</c> registration becomes a captive dependency the moment this method's singleton
     /// sink resolves it — promoted to the root scope for the process's lifetime in Production, and
     /// refused outright by scope validation in Development.

@@ -71,16 +71,7 @@ internal sealed class SpoolWriter
     /// <c>HttpContext.RequestAborted</c>, which would let a disconnecting client erase its own
     /// audit trail (ADR 0016 D6).
     /// </summary>
-    /// <returns>
-    /// The number of bytes the record now occupies in the spool, so a caller keeping the spool
-    /// within a cap does not have to re-read the directory to learn what its own write cost.
-    /// </returns>
-    public async Task<long> WriteAsync(SpoolEnvelope envelope)
-    {
-        var record = Prepare(envelope);
-        await WriteAsync(record).ConfigureAwait(false);
-        return record.Contents.Length;
-    }
+    public Task WriteAsync(SpoolEnvelope envelope) => WriteAsync(Prepare(envelope));
 
     private static async Task WriteDurablyAsync(string path, byte[] contents)
     {
