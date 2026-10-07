@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace Lukdrasil.StepUpLogging.Audit.EncryptedSpool;
 
-// af-stub: red step for issue #69.
+/// <summary>One spool record ready to write: the file name it is stored under and its exact bytes.</summary>
 internal readonly record struct SpoolRecord(string FileName, byte[] Contents);
 
 /// <summary>
@@ -16,6 +16,7 @@ internal readonly record struct SpoolRecord(string FileName, byte[] Contents);
 internal sealed class SpoolWriter
 {
     private readonly string _spoolDirectory;
+    private readonly Func<string, byte[], Task> _writeDurably;
 
     /// <summary>
     /// Prepares the spool directory and recovers any <c>.tmp</c> file left behind by a crash. Its
@@ -26,21 +27,43 @@ internal sealed class SpoolWriter
     /// mid-write, is deleted.
     /// </summary>
     public SpoolWriter(string spoolDirectory)
+        : this(spoolDirectory, WriteDurablyAsync)
+    {
+    }
+
+    /// <summary>
+    /// As the public constructor, with the durable write replaced — the seam a test uses to hold a
+    /// write mid-flight and prove that other writes do not wait for it.
+    /// </summary>
+    internal SpoolWriter(string spoolDirectory, Func<string, byte[], Task> writeDurably)
     {
         _spoolDirectory = spoolDirectory;
+        _writeDurably = writeDurably;
         Directory.CreateDirectory(spoolDirectory);
         RecoverOrphanedTemporaryFiles();
     }
 
-    // af-stub: red step for issue #69; the implementer routes WriteAsync through writeDurably.
-    internal SpoolWriter(string spoolDirectory, Func<string, byte[], Task> writeDurably)
-        : this(spoolDirectory)
+    /// <summary>
+    /// Serializes <paramref name="envelope"/> into the bytes and file name it is spooled under, so
+    /// the caller knows what the record will cost before it reserves room for it.
+    /// </summary>
+    internal static SpoolRecord Prepare(SpoolEnvelope envelope) =>
+        new(SpoolFile.NameFor(envelope), JsonSerializer.SerializeToUtf8Bytes(envelope));
+
+    /// <summary>Writes <paramref name="record"/> and returns only once it is durably on disk and in place.</summary>
+    public async Task WriteAsync(SpoolRecord record)
     {
+        var envelopePath = Path.Combine(_spoolDirectory, record.FileName);
+        var temporaryPath = Path.ChangeExtension(envelopePath, SpoolFile.TemporaryExtension);
+
+        await _writeDurably(temporaryPath, record.Contents).ConfigureAwait(false);
+
+        // The rename is atomic on one volume, so a reader sees the record whole or not at all. The
+        // directory entry itself is not fsynced — .NET has no portable API for that — so a power
+        // loss right here can cost the rename, never the record's bytes (ADR 0020 D1): the next
+        // start-up's recovery sweep re-attempts exactly this rename for a `.tmp` that survived.
+        File.Move(temporaryPath, envelopePath);
     }
-
-    internal static SpoolRecord Prepare(SpoolEnvelope envelope) => throw new NotImplementedException(); // af-stub
-
-    public Task WriteAsync(SpoolRecord record) => throw new NotImplementedException(); // af-stub
 
     /// <summary>
     /// Writes <paramref name="envelope"/> and returns only once it is durably on disk. There is
@@ -54,19 +77,9 @@ internal sealed class SpoolWriter
     /// </returns>
     public async Task<long> WriteAsync(SpoolEnvelope envelope)
     {
-        var envelopePath = Path.Combine(_spoolDirectory, SpoolFile.NameFor(envelope));
-        var temporaryPath = Path.ChangeExtension(envelopePath, SpoolFile.TemporaryExtension);
-        var contents = JsonSerializer.SerializeToUtf8Bytes(envelope);
-
-        await WriteDurablyAsync(temporaryPath, contents);
-
-        // The rename is atomic on one volume, so a reader sees the record whole or not at all. The
-        // directory entry itself is not fsynced — .NET has no portable API for that — so a power
-        // loss right here can cost the rename, never the record's bytes (ADR 0020 D1): the next
-        // start-up's recovery sweep re-attempts exactly this rename for a `.tmp` that survived.
-        File.Move(temporaryPath, envelopePath);
-
-        return contents.Length;
+        var record = Prepare(envelope);
+        await WriteAsync(record).ConfigureAwait(false);
+        return record.Contents.Length;
     }
 
     private static async Task WriteDurablyAsync(string path, byte[] contents)

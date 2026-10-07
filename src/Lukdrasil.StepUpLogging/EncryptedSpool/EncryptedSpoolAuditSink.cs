@@ -17,28 +17,13 @@ internal sealed class EncryptedSpoolAuditSink(
     SpoolWriter writer,
     SpoolUsageTracker usageTracker,
     IAuditPayloadEncryptor encryptor,
+    TimeProvider timeProvider,
     ILogger<EncryptedSpoolAuditSink> logger) : IAuditEventSink, IDisposable
 {
     private readonly EncryptedSpoolOptions _options = options.Value;
 
-    // A semaphore rather than a lock: the section it guards awaits the spool write, and no lock
-    // can be held across an await.
-    private readonly SemaphoreSlim _spoolGate = new(1, 1);
-
-    /// <summary>Guarded by <see cref="_spoolGate"/>, so the warning is logged on crossing the threshold, once.</summary>
-    private bool _wasAtWarnThreshold;
-
-    // af-stub: red step for issue #69; the implementer makes this the primary constructor.
-    internal EncryptedSpoolAuditSink(
-        IOptions<EncryptedSpoolOptions> options,
-        SpoolWriter writer,
-        SpoolUsageTracker usageTracker,
-        IAuditPayloadEncryptor encryptor,
-        TimeProvider timeProvider,
-        ILogger<EncryptedSpoolAuditSink> logger)
-        : this(options, writer, usageTracker, encryptor, logger)
-    {
-    }
+    // Owned here, not injected, so its Critical lines keep this sink's logger category.
+    private readonly DroppedRecordLog _dropLog = new(options.Value, timeProvider, logger);
 
     /// <inheritdoc />
     public async ValueTask<AuditWriteResult> WriteAsync(AuditEvent auditEvent)
@@ -47,42 +32,34 @@ internal sealed class EncryptedSpoolAuditSink(
 
         // Encrypting before the spool's cap is consulted costs a wasted port call for a record that
         // then turns out to be dropped. The other order costs audit records: the verdict would be
-        // taken outside the gate, or the gate would be held across a consumer's port call, and a
-        // record dropped for room the drain worker freed a microsecond later is gone for good.
+        // taken before the encrypted size is known, and a record dropped for room the drain worker
+        // freed a microsecond later is gone for good.
         var encryptedPayload = await EncryptAsync(payload).ConfigureAwait(false);
-        var envelope = new SpoolEnvelope
+        var record = SpoolWriter.Prepare(new SpoolEnvelope
         {
             EventId = auditEvent.EventId,
             CreatedUtc = auditEvent.TimestampUtc,
             Payload = encryptedPayload
-        };
+        });
 
-        // Measuring and writing under one gate is what makes the cap hold: concurrent writers that
-        // each measured a spool one record short of full would otherwise all write into it. It
-        // costs the writes their concurrency, against an fsync that already dominates them
-        // (ADR 0020 consequences) and an audit volume measured in mutating operations.
-        await _spoolGate.WaitAsync().ConfigureAwait(false);
-        try
+        // Reserving room, not holding a gate, is what makes the cap hold: concurrent writers each
+        // reserve their record before writing it, so none of them is admitted into room another one
+        // has already taken, and none waits for another's fsync (issue #69).
+        var verdict = usageTracker.TryReserve(record.Contents.Length);
+        ReportReachingWarnThreshold(verdict);
+
+        if (!verdict.Admitted)
         {
-            var usage = usageTracker.Read();
-            ReportReachingWarnThreshold(usage);
-
-            if (usage.IsFull)
-            {
-                return Drop(auditEvent, usage);
-            }
-
-            usageTracker.Recorded(await WriteToSpoolAsync(envelope).ConfigureAwait(false));
-            return AuditWriteResult.Stored;
+            return Drop(auditEvent, verdict.Usage);
         }
-        finally
-        {
-            _spoolGate.Release();
-        }
+
+        await WriteToSpoolAsync(record).ConfigureAwait(false);
+        _dropLog.Stored();
+        return AuditWriteResult.Stored;
     }
 
     /// <inheritdoc />
-    public void Dispose() => _spoolGate.Dispose();
+    public void Dispose() => _dropLog.Dispose();
 
     private async ValueTask<byte[]> EncryptAsync(byte[] payload)
     {
@@ -99,19 +76,21 @@ internal sealed class EncryptedSpoolAuditSink(
         }
     }
 
-    private async Task<long> WriteToSpoolAsync(SpoolEnvelope envelope)
+    private async Task WriteToSpoolAsync(SpoolRecord record)
     {
         try
         {
-            return await writer.WriteAsync(envelope).ConfigureAwait(false);
+            await writer.WriteAsync(record).ConfigureAwait(false);
         }
         catch
         {
             // A write that failed part-way leaves a `.tmp` occupying the spool until the next
-            // start-up sweep, so what is on disk is no longer what this sink has added up.
-            usageTracker.Invalidate();
+            // start-up sweep, never bigger than the record, so the record stays counted.
+            usageTracker.Abandon(record.Contents.Length);
             throw;
         }
+
+        usageTracker.Commit(record.Contents.Length);
     }
 
     /// <summary>
@@ -143,13 +122,7 @@ internal sealed class EncryptedSpoolAuditSink(
     private AuditWriteResult Drop(AuditEvent auditEvent, SpoolUsage usage)
     {
         EncryptedSpoolMetrics.RejectedFullCounter.Add(1);
-
-        // Critical, and once per lost record: this is deliberate, bounded, visible loss of an audit
-        // record, and the only trace of it left is here and on the counter (ADR 0020 D6).
-        logger.LogCritical(
-            "Audit record {EventId} was dropped: the spool at {SpoolDirectory} is full with {SpooledRecords} of {SpoolMaxEntries} records ({SpooledBytes} of {SpoolMaxBytes} bytes). The record is lost and no retry will bring it back — the spool drains only as fast as the audit endpoint accepts it.",
-            auditEvent.EventId, _options.SpoolDirectory, usage.Records, _options.SpoolMaxEntries, usage.Bytes, _options.SpoolMaxBytes);
-
+        _dropLog.Dropped(auditEvent.EventId, usage);
         return AuditWriteResult.Dropped;
     }
 
@@ -157,16 +130,14 @@ internal sealed class EncryptedSpoolAuditSink(
     /// Logs the crossing into the warn zone rather than every write above it, which past half a cap
     /// would be one ERROR per audited operation.
     /// </summary>
-    private void ReportReachingWarnThreshold(SpoolUsage usage)
+    private void ReportReachingWarnThreshold(ReservationVerdict verdict)
     {
-        if (usage.IsAtWarnThreshold && !_wasAtWarnThreshold)
+        if (verdict.CrossedWarnThreshold)
         {
             logger.LogError(
                 "The audit spool at {SpoolDirectory} holds {SpooledRecords} of {SpoolMaxEntries} records ({SpooledBytes} of {SpoolMaxBytes} bytes), at least half its cap. Spooled records are never rotated out, so once it is full the new audit records are the ones dropped.",
-                _options.SpoolDirectory, usage.Records, _options.SpoolMaxEntries, usage.Bytes, _options.SpoolMaxBytes);
+                _options.SpoolDirectory, verdict.Usage.Records, _options.SpoolMaxEntries, verdict.Usage.Bytes, _options.SpoolMaxBytes);
         }
-
-        _wasAtWarnThreshold = usage.IsAtWarnThreshold;
     }
 }
 

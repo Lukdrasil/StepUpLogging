@@ -9,6 +9,9 @@ namespace Lukdrasil.StepUpLogging.Audit.EncryptedSpool;
 /// </summary>
 internal sealed class EncryptedSpoolOptionsValidator : IValidateOptions<EncryptedSpoolOptions>
 {
+    /// <summary>The largest batch a receiver is asked to take in one request.</summary>
+    private const int MaxDeliveryBatchSize = 1024;
+
     /// <inheritdoc />
     public ValidateOptionsResult Validate(string? name, EncryptedSpoolOptions options)
     {
@@ -26,6 +29,8 @@ internal sealed class EncryptedSpoolOptionsValidator : IValidateOptions<Encrypte
         RequirePositive(options.ShutdownDrainTimeout, nameof(EncryptedSpoolOptions.ShutdownDrainTimeout), failures);
         RequirePositive(options.UnreadableRetryLimit, nameof(EncryptedSpoolOptions.UnreadableRetryLimit), failures);
         RequireValidHttpClientTimeout(options.DeliveryTimeout, failures);
+        RequireInRange(options.DeliveryBatchSize, 1, MaxDeliveryBatchSize, nameof(EncryptedSpoolOptions.DeliveryBatchSize), failures);
+        RequirePositive(options.SpoolFullRecheckInterval, nameof(EncryptedSpoolOptions.SpoolFullRecheckInterval), failures);
 
         return failures.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(failures);
     }
@@ -48,6 +53,14 @@ internal sealed class EncryptedSpoolOptionsValidator : IValidateOptions<Encrypte
         if (value.CompareTo(default) <= 0)
         {
             failures.Add($"{nameof(EncryptedSpoolOptions)}.{optionName} must be greater than zero.");
+        }
+    }
+
+    private static void RequireInRange(int value, int minimum, int maximum, string optionName, List<string> failures)
+    {
+        if (value < minimum || value > maximum)
+        {
+            failures.Add($"{nameof(EncryptedSpoolOptions)}.{optionName} must be between {minimum} and {maximum}.");
         }
     }
 

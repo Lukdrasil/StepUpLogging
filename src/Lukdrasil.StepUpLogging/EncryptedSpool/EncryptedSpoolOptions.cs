@@ -20,7 +20,9 @@ public sealed class EncryptedSpoolOptions
 
     /// <summary>
     /// The absolute base URL of the audit endpoint spooled records are delivered to, without a
-    /// default. The drain worker posts one record per request to <c>{EndpointBaseUrl}/audit</c>.
+    /// default. The drain worker posts one record per request to <c>{EndpointBaseUrl}/audit</c>, or,
+    /// with <see cref="DeliveryBatchSize"/> above 1, up to that many per request to
+    /// <c>{EndpointBaseUrl}/audit/batch</c>.
     /// Whatever credentials the endpoint requires are configured on the named
     /// <see cref="HttpClient"/> the worker resolves, not here: the worker sends what it is given and
     /// never handles a credential itself.
@@ -51,8 +53,9 @@ public sealed class EncryptedSpoolOptions
     /// <summary>
     /// The size the spooled records may reach before new ones are dropped. In bytes, defaults to
     /// 256 MB. Must be greater than zero. Reaching either this or <see cref="SpoolMaxEntries"/> is
-    /// enough. Measured before each write, so the record admitted last can carry the spool its own
-    /// size past this.
+    /// enough. Checked before each write, so the record admitted last can carry the spool its own
+    /// size past this; writers in flight reserve their room first, so concurrent ones cannot
+    /// together pass it by more than that.
     /// </summary>
     public long SpoolMaxBytes { get; set; } = 256L * 1024 * 1024;
 
@@ -136,9 +139,23 @@ public sealed class EncryptedSpoolOptions
     /// </summary>
     public Action<HttpClient>? ConfigureProducerCredentials { get; set; }
 
-    /// <summary>af-stub: red step for issue #69; nothing reads it yet.</summary>
+    /// <summary>
+    /// The most spooled records the drain worker delivers in one request. The default 1 posts each
+    /// record on its own to <c>{EndpointBaseUrl}/audit</c>, the contract every receiver supports.
+    /// Above 1, a run of records goes as one JSON array to <c>{EndpointBaseUrl}/audit/batch</c>,
+    /// which the receiver must implement before this is raised: one 15 ms round trip then delivers
+    /// the whole run instead of one record. A 2xx confirms every record in the request, so the
+    /// receiver must store a batch whole or reject it whole. Between 1 and 1024; defaults to 1.
+    /// <see cref="DeliveryTimeout"/> covers the whole request, so it has to cover a full batch.
+    /// </summary>
     public int DeliveryBatchSize { get; set; } = 1;
 
-    /// <summary>af-stub: red step for issue #69; nothing reads it yet.</summary>
+    /// <summary>
+    /// How often a spool found full is measured against the disk again, and the length of the
+    /// window in which the records it drops are logged as one Critical line instead of one each.
+    /// While the spool is full, a write is refused from the sink's own tally without touching the
+    /// disk; room the drain worker freed is noticed within this interval. Must be greater than
+    /// zero; defaults to 1 second.
+    /// </summary>
     public TimeSpan SpoolFullRecheckInterval { get; set; } = TimeSpan.FromSeconds(1);
 }
