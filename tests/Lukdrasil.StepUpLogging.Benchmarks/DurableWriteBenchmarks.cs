@@ -17,9 +17,11 @@ public class DurableWriteBenchmarks
     private string _spoolDirectory = null!;
     private EncryptedSpoolAuditSink _sink = null!;
 
+    /// <summary>How many writers share the records between them.</summary>
     [Params(1, 8)]
     public int Writers { get; set; }
 
+    /// <summary>Opens a sink over a spool no cap can fill during the run.</summary>
     [GlobalSetup]
     public void Setup()
     {
@@ -28,9 +30,10 @@ public class DurableWriteBenchmarks
         options.SpoolMaxEntries = int.MaxValue;
         options.SpoolMaxBytes = long.MaxValue;
 
-        _sink = SpoolBenchmarkSupport.SinkFor(options, new SpoolWriter(_spoolDirectory), SpoolBenchmarkSupport.TrackerFor(options));
+        _sink = SpoolBenchmarkSupport.SinkFor(options);
     }
 
+    /// <summary>Disposes the sink and removes its spool.</summary>
     [GlobalCleanup]
     public void Cleanup()
     {

@@ -45,8 +45,33 @@ internal static class SpoolBenchmarkSupport
     internal static SpoolUsageTracker TrackerFor(EncryptedSpoolOptions options) =>
         new(new SpoolCapacity(options), TimeProvider.System, options.SpoolFullRecheckInterval);
 
-    internal static EncryptedSpoolAuditSink SinkFor(EncryptedSpoolOptions options, SpoolWriter writer, SpoolUsageTracker tracker) =>
-        new(Options.Create(options), writer, tracker, new PassThroughEncryptor(), TimeProvider.System, NullLogger<EncryptedSpoolAuditSink>.Instance);
+    /// <summary>A sink over <paramref name="options"/>'s spool, built the way the host builds it, minus the DI container.</summary>
+    internal static EncryptedSpoolAuditSink SinkFor(EncryptedSpoolOptions options) =>
+        new(
+            Options.Create(options),
+            new SpoolWriter(options.SpoolDirectory),
+            TrackerFor(options),
+            new PassThroughEncryptor(),
+            TimeProvider.System,
+            NullLogger<EncryptedSpoolAuditSink>.Instance);
+
+    internal static void RequireDropped(AuditWriteResult result)
+    {
+        if (result != AuditWriteResult.Dropped)
+        {
+            throw new InvalidOperationException($"the spool is not at its cap: the write was {result}");
+        }
+    }
+
+    /// <summary>Puts <paramref name="count"/> small records straight into <paramref name="spoolDirectory"/>, without the fsync a write costs.</summary>
+    internal static async Task FillWithRecordsAsync(string spoolDirectory, int count)
+    {
+        Directory.CreateDirectory(spoolDirectory);
+        for (var i = 0; i < count; i++)
+        {
+            await File.WriteAllBytesAsync(Path.Combine(spoolDirectory, $"{i:D8}.env"), "{}"u8.ToArray());
+        }
+    }
 
     internal static AuditEvent AuditedOperation() =>
         AuditEvent.Success("order.cancel", "user-42", "user") with
