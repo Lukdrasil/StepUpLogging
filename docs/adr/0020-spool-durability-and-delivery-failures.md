@@ -51,6 +51,13 @@ application running by losing audit silently. This ADR rejects every one of them
    "bounded, loud, visible loss" of records, not loss of the service. The loss is not silent: the
    health check has already been Unhealthy since 50 %, every drop logs Critical, and a counter
    tracks it.
+   - > **Amended (2026-10-07, issue #69):** "every drop logs Critical" becomes "every drop is
+     reported at Critical, at a bounded rate". The first drop of each `SpoolFullRecheckInterval`
+     window is logged by `EventId`; the drops after it in that window are counted and reported as
+     one Critical summary (how many, the first and last `EventId`) when the next window's first
+     drop arrives, when a record is stored again, or when the sink is disposed. No drop goes
+     unreported, and the counter still counts each one. Fifty drops used to be fifty log lines
+     written on the business path of a host that is already struggling.
 
 7. **A permanently rejected record is dead-lettered, loudly.** The delivery contract is ours to
    define (app2 conforms to it): `POST {base}/audit` with one envelope per request; **2xx** means
@@ -73,6 +80,18 @@ application running by losing audit silently. This ADR rejects every one of them
    be parsed (corrupt), and a file that cannot be read after a bounded number of drain cycles
    (`UnreadableRetryLimit`) — an unbounded read-retry would recreate the head-of-line blocking
    this decision rejects.
+   - > **Amended (2026-10-07, issue #69):** the worker posts the stored bytes unchanged, as
+     `application/json; charset=utf-8` with a `Content-Length` (it used to re-serialize the
+     envelope and send it chunked); the body, media type and URI the receiver sees are the same.
+     With `DeliveryBatchSize` above 1 (default 1, range 1 to 1024) a run of records goes as one
+     JSON array to `POST {base}/audit/batch`; a run of one still goes to `/audit`, so the default
+     is wire-identical. The batch is one delivery: **2xx** deletes every record in it, a transient
+     answer deletes none and stops the cycle (the receiver must store a batch whole or reject it
+     whole, and deduplicates on `eventId` as before), and a permanent rejection redelivers the
+     records one by one to `/audit`, so only the record the receiver rejects on its own is
+     dead-lettered. A corrupt or unreadable file closes the batch before it and is handled alone.
+     `DeliveryTimeout` covers the whole batch request. A 15 ms round trip then costs a batch, not
+     a record: the receiver's latency, not the disk, bounded the drain.
    - > **Amended (2026-09-30, issue #33):** `DrainWorker` is the only retrying layer on the
      delivery path. The delivery client calls `RemoveAllResilienceHandlers()`, so a resilience
      handler inherited from the consumer's `ConfigureHttpClientDefaults` (the Aspire
@@ -110,7 +129,13 @@ application running by losing audit silently. This ADR rejects every one of them
 - **fsync configurable, or off by default.** Turning it off silently voids the guarantee that
   write-ahead exists for, and nothing in review would show it.
 - **Group commit** across a few-millisecond window. Keeps the guarantee and cuts fsync count under
-  load, but is markedly harder to write and to test, and solves a problem nobody has measured.
+  load, but is markedly harder to write and to test, and solves a problem nobody had measured.
+  - > **Amended (2026-10-07, issue #69):** still rejected, now with a measurement. Issue #69
+    measured the cost that gate imposed: eight concurrent writers queued behind one fsync. The
+    fix here removes the queue (writers overlap in their own fsyncs) and leaves the one-fsync-per-
+    record rule alone. Sharing one fsync across a window of records (segment files, a changed
+    spool format) is deferred as #69 part 3b, to be taken up only if overlapping fsyncs prove not
+    to be enough.
 - **Retrying a permanently rejected record forever.** What issue #22 originally described. The
   drain runs oldest-first, so one bad record blocks the queue, the spool fills, and at 100 % the
   package starts rejecting new events — a single corrupt record disables auditing everywhere.
