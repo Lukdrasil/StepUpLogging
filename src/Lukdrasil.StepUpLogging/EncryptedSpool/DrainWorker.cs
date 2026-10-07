@@ -1,5 +1,5 @@
 using System.Net;
-using System.Net.Http.Json;
+using System.Net.Http.Headers;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -10,7 +10,11 @@ namespace Lukdrasil.StepUpLogging.Audit.EncryptedSpool;
 /// Delivers spooled audit records to the configured endpoint, oldest first, and deletes each only
 /// once the endpoint has confirmed it stored it (ADR 0020 D7). A record it can never deliver goes
 /// to <see cref="DeadLetterBox"/>; anything else that goes wrong leaves the record spooled for the
-/// next attempt, which backs off while the endpoint keeps failing.
+/// next attempt, which backs off while the endpoint keeps failing. With
+/// <see cref="EncryptedSpoolOptions.DeliveryBatchSize"/> above 1 it delivers a run of records as
+/// one request, and what the endpoint says about it counts for every record in it; a rejected
+/// batch is redelivered record by record, so only the record the endpoint rejects on its own is
+/// dead-lettered.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -35,6 +39,7 @@ internal sealed class DrainWorker(
     IHttpClientFactory httpClientFactory,
     DeadLetterBox deadLetterBox,
     EndpointReachability reachability,
+    SpoolUsageTracker usageTracker,
     TimeProvider timeProvider,
     ILogger<DrainWorker> logger) : BackgroundService
 {
@@ -44,6 +49,7 @@ internal sealed class DrainWorker(
     private readonly EncryptedSpoolOptions _options = options.Value;
     private readonly SpoolReader _reader = new(options.Value.SpoolDirectory);
     private readonly Uri _auditEndpoint = new($"{options.Value.EndpointBaseUrl.TrimEnd('/')}/audit");
+    private readonly Uri _batchEndpoint = new($"{options.Value.EndpointBaseUrl.TrimEnd('/')}/audit/batch");
 
     /// <summary>
     /// Consecutive <see cref="SpoolReadFault.Unreadable"/> reads, by path, since the worker last
@@ -52,26 +58,94 @@ internal sealed class DrainWorker(
     /// </summary>
     private readonly Dictionary<string, int> _unreadableAttempts = [];
 
-    // af-stub: red step for issue #69; the implementer makes this the primary constructor.
-    internal DrainWorker(
-        IOptions<EncryptedSpoolOptions> options,
-        IHttpClientFactory httpClientFactory,
-        DeadLetterBox deadLetterBox,
-        EndpointReachability reachability,
-        SpoolUsageTracker usageTracker,
-        TimeProvider timeProvider,
-        ILogger<DrainWorker> logger)
-        : this(options, httpClientFactory, deadLetterBox, reachability, timeProvider, logger)
+    /// <summary>
+    /// Cuts the spool, oldest first, into deliveries: runs of up to <paramref name="batchSize"/>
+    /// readable records, and each corrupt or unreadable file on its own. A faulted file closes the
+    /// batch before it, so order holds and the fault is acted on in its place. Lazy: a full batch is
+    /// handed over before the rest of the spool is read, since a delivery that stops the cycle
+    /// should not have paid for reading a deep spool first.
+    /// </summary>
+    internal static IEnumerable<DrainStep> Plan(IEnumerable<SpoolEntry> entries, int batchSize)
     {
+        List<SpoolEntry> open = [];
+        foreach (var entry in entries)
+        {
+            foreach (var step in Place(open, entry, batchSize))
+            {
+                yield return step;
+            }
+        }
+
+        if (open.Count > 0)
+        {
+            yield return Close(open);
+        }
     }
 
-    internal static IEnumerable<DrainStep> Plan(IEnumerable<SpoolEntry> entries, int batchSize) =>
-        throw new NotImplementedException(); // af-stub
+    /// <summary>
+    /// What an answer from the audit endpoint means for the records posted to <paramref name="expected"/>:
+    /// 2xx is durably stored, a status naming a defect in the request (see <see cref="IsPermanentRejection"/>)
+    /// is a rejection no retry can change, and everything else — a redirect, an auth or routing
+    /// failure, a server error — leaves the records for another attempt (ADR 0020 D7).
+    /// </summary>
+    internal static DeliveryAttempt Classify(HttpResponseMessage response, Uri expected)
+    {
+        var answer = $"the audit endpoint answered {(int)response.StatusCode} {response.StatusCode}";
 
-    internal static DeliveryAttempt Classify(HttpResponseMessage response, Uri expected) =>
-        throw new NotImplementedException(); // af-stub
+        return response switch
+        {
+            // Defence in depth for the AllowAutoRedirect = false obligation on the named
+            // client (see the class remarks): if a redirect were followed anyway, a 2xx from
+            // wherever it led must not read as "this record is stored" — nothing was ever
+            // posted to that URI.
+            _ when response.RequestMessage?.RequestUri is { } answeredFrom && answeredFrom != expected =>
+                new(DeliveryOutcome.Undelivered, $"the response came from {answeredFrom} instead of {expected} — a redirect was followed when it should not have been"),
+            { IsSuccessStatusCode: true } => new(DeliveryOutcome.Stored, answer),
+            _ when IsPermanentRejection(response.StatusCode) => new(DeliveryOutcome.Rejected, $"{answer}, which says the request itself is defective, so no retry can change it"),
+            _ => new(DeliveryOutcome.Undelivered, answer)
+        };
+    }
 
-    internal static byte[] BatchBody(IReadOnlyList<SpoolEntry> batch) => throw new NotImplementedException(); // af-stub
+    /// <summary>
+    /// The request body for several records: the stored bytes of each, unchanged, as one JSON array.
+    /// The files already hold the envelope in the wire format, so nothing is parsed or re-serialized.
+    /// </summary>
+    internal static byte[] BatchBody(IReadOnlyList<SpoolEntry> batch)
+    {
+        using var body = new MemoryStream(batch.Sum(entry => entry.Contents.Length) + batch.Count + 1);
+        body.WriteByte((byte)'[');
+        for (var i = 0; i < batch.Count; i++)
+        {
+            if (i > 0)
+            {
+                body.WriteByte((byte)',');
+            }
+
+            body.Write(batch[i].Contents);
+        }
+
+        body.WriteByte((byte)']');
+        return body.ToArray();
+    }
+
+    private static DrainStep[] Place(List<SpoolEntry> open, SpoolEntry entry, int batchSize)
+    {
+        if (entry.Envelope is not null)
+        {
+            open.Add(entry);
+            return open.Count >= batchSize ? [Close(open)] : [];
+        }
+
+        DrainStep alone = new([], entry);
+        return open.Count > 0 ? [Close(open), alone] : [alone];
+    }
+
+    private static DrainStep Close(List<SpoolEntry> open)
+    {
+        DrainStep step = new([.. open], null);
+        open.Clear();
+        return step;
+    }
 
     /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -149,57 +223,20 @@ internal sealed class DrainWorker(
         // recycles it, which is what keeps a process-long worker from pinning a stale DNS answer.
         var client = httpClientFactory.CreateClient(HttpClientName);
 
-        foreach (var entry in _reader.ReadOldestFirst())
+        foreach (var step in Plan(_reader.ReadOldestFirst(), _options.DeliveryBatchSize))
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (entry.Envelope is not { } envelope)
+            var carryOn = step.Faulted is { } faulted
+                ? SetAsideFaulted(faulted)
+                : await DeliverAsync(client, step.Batch, cancellationToken).ConfigureAwait(false);
+
+            if (!carryOn)
             {
-                if (entry.IsCorrupt)
-                {
-                    _unreadableAttempts.Remove(entry.FilePath);
-                    DeadLetter(entry.FilePath, "the spool file could not be parsed as an audit envelope");
-                    continue;
-                }
-
-                if (DeadLetterIfUnreadableTooLong(entry.FilePath))
-                {
-                    continue;
-                }
-
-                // A sharing violation or permission fault, not yet given up on: leave it spooled
-                // and stop here exactly as a transient delivery failure would, so a lock that
-                // clears gets retried instead of reordering the records behind it.
+                // The spool is drained oldest first, so the records behind this one wait with
+                // it: sending them now would reorder the audit trail and keep asking a
+                // receiver that has just said it cannot take records (ADR 0020 D7).
                 return;
-            }
-
-            _unreadableAttempts.Remove(entry.FilePath);
-            var attempt = await DeliverAsync(client, envelope, cancellationToken).ConfigureAwait(false);
-            switch (attempt.Outcome)
-            {
-                case DeliveryOutcome.Stored:
-                    reachability.EndpointAnswered();
-
-                    // Nothing tells the sink's SpoolUsageTracker that a record left: it is not
-                    // thread-safe and is only ever touched under the sink's write gate. Its tally
-                    // is then only ever too high, which is the direction it already covers — it
-                    // re-measures the disk before it reports the spool full.
-                    File.Delete(entry.FilePath);
-                    EncryptedSpoolMetrics.DrainedCounter.Add(1);
-                    break;
-
-                case DeliveryOutcome.Rejected:
-                    reachability.EndpointAnswered();
-                    DeadLetter(entry.FilePath, attempt.Description);
-                    break;
-
-                case DeliveryOutcome.Undelivered:
-                    ReportUndelivered(entry.FilePath, attempt.Description);
-
-                    // The spool is drained oldest first, so the records behind this one wait with
-                    // it: sending them now would reorder the audit trail and keep asking a
-                    // receiver that has just said it cannot take records (ADR 0020 D7).
-                    return;
             }
         }
     }
@@ -223,31 +260,76 @@ internal sealed class DrainWorker(
     }
 
     /// <summary>
-    /// Posts one record and reads the endpoint's answer as the delivery contract defines it: 2xx is
-    /// durably stored, a status naming a defect in the record (see <see cref="IsPermanentRejection"/>)
-    /// is a rejection no retry can change, and everything else — a redirect, an auth or routing
-    /// failure, a server error, a refused connection, a timeout — leaves the record for another
-    /// attempt (ADR 0020 D7).
+    /// Delivers <paramref name="batch"/> and acts on the answer: stored records leave the spool, a
+    /// rejection is dead-lettered (see <see cref="RejectedAsync"/>), and anything else leaves them
+    /// for another attempt. Returns whether the cycle carries on with the records behind them.
     /// </summary>
-    private async Task<DeliveryAttempt> DeliverAsync(HttpClient client, SpoolEnvelope envelope, CancellationToken cancellationToken)
+    private async Task<bool> DeliverAsync(HttpClient client, IReadOnlyList<SpoolEntry> batch, CancellationToken cancellationToken)
     {
+        ForgetUnreadableAttempts(batch);
+        var attempt = await PostAsync(client, batch, cancellationToken).ConfigureAwait(false);
+
+        switch (attempt.Outcome)
+        {
+            case DeliveryOutcome.Stored:
+                reachability.EndpointAnswered();
+                foreach (var entry in batch)
+                {
+                    Delivered(entry);
+                }
+
+                return true;
+
+            case DeliveryOutcome.Rejected:
+                reachability.EndpointAnswered();
+                return await RejectedAsync(client, batch, attempt.Description, cancellationToken).ConfigureAwait(false);
+
+            default:
+                ReportUndelivered(batch[0].FilePath, attempt.Description);
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// A rejected single record is defective and dead-lettered. A rejected batch only says that one
+    /// of its records is, not which, so each is delivered on its own and only the one the endpoint
+    /// rejects alone is set aside (ADR 0020 D7).
+    /// </summary>
+    private async Task<bool> RejectedAsync(HttpClient client, IReadOnlyList<SpoolEntry> batch, string reason, CancellationToken cancellationToken)
+    {
+        if (batch.Count == 1)
+        {
+            DeadLetterAndRelease(batch[0], reason);
+            return true;
+        }
+
+        foreach (var entry in batch)
+        {
+            if (!await DeliverAsync(client, [entry], cancellationToken).ConfigureAwait(false))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Posts the stored bytes of <paramref name="batch"/> as they are — one record to
+    /// <c>/audit</c>, several as a JSON array to <c>/audit/batch</c> — and reads the endpoint's
+    /// answer. A refused connection or a request that ran past the client's timeout leaves the
+    /// records for another attempt like any other transient failure (ADR 0020 D7).
+    /// </summary>
+    private async Task<DeliveryAttempt> PostAsync(HttpClient client, IReadOnlyList<SpoolEntry> batch, CancellationToken cancellationToken)
+    {
+        var (endpoint, body) = batch.Count == 1 ? (_auditEndpoint, batch[0].Contents) : (_batchEndpoint, BatchBody(batch));
+
         try
         {
-            using var response = await client.PostAsJsonAsync(_auditEndpoint, envelope, cancellationToken).ConfigureAwait(false);
-            var answer = $"the audit endpoint answered {(int)response.StatusCode} {response.StatusCode}";
-
-            return response switch
-            {
-                // Defence in depth for the AllowAutoRedirect = false obligation on the named
-                // client (see the class remarks): if a redirect were followed anyway, a 2xx from
-                // wherever it led must not read as "this record is stored" — nothing was ever
-                // posted to that URI.
-                _ when response.RequestMessage?.RequestUri is { } answeredFrom && answeredFrom != _auditEndpoint =>
-                    new(DeliveryOutcome.Undelivered, $"the response came from {answeredFrom} instead of {_auditEndpoint} — a redirect was followed when it should not have been"),
-                { IsSuccessStatusCode: true } => new(DeliveryOutcome.Stored, answer),
-                _ when IsPermanentRejection(response.StatusCode) => new(DeliveryOutcome.Rejected, $"{answer}, which says the request itself is defective, so no retry can change it"),
-                _ => new(DeliveryOutcome.Undelivered, answer)
-            };
+            using var content = new ByteArrayContent(body);
+            content.Headers.ContentType = new MediaTypeHeaderValue("application/json", "utf-8");
+            using var response = await client.PostAsync(endpoint, content, cancellationToken).ConfigureAwait(false);
+            return Classify(response, endpoint);
         }
         catch (Exception ex) when (ex is (HttpRequestException or TaskCanceledException) && !cancellationToken.IsCancellationRequested)
         {
@@ -256,6 +338,50 @@ internal sealed class DrainWorker(
             // a cancellation of our own token is the host stopping and belongs to the caller.
             return new(DeliveryOutcome.Undelivered, $"the request to the audit endpoint failed: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// Deals with a corrupt or unreadable file standing on its own in the plan. Returns whether the
+    /// cycle carries on: a corrupt file is dead-lettered outright, an unreadable one only once it
+    /// has failed enough cycles, and until then stops the cycle exactly as a transient delivery
+    /// failure would, so a lock that clears gets retried instead of reordering the records behind it.
+    /// </summary>
+    private bool SetAsideFaulted(SpoolEntry entry)
+    {
+        if (!entry.IsCorrupt)
+        {
+            return DeadLetterIfUnreadableTooLong(entry.FilePath);
+        }
+
+        _unreadableAttempts.Remove(entry.FilePath);
+        DeadLetterAndRelease(entry, "the spool file could not be parsed as an audit envelope");
+        return true;
+    }
+
+    private void ForgetUnreadableAttempts(IReadOnlyList<SpoolEntry> batch)
+    {
+        foreach (var entry in batch)
+        {
+            _unreadableAttempts.Remove(entry.FilePath);
+        }
+    }
+
+    /// <summary>Deletes a record the endpoint confirmed and tells the usage tally its room is free.</summary>
+    private void Delivered(SpoolEntry entry)
+    {
+        // The token is taken before the delete: a measure that runs in between may or may not have
+        // seen the file, and then this release is ignored rather than counted off twice.
+        var token = usageTracker.ReleaseToken;
+        File.Delete(entry.FilePath);
+        usageTracker.Released(token, entry.Contents.Length);
+        EncryptedSpoolMetrics.DrainedCounter.Add(1);
+    }
+
+    private void DeadLetterAndRelease(SpoolEntry entry, string reason)
+    {
+        var token = usageTracker.ReleaseToken;
+        DeadLetter(entry.FilePath, reason);
+        usageTracker.Released(token, entry.Contents.Length);
     }
 
     /// <summary>
@@ -326,7 +452,7 @@ internal sealed class DrainWorker(
     /// <summary>What the audit endpoint made of one record, and the words for it.</summary>
     internal readonly record struct DeliveryAttempt(DeliveryOutcome Outcome, string Description);
 
-    // af-stub: red step for issue #69.
+    /// <summary>One delivery the plan calls for: a batch of readable records, or a faulted file standing on its own.</summary>
     internal readonly record struct DrainStep(IReadOnlyList<SpoolEntry> Batch, SpoolEntry? Faulted);
 
     internal enum DeliveryOutcome

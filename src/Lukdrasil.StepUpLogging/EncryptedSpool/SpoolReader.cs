@@ -20,7 +20,7 @@ internal sealed record SpoolEntry(string FilePath, SpoolEnvelope? Envelope, Spoo
     /// <summary>True when <see cref="ReadFault"/> is <see cref="SpoolReadFault.Unreadable"/>.</summary>
     public bool IsUnreadable => ReadFault == SpoolReadFault.Unreadable;
 
-    // af-stub: red step for issue #69; the reader does not fill it yet.
+    /// <summary>The file's exact bytes, set for every entry that could be read (readable or corrupt), empty for an unreadable one.</summary>
     public byte[] Contents { get; init; } = [];
 }
 
@@ -99,7 +99,7 @@ internal sealed class SpoolReader(string spoolDirectory)
         }
         catch (JsonException)
         {
-            return new SpoolEntry(path, Envelope: null, SpoolReadFault.Corrupt);
+            return new SpoolEntry(path, Envelope: null, SpoolReadFault.Corrupt) { Contents = bytes };
         }
 
         // Valid JSON that deserializes to null (the literal `null`) throws nothing above, but is
@@ -107,7 +107,7 @@ internal sealed class SpoolReader(string spoolDirectory)
         // an envelope on a later attempt either, so it must not be classified as a recoverable
         // fault (keeps "Envelope is null implies ReadFault is not null" total for callers).
         return envelope is null
-            ? new SpoolEntry(path, Envelope: null, SpoolReadFault.Corrupt)
-            : new SpoolEntry(path, envelope);
+            ? new SpoolEntry(path, Envelope: null, SpoolReadFault.Corrupt) { Contents = bytes }
+            : new SpoolEntry(path, envelope) { Contents = bytes };
     }
 }
