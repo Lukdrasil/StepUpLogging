@@ -36,11 +36,7 @@ public class FullSpoolDropBenchmarks
 
     /// <summary>Disposes the sink and removes its spool.</summary>
     [GlobalCleanup]
-    public void Cleanup()
-    {
-        _sink.Dispose();
-        SpoolBenchmarkSupport.DeleteWithSiblings(_spoolDirectory);
-    }
+    public void Cleanup() => SpoolBenchmarkSupport.Discard(_sink, _spoolDirectory);
 
     /// <summary>The cost of learning how full the spool is by reading the directory, as every write did.</summary>
     [Benchmark(Baseline = true)]

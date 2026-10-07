@@ -35,11 +35,7 @@ public class DurableWriteBenchmarks
 
     /// <summary>Disposes the sink and removes its spool.</summary>
     [GlobalCleanup]
-    public void Cleanup()
-    {
-        _sink.Dispose();
-        SpoolBenchmarkSupport.DeleteWithSiblings(_spoolDirectory);
-    }
+    public void Cleanup() => SpoolBenchmarkSupport.Discard(_sink, _spoolDirectory);
 
     /// <summary>Writes <see cref="RecordCount"/> records split across the writers; reported per record, so its inverse is writes per second.</summary>
     [Benchmark(OperationsPerInvoke = RecordCount)]
