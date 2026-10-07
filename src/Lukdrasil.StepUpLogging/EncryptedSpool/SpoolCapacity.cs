@@ -16,6 +16,9 @@ internal readonly record struct SpoolUsage(long Bytes, int Records, double FillF
     public bool IsAtWarnThreshold => FillFraction >= WarnFraction;
 }
 
+// af-stub: red step for issue #69.
+internal readonly record struct ReservationVerdict(bool Admitted, SpoolUsage Usage, bool CrossedWarnThreshold);
+
 /// <summary>
 /// Measures the spool directory against the caps configured for it.
 /// </summary>
@@ -69,6 +72,25 @@ internal sealed class SpoolUsageTracker(SpoolCapacity capacity)
 {
     private readonly object _gate = new();
     private SpoolUsage? _addedUp;
+
+    // af-stub: red step for issue #69; the implementer makes this the primary constructor.
+    internal SpoolUsageTracker(SpoolCapacity capacity, TimeProvider timeProvider, TimeSpan fullRecheckInterval)
+        : this(capacity)
+    {
+    }
+
+    public ReservationVerdict TryReserve(long bytes) => throw new NotImplementedException(); // af-stub
+
+    public void Commit(long bytes) => throw new NotImplementedException(); // af-stub
+
+    public void Abandon(long bytes) => throw new NotImplementedException(); // af-stub
+
+    public int ReleaseToken => throw new NotImplementedException(); // af-stub
+
+    public void Released(int token, long bytes) => throw new NotImplementedException(); // af-stub
+
+    internal static bool NeedsMeasure(bool isFull, TimeSpan sinceMeasured, TimeSpan interval) =>
+        throw new NotImplementedException(); // af-stub
 
     /// <summary>
     /// The current usage, exact wherever being wrong would cost a record. Records only ever leave

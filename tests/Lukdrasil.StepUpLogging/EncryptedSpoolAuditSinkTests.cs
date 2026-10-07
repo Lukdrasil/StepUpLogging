@@ -6,6 +6,7 @@ using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Lukdrasil.StepUpLogging.Tests;
 
@@ -95,13 +96,18 @@ public class EncryptedSpoolAuditSinkTests
     private static EncryptedSpoolAuditSink CreateSink(
         EncryptedSpoolOptions options,
         IAuditPayloadEncryptor encryptor,
-        ILogger<EncryptedSpoolAuditSink>? logger = null) =>
-        new(
+        ILogger<EncryptedSpoolAuditSink>? logger = null,
+        TimeProvider? time = null)
+    {
+        var clock = time ?? new FakeTimeProvider();
+        return new(
             Options.Create(options),
             new SpoolWriter(options.SpoolDirectory),
-            new SpoolUsageTracker(new SpoolCapacity(options)),
+            new SpoolUsageTracker(new SpoolCapacity(options), clock, options.SpoolFullRecheckInterval),
             encryptor,
+            clock,
             logger ?? NullLogger<EncryptedSpoolAuditSink>.Instance);
+    }
 
     private static EncryptedSpoolHealthCheck CreateHealthCheck(EncryptedSpoolOptions options) =>
         new(Options.Create(options), new DeadLetterBox(Options.Create(options)), new EndpointReachability());
@@ -303,7 +309,9 @@ public class EncryptedSpoolAuditSinkTests
     public async Task WriteAsync_AfterTheDrainWorkerEmptiedAFullSpool_StoresAgainInsteadOfTrustingTheOlderVerdict()
     {
         using var spool = new TempSpoolDirectory();
-        using var sink = CreateSink(OptionsFor(spool, options => options.SpoolMaxEntries = 3), new FakeAuditPayloadEncryptor());
+        var time = new FakeTimeProvider();
+        var options = OptionsFor(spool, options => options.SpoolMaxEntries = 3);
+        using var sink = CreateSink(options, new FakeAuditPayloadEncryptor(), time: time);
         for (var i = 0; i < 3; i++)
         {
             await sink.WriteAsync(SpoolableEvent());
@@ -314,6 +322,10 @@ public class EncryptedSpoolAuditSinkTests
         {
             File.Delete(delivered);
         }
+
+        // A full verdict is confirmed against the disk at most once per recheck interval, so the
+        // room the drain worker freed shows up once that interval has passed.
+        time.Advance(options.SpoolFullRecheckInterval);
 
         Assert.Equal(AuditWriteResult.Stored, await sink.WriteAsync(SpoolableEvent()));
     }

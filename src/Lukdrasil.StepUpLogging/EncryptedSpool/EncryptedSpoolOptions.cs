@@ -135,4 +135,10 @@ public sealed class EncryptedSpoolOptions
     /// left unset.
     /// </summary>
     public Action<HttpClient>? ConfigureProducerCredentials { get; set; }
+
+    /// <summary>af-stub: red step for issue #69; nothing reads it yet.</summary>
+    public int DeliveryBatchSize { get; set; } = 1;
+
+    /// <summary>af-stub: red step for issue #69; nothing reads it yet.</summary>
+    public TimeSpan SpoolFullRecheckInterval { get; set; } = TimeSpan.FromSeconds(1);
 }
