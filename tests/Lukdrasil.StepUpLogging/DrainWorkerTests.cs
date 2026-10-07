@@ -1,10 +1,7 @@
 using System.Net;
-using System.Text.Json;
 using Lukdrasil.StepUpLogging.Audit.EncryptedSpool;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 
 namespace Lukdrasil.StepUpLogging.Tests;
@@ -16,164 +13,6 @@ namespace Lukdrasil.StepUpLogging.Tests;
 /// </summary>
 public class DrainWorkerTests
 {
-    private static readonly JsonSerializerOptions PayloadJsonOptions =
-        new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
-
-    /// <summary>The audit receiver, faked at the HTTP boundary: it records what was posted and answers as the test lined up.</summary>
-    private sealed class FakeAuditReceiver(Func<int, CancellationToken, Task<HttpResponseMessage>> respond) : HttpMessageHandler
-    {
-        private readonly List<(Uri Uri, SpoolEnvelope Envelope)> _requests = [];
-
-        /// <summary>Answers every request with <paramref name="statuses"/> in turn, the last one repeating.</summary>
-        public static FakeAuditReceiver Responding(params HttpStatusCode[] statuses) =>
-            new((requestIndex, _) => Task.FromResult(new HttpResponseMessage(statuses[Math.Min(requestIndex, statuses.Length - 1)])));
-
-        /// <summary>Fails every request with <paramref name="failure"/>, after recording what it was sent.</summary>
-        public static FakeAuditReceiver Failing(Exception failure) =>
-            new((_, _) => Task.FromException<HttpResponseMessage>(failure));
-
-        /// <summary>Never answers, so a request only ends when the caller gives up on it.</summary>
-        public static FakeAuditReceiver Hanging() =>
-            new(async (_, cancellationToken) =>
-            {
-                await Task.Delay(Timeout.Infinite, cancellationToken);
-                return new HttpResponseMessage(HttpStatusCode.OK);
-            });
-
-        /// <summary>
-        /// Answers as though a redirect had already been followed to <paramref name="finalUri"/>:
-        /// the response names a request URI other than the one the worker actually posted to,
-        /// which is what an auto-following handler would leave behind.
-        /// </summary>
-        public static FakeAuditReceiver RespondingFromADifferentUri(Uri finalUri, HttpStatusCode status) =>
-            new((_, _) => Task.FromResult(new HttpResponseMessage(status) { RequestMessage = new HttpRequestMessage(HttpMethod.Get, finalUri) }));
-
-        public IReadOnlyList<SpoolEnvelope> Received
-        {
-            get { lock (_requests) { return [.. _requests.Select(request => request.Envelope)]; } }
-        }
-
-        public IReadOnlyList<Uri> RequestedUris
-        {
-            get { lock (_requests) { return [.. _requests.Select(request => request.Uri)]; } }
-        }
-
-        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            var body = await request.Content!.ReadAsByteArrayAsync(cancellationToken);
-            int requestIndex;
-            lock (_requests)
-            {
-                _requests.Add((request.RequestUri!, JsonSerializer.Deserialize<SpoolEnvelope>(body)!));
-                requestIndex = _requests.Count - 1;
-            }
-
-            return await respond(requestIndex, cancellationToken);
-        }
-    }
-
-    /// <summary>Hands out the one client the test's receiver is behind, as <c>AddHttpClient</c> does in production.</summary>
-    private sealed class SingleClientHttpClientFactory(HttpClient client) : IHttpClientFactory
-    {
-        public HttpClient CreateClient(string name) => client;
-    }
-
-    /// <summary>
-    /// A drain worker over its own temporary spool, with the sink that fills it, the receiver it
-    /// posts to, and the health check that reports on it — all wired the way
-    /// <c>AddEncryptedSpoolAuditSink</c> wires them.
-    /// </summary>
-    private sealed class DrainHarness : IDisposable
-    {
-        private readonly TempSpoolDirectory _root = new();
-        private readonly HttpClient _client;
-        private readonly EncryptedSpoolAuditSink _sink;
-
-        public DrainHarness(FakeAuditReceiver receiver, Action<EncryptedSpoolOptions>? configure = null)
-        {
-            SpoolOptions = new EncryptedSpoolOptions
-            {
-                // A spool below the temporary root, so its dead-letter sibling is thrown away with it.
-                SpoolDirectory = Path.Combine(_root.FullPath, "spool"),
-                ModuleName = "orders-api",
-                Version = "4.0.0",
-                EndpointBaseUrl = "https://audit.example/api"
-            };
-            configure?.Invoke(SpoolOptions);
-
-            Receiver = receiver;
-            _client = new HttpClient(receiver);
-            _sink = new EncryptedSpoolAuditSink(
-                Options.Create(SpoolOptions),
-                new SpoolWriter(SpoolOptions.SpoolDirectory),
-                new SpoolUsageTracker(new SpoolCapacity(SpoolOptions)),
-                Encryptor,
-                NullLogger<EncryptedSpoolAuditSink>.Instance);
-            DeadLetter = new DeadLetterBox(Options.Create(SpoolOptions));
-            Reachability = new EndpointReachability();
-            Worker = StartedOver();
-            HealthCheck = new EncryptedSpoolHealthCheck(Options.Create(SpoolOptions), DeadLetter, Reachability);
-        }
-
-        public EncryptedSpoolOptions SpoolOptions { get; }
-
-        public FakeAuditReceiver Receiver { get; }
-
-        public FakeAuditPayloadEncryptor Encryptor { get; } = new();
-
-        public FakeTimeProvider Time { get; } = new();
-
-        public RecordingLogger<DrainWorker> Logger { get; } = new();
-
-        public DeadLetterBox DeadLetter { get; }
-
-        public EndpointReachability Reachability { get; }
-
-        public DrainWorker Worker { get; }
-
-        public EncryptedSpoolHealthCheck HealthCheck { get; }
-
-        /// <summary>Another worker over the same spool, endpoint and directories — what a restarted host builds.</summary>
-        public DrainWorker StartedOver() =>
-            new(Options.Create(SpoolOptions), new SingleClientHttpClientFactory(_client), DeadLetter, Reachability, Time, Logger);
-
-        /// <summary>Spools <paramref name="auditEvent"/> through the sink, exactly as an audited operation does.</summary>
-        public async Task<AuditEvent> SpoolAsync(AuditEvent auditEvent)
-        {
-            Assert.Equal(AuditWriteResult.Stored, await _sink.WriteAsync(auditEvent));
-            return auditEvent;
-        }
-
-        /// <summary>The audit record inside a delivered envelope, decrypted the way the receiver does.</summary>
-        public AuditEvent RecordIn(SpoolEnvelope envelope) =>
-            JsonSerializer.Deserialize<SpoolPayload>(Encryptor.Decrypt(envelope.Payload), PayloadJsonOptions)!.AuditEvent;
-
-        public IReadOnlyList<string> SpooledFileNames() => FileNamesIn(SpoolOptions.SpoolDirectory);
-
-        public IReadOnlyList<string> DeadLetteredFileNames() => FileNamesIn(DeadLetter.DirectoryPath);
-
-        /// <summary>Puts <paramref name="contents"/> into the spool under <paramref name="fileName"/>, as a fault on the disk would leave it.</summary>
-        public string PutInSpool(string fileName, string contents)
-        {
-            var path = Path.Combine(SpoolOptions.SpoolDirectory, fileName);
-            File.WriteAllText(path, contents);
-            return path;
-        }
-
-        private static IReadOnlyList<string> FileNamesIn(string directory) =>
-            Directory.Exists(directory)
-                ? [.. Directory.EnumerateFiles(directory).Select(Path.GetFileName).Order(StringComparer.Ordinal)!]
-                : [];
-
-        public void Dispose()
-        {
-            _sink.Dispose();
-            _client.Dispose();
-            Receiver.Dispose();
-            _root.Dispose();
-        }
-    }
-
     private static readonly DateTimeOffset Noon = new(2026, 8, 13, 12, 0, 0, TimeSpan.Zero);
 
     private static AuditEvent AuditedOperation(string action = "order.cancel", DateTimeOffset? at = null) =>
@@ -183,13 +22,13 @@ public class DrainWorkerTests
             TimestampUtc = at ?? DateTimeOffset.UtcNow
         };
 
-    private static async Task<HealthStatus> HealthOf(DrainHarness harness) =>
+    private static async Task<HealthStatus> HealthOf(SpoolDrainHarness harness) =>
         (await harness.HealthCheck.CheckHealthAsync(new HealthCheckContext(), TestContext.Current.CancellationToken)).Status;
 
     [Fact]
     public async Task DrainWorker_RoundTripsThroughFakeEncryptor_ReconstructsOriginalAuditEvent()
     {
-        using var harness = new DrainHarness(FakeAuditReceiver.Responding(HttpStatusCode.OK));
+        using var harness = new SpoolDrainHarness(FakeAuditReceiver.Responding(HttpStatusCode.OK));
         var original = AuditedOperation() with
         {
             Outcome = AuditOutcome.Denied,
@@ -229,7 +68,7 @@ public class DrainWorkerTests
     [Fact]
     public async Task DrainWorker_DrainsOldestFirst()
     {
-        using var harness = new DrainHarness(FakeAuditReceiver.Responding(HttpStatusCode.OK));
+        using var harness = new SpoolDrainHarness(FakeAuditReceiver.Responding(HttpStatusCode.OK));
         var newest = await harness.SpoolAsync(AuditedOperation("order.refund", at: Noon.AddMinutes(10)));
         var oldest = await harness.SpoolAsync(AuditedOperation("order.create", at: Noon));
         var middle = await harness.SpoolAsync(AuditedOperation("order.cancel", at: Noon.AddMinutes(5)));
@@ -251,7 +90,7 @@ public class DrainWorkerTests
     public async Task DrainWorker_PermanentStatusCode_DeadLettersImmediately_LogsCritical_HealthUnhealthy_QueueContinues(
         HttpStatusCode permanentRejection)
     {
-        using var harness = new DrainHarness(FakeAuditReceiver.Responding(permanentRejection, HttpStatusCode.OK));
+        using var harness = new SpoolDrainHarness(FakeAuditReceiver.Responding(permanentRejection, HttpStatusCode.OK));
         var rejected = await harness.SpoolAsync(AuditedOperation(at: Noon));
         var accepted = await harness.SpoolAsync(AuditedOperation(at: Noon.AddMinutes(1)));
         var rejectedFileName = harness.SpooledFileNames()[0];
@@ -273,7 +112,7 @@ public class DrainWorkerTests
     [Fact]
     public async Task DrainWorker_CorruptSpoolFile_DeadLettersItWithoutSendingItAndKeepsDraining()
     {
-        using var harness = new DrainHarness(FakeAuditReceiver.Responding(HttpStatusCode.OK));
+        using var harness = new SpoolDrainHarness(FakeAuditReceiver.Responding(HttpStatusCode.OK));
         var readable = await harness.SpoolAsync(AuditedOperation(at: Noon));
         var corrupt = harness.PutInSpool("20200101T0000000000000Z-11111111-1111-7111-8111-111111111111.env", "not an envelope");
 
@@ -289,7 +128,7 @@ public class DrainWorkerTests
     [Fact]
     public async Task DrainWorker_SpoolFileIsLockedWhenRead_LeavesItSpooledForRetryInsteadOfDeadLettering()
     {
-        using var harness = new DrainHarness(FakeAuditReceiver.Responding(HttpStatusCode.OK));
+        using var harness = new SpoolDrainHarness(FakeAuditReceiver.Responding(HttpStatusCode.OK));
         var locked = await harness.SpoolAsync(AuditedOperation(at: Noon));
         var lockedFileName = harness.SpooledFileNames()[0];
         var lockedPath = Path.Combine(harness.SpoolOptions.SpoolDirectory, lockedFileName);
@@ -316,7 +155,7 @@ public class DrainWorkerTests
     [Fact]
     public async Task DrainWorker_SpoolFileStaysUnreadablePastTheRetryLimit_DeadLettersItWithoutTouchingEndpointReachability()
     {
-        using var harness = new DrainHarness(
+        using var harness = new SpoolDrainHarness(
             FakeAuditReceiver.Responding(HttpStatusCode.OK),
             options => options.UnreadableRetryLimit = 2);
         var locked = await harness.SpoolAsync(AuditedOperation(at: Noon));
@@ -380,7 +219,7 @@ public class DrainWorkerTests
     [InlineData("timeout")]
     public async Task DrainWorker_TransientStatusCodeOrNetworkFailureOrTimeout_Retries(string transientFailure)
     {
-        using var harness = new DrainHarness(TransientlyFailing(transientFailure));
+        using var harness = new SpoolDrainHarness(TransientlyFailing(transientFailure));
         var undelivered = await harness.SpoolAsync(AuditedOperation(at: Noon));
         var spooledFileName = harness.SpooledFileNames()[0];
         using var meter = new AuditMeterTotals();
@@ -400,7 +239,7 @@ public class DrainWorkerTests
         // Defence in depth for the B09 AllowAutoRedirect=false obligation: if a redirect were
         // followed anyway, a 2xx from wherever it led must not read as "the record is stored" —
         // this worker never posted to that URI.
-        using var harness = new DrainHarness(
+        using var harness = new SpoolDrainHarness(
             FakeAuditReceiver.RespondingFromADifferentUri(new Uri("https://audit.example/elsewhere"), HttpStatusCode.OK));
         await harness.SpoolAsync(AuditedOperation(at: Noon));
         var spooledFileName = harness.SpooledFileNames()[0];
@@ -414,7 +253,7 @@ public class DrainWorkerTests
     [Fact]
     public async Task DrainWorker_TransientFailure_WaitsForTheOldestRecordInsteadOfSkippingPastIt()
     {
-        using var harness = new DrainHarness(FakeAuditReceiver.Responding(HttpStatusCode.ServiceUnavailable));
+        using var harness = new SpoolDrainHarness(FakeAuditReceiver.Responding(HttpStatusCode.ServiceUnavailable));
         var oldest = await harness.SpoolAsync(AuditedOperation(at: Noon));
         await harness.SpoolAsync(AuditedOperation(at: Noon.AddMinutes(1)));
 
@@ -432,7 +271,7 @@ public class DrainWorkerTests
     public async Task DrainWorker_ConsecutiveTransientFailures_HealthCheckReportsConfiguredUnreachableStatus_ClearsOnNextSuccess(
         HealthStatus? configuredStatus, HealthStatus expectedStatus)
     {
-        using var harness = new DrainHarness(
+        using var harness = new SpoolDrainHarness(
             FakeAuditReceiver.Responding(
                 HttpStatusCode.ServiceUnavailable,
                 HttpStatusCode.ServiceUnavailable,
@@ -501,7 +340,7 @@ public class DrainWorkerTests
         // The crash is modelled as the confirmation never arriving: the receiver has the record,
         // this side never learns it, so the spool file stays and the record is sent again. That
         // duplicate is why deduplication by eventId is the receiver's job (ADR 0020 D7).
-        using var harness = new DrainHarness(new FakeAuditReceiver((requestIndex, _) => requestIndex == 0
+        using var harness = new SpoolDrainHarness(new FakeAuditReceiver((requestIndex, _) => requestIndex == 0
             ? Task.FromException<HttpResponseMessage>(new HttpRequestException("the connection dropped after the record was stored"))
             : Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK))));
         var accepted = await harness.SpoolAsync(AuditedOperation(at: Noon));
@@ -521,7 +360,7 @@ public class DrainWorkerTests
     [Fact]
     public async Task DrainWorker_EmptyDeadLetterDirectory_LeavesTheHealthCheckAlone()
     {
-        using var harness = new DrainHarness(FakeAuditReceiver.Responding(HttpStatusCode.OK));
+        using var harness = new SpoolDrainHarness(FakeAuditReceiver.Responding(HttpStatusCode.OK));
         await harness.SpoolAsync(AuditedOperation(at: Noon));
 
         await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
@@ -547,7 +386,7 @@ public class DrainWorkerTests
     [Fact]
     public async Task DrainWorker_Running_DrainsAgainEveryDrainInterval()
     {
-        using var harness = new DrainHarness(FakeAuditReceiver.Responding(HttpStatusCode.OK));
+        using var harness = new SpoolDrainHarness(FakeAuditReceiver.Responding(HttpStatusCode.OK));
         await harness.SpoolAsync(AuditedOperation(at: Noon));
         await harness.Worker.StartAsync(TestContext.Current.CancellationToken);
         await Until(() => harness.Receiver.Received.Count == 1);
@@ -566,7 +405,7 @@ public class DrainWorkerTests
         // A pure-function test of RetryDelayFor alone would still pass if the running loop ignored
         // it and always waited a plain DrainInterval — this drives the loop itself and pins the one
         // clock advance that must not be enough.
-        using var harness = new DrainHarness(
+        using var harness = new SpoolDrainHarness(
             FakeAuditReceiver.Responding(HttpStatusCode.ServiceUnavailable, HttpStatusCode.OK),
             options =>
             {
@@ -597,7 +436,7 @@ public class DrainWorkerTests
     [Fact]
     public async Task DrainWorker_HostStopping_DrainsWhatIsStillSpooledBeforeItGoes()
     {
-        using var harness = new DrainHarness(FakeAuditReceiver.Responding(HttpStatusCode.OK));
+        using var harness = new SpoolDrainHarness(FakeAuditReceiver.Responding(HttpStatusCode.OK));
         await harness.SpoolAsync(AuditedOperation(at: Noon));
         await harness.Worker.StartAsync(TestContext.Current.CancellationToken);
 
@@ -616,7 +455,7 @@ public class DrainWorkerTests
     [Fact]
     public async Task DrainWorker_HostStopping_WhileTheEndpointDoesNotAnswer_GivesUpAtTheShutdownTimeout()
     {
-        using var harness = new DrainHarness(FakeAuditReceiver.Hanging());
+        using var harness = new SpoolDrainHarness(FakeAuditReceiver.Hanging());
         await harness.SpoolAsync(AuditedOperation(at: Noon));
         await harness.Worker.StartAsync(TestContext.Current.CancellationToken);
         await Until(() => harness.Receiver.Received.Count == 1);
@@ -637,7 +476,7 @@ public class DrainWorkerTests
     {
         // An unhandled exception out of ExecuteAsync stops the host: an audit delivery problem
         // would take the whole application down with it.
-        using var harness = new DrainHarness(new FakeAuditReceiver((requestIndex, _) => requestIndex == 0
+        using var harness = new SpoolDrainHarness(new FakeAuditReceiver((requestIndex, _) => requestIndex == 0
             ? Task.FromException<HttpResponseMessage>(new InvalidOperationException("something no delivery rule covers"))
             : Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK))));
         await harness.SpoolAsync(AuditedOperation(at: Noon));
@@ -660,7 +499,7 @@ public class DrainWorkerTests
         // Nothing validates DrainInterval/MaxDrainBackoff as positive yet (B09's job); until it
         // does, a bad value must not escape ExecuteAsync and take the whole application down with
         // it, the same guarantee the class already gives every delivery-path exception.
-        using var harness = new DrainHarness(
+        using var harness = new SpoolDrainHarness(
             FakeAuditReceiver.Responding(HttpStatusCode.OK),
             options =>
             {

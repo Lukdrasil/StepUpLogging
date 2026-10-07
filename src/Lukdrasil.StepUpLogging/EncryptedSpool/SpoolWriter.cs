@@ -2,6 +2,9 @@ using System.Text.Json;
 
 namespace Lukdrasil.StepUpLogging.Audit.EncryptedSpool;
 
+// af-stub: red step for issue #69.
+internal readonly record struct SpoolRecord(string FileName, byte[] Contents);
+
 /// <summary>
 /// Writes one <see cref="SpoolEnvelope"/> per file into the spool directory: to a
 /// <c>.tmp</c> file, flushed to the device, then atomically renamed into place, so a reader only
@@ -16,7 +19,7 @@ internal sealed class SpoolWriter
 
     /// <summary>
     /// Prepares the spool directory and recovers any <c>.tmp</c> file left behind by a crash. Its
-    /// bytes were already fsynced before the crash (<see cref="WriteAsync"/>), so a <c>.tmp</c>
+    /// bytes were already fsynced before the crash (<see cref="WriteAsync(SpoolEnvelope)"/>), so a <c>.tmp</c>
     /// that still parses as a whole envelope is a record that <em>was</em> acknowledged to a
     /// caller — only its rename into place did not survive — and is promoted to its <c>.env</c>
     /// name rather than discarded. Only a <c>.tmp</c> that fails to parse, i.e. one truncated
@@ -28,6 +31,16 @@ internal sealed class SpoolWriter
         Directory.CreateDirectory(spoolDirectory);
         RecoverOrphanedTemporaryFiles();
     }
+
+    // af-stub: red step for issue #69; the implementer routes WriteAsync through writeDurably.
+    internal SpoolWriter(string spoolDirectory, Func<string, byte[], Task> writeDurably)
+        : this(spoolDirectory)
+    {
+    }
+
+    internal static SpoolRecord Prepare(SpoolEnvelope envelope) => throw new NotImplementedException(); // af-stub
+
+    public Task WriteAsync(SpoolRecord record) => throw new NotImplementedException(); // af-stub
 
     /// <summary>
     /// Writes <paramref name="envelope"/> and returns only once it is durably on disk. There is

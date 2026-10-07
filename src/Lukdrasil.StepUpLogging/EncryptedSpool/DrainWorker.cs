@@ -52,6 +52,27 @@ internal sealed class DrainWorker(
     /// </summary>
     private readonly Dictionary<string, int> _unreadableAttempts = [];
 
+    // af-stub: red step for issue #69; the implementer makes this the primary constructor.
+    internal DrainWorker(
+        IOptions<EncryptedSpoolOptions> options,
+        IHttpClientFactory httpClientFactory,
+        DeadLetterBox deadLetterBox,
+        EndpointReachability reachability,
+        SpoolUsageTracker usageTracker,
+        TimeProvider timeProvider,
+        ILogger<DrainWorker> logger)
+        : this(options, httpClientFactory, deadLetterBox, reachability, timeProvider, logger)
+    {
+    }
+
+    internal static IEnumerable<DrainStep> Plan(IEnumerable<SpoolEntry> entries, int batchSize) =>
+        throw new NotImplementedException(); // af-stub
+
+    internal static DeliveryAttempt Classify(HttpResponseMessage response, Uri expected) =>
+        throw new NotImplementedException(); // af-stub
+
+    internal static byte[] BatchBody(IReadOnlyList<SpoolEntry> batch) => throw new NotImplementedException(); // af-stub
+
     /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -303,9 +324,12 @@ internal sealed class DrainWorker(
     }
 
     /// <summary>What the audit endpoint made of one record, and the words for it.</summary>
-    private readonly record struct DeliveryAttempt(DeliveryOutcome Outcome, string Description);
+    internal readonly record struct DeliveryAttempt(DeliveryOutcome Outcome, string Description);
 
-    private enum DeliveryOutcome
+    // af-stub: red step for issue #69.
+    internal readonly record struct DrainStep(IReadOnlyList<SpoolEntry> Batch, SpoolEntry? Faulted);
+
+    internal enum DeliveryOutcome
     {
         /// <summary>The endpoint confirmed the record is durably stored.</summary>
         Stored,

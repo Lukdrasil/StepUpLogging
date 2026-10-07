@@ -28,6 +28,18 @@ internal sealed class EncryptedSpoolAuditSink(
     /// <summary>Guarded by <see cref="_spoolGate"/>, so the warning is logged on crossing the threshold, once.</summary>
     private bool _wasAtWarnThreshold;
 
+    // af-stub: red step for issue #69; the implementer makes this the primary constructor.
+    internal EncryptedSpoolAuditSink(
+        IOptions<EncryptedSpoolOptions> options,
+        SpoolWriter writer,
+        SpoolUsageTracker usageTracker,
+        IAuditPayloadEncryptor encryptor,
+        TimeProvider timeProvider,
+        ILogger<EncryptedSpoolAuditSink> logger)
+        : this(options, writer, usageTracker, encryptor, logger)
+    {
+    }
+
     /// <inheritdoc />
     public async ValueTask<AuditWriteResult> WriteAsync(AuditEvent auditEvent)
     {

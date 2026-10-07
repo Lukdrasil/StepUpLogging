@@ -19,6 +19,9 @@ internal sealed record SpoolEntry(string FilePath, SpoolEnvelope? Envelope, Spoo
 
     /// <summary>True when <see cref="ReadFault"/> is <see cref="SpoolReadFault.Unreadable"/>.</summary>
     public bool IsUnreadable => ReadFault == SpoolReadFault.Unreadable;
+
+    // af-stub: red step for issue #69; the reader does not fill it yet.
+    public byte[] Contents { get; init; } = [];
 }
 
 /// <summary>Why a <see cref="SpoolEntry"/> could not be read as an envelope.</summary>
