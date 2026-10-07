@@ -22,9 +22,11 @@ public class SpoolDrainBenchmarks
     private DrainWorker _worker = null!;
     private HttpClient _client = null!;
 
+    /// <summary>How many records the worker delivers per request.</summary>
     [Params(1, 64)]
     public int BatchSize { get; set; }
 
+    /// <summary>Builds a worker against a receiver that takes 15 ms to answer.</summary>
     [GlobalSetup]
     public void Setup()
     {
@@ -43,6 +45,7 @@ public class SpoolDrainBenchmarks
             NullLogger<DrainWorker>.Instance);
     }
 
+    /// <summary>Refills the spool, since each run drains it.</summary>
     [IterationSetup]
     public void FillSpool()
     {
@@ -61,6 +64,7 @@ public class SpoolDrainBenchmarks
         }
     }
 
+    /// <summary>Disposes the client and removes the spool.</summary>
     [GlobalCleanup]
     public void Cleanup()
     {

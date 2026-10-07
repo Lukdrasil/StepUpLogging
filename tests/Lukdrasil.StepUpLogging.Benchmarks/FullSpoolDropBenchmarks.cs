@@ -17,6 +17,7 @@ public class FullSpoolDropBenchmarks
     private SpoolCapacity _capacity = null!;
     private EncryptedSpoolAuditSink _sink = null!;
 
+    /// <summary>Fills a spool to its cap and lets the first write measure it.</summary>
     [GlobalSetup]
     public async Task Setup()
     {
@@ -24,22 +25,16 @@ public class FullSpoolDropBenchmarks
         var options = SpoolBenchmarkSupport.OptionsFor(_spoolDirectory);
         options.SpoolMaxEntries = Cap;
 
-        var writer = new SpoolWriter(_spoolDirectory);
-        for (var i = 0; i < Cap; i++)
-        {
-            await File.WriteAllBytesAsync(Path.Combine(_spoolDirectory, $"{i:D8}.env"), "{}"u8.ToArray());
-        }
-
+        await SpoolBenchmarkSupport.FillWithRecordsAsync(_spoolDirectory, Cap);
         _capacity = new SpoolCapacity(options);
-        _sink = SpoolBenchmarkSupport.SinkFor(options, writer, SpoolBenchmarkSupport.TrackerFor(options));
+        _sink = SpoolBenchmarkSupport.SinkFor(options);
 
         // The first write measures the spool; every one after it is what is benchmarked.
-        if (await _sink.WriteAsync(SpoolBenchmarkSupport.AuditedOperation()) != AuditWriteResult.Dropped)
-        {
-            throw new InvalidOperationException("the spool is not at its cap");
-        }
+        var first = await _sink.WriteAsync(SpoolBenchmarkSupport.AuditedOperation());
+        SpoolBenchmarkSupport.RequireDropped(first);
     }
 
+    /// <summary>Disposes the sink and removes its spool.</summary>
     [GlobalCleanup]
     public void Cleanup()
     {
