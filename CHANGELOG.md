@@ -8,6 +8,8 @@ Tags before 1.8.0 predate this file.
 
 ## [Unreleased]
 
+## [5.1.0] - 2026-10-07
+
 ### Added
 - `EncryptedSpoolOptions.DeliveryBatchSize` (default 1, 1 to 1024). Above 1 the drain worker posts a run of records as one JSON array to `{EndpointBaseUrl}/audit/batch`, so one receiver round trip delivers many records instead of one; the receiver must implement that endpoint, store a batch whole or reject it whole, and deduplicate on `eventId`. A rejected batch is redelivered record by record to `/audit`, so only the record rejected on its own is dead-lettered. At the default the wire is unchanged. Part of #69. See docs/adr/0020-spool-durability-and-delivery-failures.md.
 - `EncryptedSpoolOptions.SpoolFullRecheckInterval` (default 1 s, must be greater than zero): how often a spool found full is measured against the disk again, and the window of the dropped-record log. Part of #69.
