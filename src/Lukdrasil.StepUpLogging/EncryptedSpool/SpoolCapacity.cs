@@ -16,7 +16,10 @@ internal readonly record struct SpoolUsage(long Bytes, int Records, double FillF
     public bool IsAtWarnThreshold => FillFraction >= WarnFraction;
 }
 
-// af-stub: red step for issue #69.
+/// <summary>
+/// The answer to a request for room in the spool: whether the record was admitted, the usage it was
+/// judged against, and whether this was the request that found the spool at half its cap.
+/// </summary>
 internal readonly record struct ReservationVerdict(bool Admitted, SpoolUsage Usage, bool CrossedWarnThreshold);
 
 /// <summary>
@@ -30,7 +33,7 @@ internal sealed class SpoolCapacity(EncryptedSpoolOptions options)
         var directory = new DirectoryInfo(options.SpoolDirectory);
         if (!directory.Exists)
         {
-            return Usage(bytes: 0, records: 0);
+            return UsageOf(bytes: 0, records: 0);
         }
 
         long bytes = 0;
@@ -45,126 +48,175 @@ internal sealed class SpoolCapacity(EncryptedSpoolOptions options)
             records++;
         }
 
-        return Usage(bytes, records);
+        return UsageOf(bytes, records);
     }
 
-    /// <summary>The usage <paramref name="usage"/> becomes once one more record of <paramref name="recordBytes"/> is spooled.</summary>
-    public SpoolUsage Grown(SpoolUsage usage, long recordBytes) => Usage(usage.Bytes + recordBytes, usage.Records + 1);
-
+    /// <summary>The usage of a spool holding <paramref name="records"/> records of <paramref name="bytes"/> bytes together.</summary>
     // Whichever cap is closest decides: a spool of many tiny records fills on the record count long
     // before the byte budget, and one of few large records the other way round.
-    private SpoolUsage Usage(long bytes, int records) =>
+    public SpoolUsage UsageOf(long bytes, int records) =>
         new(bytes, records, Math.Max((double)bytes / options.SpoolMaxBytes, (double)records / options.SpoolMaxEntries));
 }
 
 /// <summary>
 /// The spool's fill level as the write path sees it: the disk stays the source of truth, but
-/// re-reading the whole directory on every audit write would put a scan proportional to the spool's
-/// depth on the business path — tens of milliseconds once a stalled receiver has let it grow.
+/// re-reading the whole directory on every audit write — or on every dropped one, once the spool
+/// is full — would put a scan proportional to the spool's depth on the business path.
 /// </summary>
 /// <remarks>
-/// The write path still owns correctness — the sink reads and updates this under the gate that
-/// serializes its writes, so only ever one thread updates the tally. The lock exists for
-/// <see cref="Snapshot"/> alone: a gauge observes the tally from a collection thread, and every
-/// update takes the lock so that observation can never catch a half-written value.
+/// Writers reserve room before they write (<see cref="TryReserve"/>), so the cap holds for writers
+/// in flight without any of them waiting for another's fsync. The tally is only ever too high,
+/// never too low: records leave the spool behind this tracker's back — the drain worker deletes
+/// them once delivered and says so through <see cref="Released"/>, which a measure may overtake —
+/// so it can report the spool full early, but never late. Early would drop a record for room that
+/// already exists, so a full verdict is confirmed against the disk, at most once per recheck
+/// interval and by one thread at a time; every other writer at the cap is refused from the tally.
 /// </remarks>
-internal sealed class SpoolUsageTracker(SpoolCapacity capacity)
+internal sealed class SpoolUsageTracker(SpoolCapacity capacity, TimeProvider timeProvider, TimeSpan fullRecheckInterval)
 {
     private readonly object _gate = new();
-    private SpoolUsage? _addedUp;
-
-    // af-stub: red step for issue #69; the implementer makes this the primary constructor.
-    internal SpoolUsageTracker(SpoolCapacity capacity, TimeProvider timeProvider, TimeSpan fullRecheckInterval)
-        : this(capacity)
-    {
-    }
-
-    public ReservationVerdict TryReserve(long bytes) => throw new NotImplementedException(); // af-stub
-
-    public void Commit(long bytes) => throw new NotImplementedException(); // af-stub
-
-    public void Abandon(long bytes) => throw new NotImplementedException(); // af-stub
-
-    public int ReleaseToken => throw new NotImplementedException(); // af-stub
-
-    public void Released(int token, long bytes) => throw new NotImplementedException(); // af-stub
-
-    internal static bool NeedsMeasure(bool isFull, TimeSpan sinceMeasured, TimeSpan interval) =>
-        throw new NotImplementedException(); // af-stub
+    private readonly object _measureGate = new();
+    private SpoolTally _tally;
+    private long _measuredAt;
+    private bool _wasAtWarnThreshold;
+    private volatile bool _measuredOnce;
 
     /// <summary>
-    /// The current usage, exact wherever being wrong would cost a record. Records only ever leave
-    /// the spool behind this tracker's back — the drain worker deletes them once delivered — so an
-    /// added-up value is only ever too high, never too low: it can report the spool full early, but
-    /// never late. Early is what would drop a record for room that already exists, so that one
-    /// verdict is confirmed against the disk before it is returned.
+    /// The token a deleter takes before it deletes a record, to hand back to <see cref="Released"/>:
+    /// a measure that ran in between may or may not have seen the file, so its release is ignored.
     /// </summary>
-    public SpoolUsage Read()
-    {
-        var usage = _addedUp ?? capacity.Measure();
-        if (usage.IsFull)
-        {
-            usage = capacity.Measure();
-        }
-
-        lock (_gate)
-        {
-            _addedUp = usage;
-        }
-
-        return usage;
-    }
-
-    /// <summary>Adds a record of <paramref name="recordBytes"/> that reached the spool.</summary>
-    public void Recorded(long recordBytes)
-    {
-        lock (_gate)
-        {
-            if (_addedUp is { } usage)
-            {
-                _addedUp = capacity.Grown(usage, recordBytes);
-            }
-        }
-    }
-
-    /// <summary>Drops what was added up, so the next read comes from the disk again.</summary>
-    public void Invalidate()
-    {
-        lock (_gate)
-        {
-            _addedUp = null;
-        }
-    }
-
-    /// <summary>
-    /// The tally as it stands, scanning disk at most once — the first call, if nothing has primed it
-    /// yet (typically a restart sitting on a backlog no write in this process has touched). Every
-    /// later call reuses that tally instead of re-scanning, so cheap, frequent observation (an OTel
-    /// gauge) never puts a directory enumeration on every collection interval. Same tolerance as
-    /// <see cref="Read"/>: only ever too high, never too low — reporting zero here as long as the
-    /// spool sat unread would break that, since an idle-but-backlogged instance is exactly the case
-    /// the gauge exists for.
-    /// </summary>
-    public SpoolUsage Snapshot
+    public int ReleaseToken
     {
         get
         {
             lock (_gate)
             {
-                if (_addedUp is { } usage)
-                {
-                    return usage;
-                }
+                return _tally.Generation;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Asks for room for one record of <paramref name="bytes"/>. A spool found full is measured again
+    /// when the last measure is at least the recheck interval old, so room the drain freed shows up
+    /// without a scan per dropped write.
+    /// </summary>
+    public ReservationVerdict TryReserve(long bytes)
+    {
+        EnsureMeasured();
+        RecheckIfFullAndDue();
+
+        lock (_gate)
+        {
+            var usage = _tally.Usage(capacity);
+            var crossed = usage.IsAtWarnThreshold && !_wasAtWarnThreshold;
+            _wasAtWarnThreshold = usage.IsAtWarnThreshold;
+
+            if (usage.IsFull)
+            {
+                return new ReservationVerdict(Admitted: false, usage, crossed);
             }
 
-            // The scan happens outside the lock, matching Read(): it is disk I/O, and nothing else
-            // needs the lock held across it.
-            var measured = capacity.Measure();
+            _tally = _tally.Reserve(bytes);
+            return new ReservationVerdict(Admitted: true, usage, crossed);
+        }
+    }
+
+    /// <summary>Moves a reserved record of <paramref name="bytes"/> onto the disk once its write finished.</summary>
+    public void Commit(long bytes) => Update(tally => tally.Commit(bytes));
+
+    /// <summary>Keeps counting a reserved record of <paramref name="bytes"/> whose write failed, since it may have left a <c>.tmp</c> behind.</summary>
+    public void Abandon(long bytes) => Update(tally => tally.Abandon(bytes));
+
+    /// <summary>Takes a delivered or dead-lettered record of <paramref name="bytes"/> off the tally, unless a measure overlapped it.</summary>
+    public void Released(int token, long bytes) => Update(tally => tally.Release(bytes, token));
+
+    /// <summary>True when a spool found full was last measured at least <paramref name="interval"/> ago.</summary>
+    internal static bool NeedsMeasure(bool isFull, TimeSpan sinceMeasured, TimeSpan interval) =>
+        isFull && sinceMeasured >= interval;
+
+    /// <summary>
+    /// The current usage, reservations in flight included, scanning disk only on the first call if
+    /// nothing has measured yet (typically a restart sitting on a backlog no write in this process
+    /// has touched). Cheap, frequent observation (an OTel gauge) never puts a directory enumeration
+    /// on every collection interval. An idle-but-backlogged instance is exactly the case the gauge
+    /// exists for, so the first call reports the disk rather than zero.
+    /// </summary>
+    public SpoolUsage Snapshot
+    {
+        get
+        {
+            EnsureMeasured();
             lock (_gate)
             {
-                _addedUp ??= measured;
-                return _addedUp.Value;
+                return _tally.Usage(capacity);
             }
+        }
+    }
+
+    private void Update(Func<SpoolTally, SpoolTally> next)
+    {
+        lock (_gate)
+        {
+            _tally = next(_tally);
+        }
+    }
+
+    private void EnsureMeasured()
+    {
+        if (_measuredOnce)
+        {
+            return;
+        }
+
+        // Concurrent first callers wait here for the one measure rather than each scanning.
+        lock (_measureGate)
+        {
+            if (!_measuredOnce)
+            {
+                MeasureNow();
+                _measuredOnce = true;
+            }
+        }
+    }
+
+    private void RecheckIfFullAndDue()
+    {
+        if (!IsFullAndDue() || !Monitor.TryEnter(_measureGate))
+        {
+            return;
+        }
+
+        // Whoever loses the race has nothing to wait for: the winner's result is on the tally
+        // by the time they next ask, and meanwhile the tally's verdict only errs high.
+        try
+        {
+            MeasureNow();
+        }
+        finally
+        {
+            Monitor.Exit(_measureGate);
+        }
+    }
+
+    private bool IsFullAndDue()
+    {
+        lock (_gate)
+        {
+            return NeedsMeasure(_tally.Usage(capacity).IsFull, timeProvider.GetElapsedTime(_measuredAt), fullRecheckInterval);
+        }
+    }
+
+    // The scan runs outside the gate — it is disk I/O, and writers must keep reserving meanwhile;
+    // what they commit while it runs is carried by the tally, since the scan may have missed it.
+    private void MeasureNow()
+    {
+        Update(tally => tally.BeginMeasure());
+        var measured = capacity.Measure();
+        lock (_gate)
+        {
+            _tally = _tally.EndMeasure(measured);
+            _measuredAt = timeProvider.GetTimestamp();
         }
     }
 }

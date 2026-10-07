@@ -77,7 +77,10 @@ public static class StepUpLoggingEncryptedSpoolExtensions
         // health check reports, and the SpoolWriter's crash-recovery sweep runs in its constructor,
         // so a second instance would sweep the same .tmp files a second time.
         builder.Services.AddSingleton(sp => new SpoolWriter(SpoolOptions(sp).SpoolDirectory));
-        builder.Services.AddSingleton(sp => new SpoolUsageTracker(new SpoolCapacity(SpoolOptions(sp))));
+        builder.Services.AddSingleton(sp => new SpoolUsageTracker(
+            new SpoolCapacity(SpoolOptions(sp)),
+            sp.GetRequiredService<TimeProvider>(),
+            SpoolOptions(sp).SpoolFullRecheckInterval));
         builder.Services.AddSingleton<DeadLetterBox>();
         builder.Services.AddSingleton<EndpointReachability>();
         // TryAdd, not Add: a consumer who registered their own TimeProvider first (a FakeTimeProvider
