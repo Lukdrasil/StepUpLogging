@@ -18,6 +18,12 @@ application running by losing audit silently. This ADR rejects every one of them
 
 1. **`WriteAsync` returns only once the record is durably on disk** — flushed to the device, not
    merely to the OS page cache. One fsync per audit write, synchronously on the business path.
+   - > **Amended (2026-10-07, issue #69):** the fsync per record stays, but writes no longer wait
+     for one another's. The sink used to hold one process-wide gate across the capacity check, the
+     write and the bookkeeping, so concurrent writers queued behind a single fsync. Now room is
+     reserved under the capacity tracker's own short lock, and the write, fsync and rename run
+     outside any gate, so writers overlap in their fsyncs. The cap stays exact because every
+     reservation counts against it until its record lands or its write fails.
 
 2. **Records are written to a `.tmp` file and atomically renamed** into place. The drain worker
    sees only complete files; a `.tmp` left by a crash is handled at start-up. A `.tmp` that still parses as a whole envelope is instead promoted to its `.env` name — the directory entry for its rename is not fsynced, so a power loss can revert the rename alone and leave a complete record behind under its old name, and that record was already durable. An unparseable `.tmp` is deleted. Without this, a crash
@@ -39,6 +45,14 @@ application running by losing audit silently. This ADR rejects every one of them
    check reports `SpoolFullStatus` (default `Unhealthy`), configurable separately from
    `SpoolWarnStatus` so an instance actively dropping records cannot look merely `Degraded`
    unless the operator explicitly chose that.
+   - > **Amended (2026-10-07, issue #69):** the cap check is reserve-before-write: a write asks the
+     tracker for room for its own bytes and record, and is admitted or dropped from a tally that
+     counts what is on disk plus what is reserved. That tally only errs high (a failed write is
+     counted as landed, a release that overlaps a measure is ignored, files deleted behind the
+     process's back are not seen), never low, so the cap is never exceeded. A spool found full is
+     measured against the disk again at most once per `SpoolFullRecheckInterval` (default 1 s),
+     not on every write, so a refused write no longer scans the directory. The drain worker's
+     deletes release their room at once.
 
 6. **At 100 % of cap the new record is dropped**, logged at Critical and counted — `WriteAsync`
    returns `AuditWriteResult.Dropped` (ADR 0018 D6) rather than throwing, so core neither counts it
@@ -113,7 +127,12 @@ application running by losing audit silently. This ADR rejects every one of them
 - Dropping at 100 % is deliberate, bounded, loud, visible loss. A ring buffer was never an option:
   it would let an attacker push out the record of their own action by generating noise.
 - **`Dropped` is returned for exactly one condition in this sink: the spool is at 100 % of cap.**
-  That fence matters more than it looks. `Dropped` is the one thing a sink can say that makes the
+  *Amended (2026-10-07, issue #69):* "at cap" now means the tracker's tally is at cap. The tally
+  can err high — failed writes counted as landed, releases that overlap a measure ignored,
+  deletions made behind the process's back — so a record can be dropped for room that freed up
+  less than one `SpoolFullRecheckInterval` ago. That is the bounded risk #69 accepted in return
+  for a refused write costing no directory scan; the tally never errs low, and `Dropped` still
+  answers no other condition. That fence matters more than it looks. `Dropped` is the one thing a sink can say that makes the
   companion log disappear and the success counter stay flat — which is precisely why it must never
   become the convenient answer to an awkward failure. Every other failure here — spool write,
   serialization, encryption, a key that cannot be obtained — still throws and propagates under
