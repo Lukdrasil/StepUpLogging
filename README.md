@@ -903,6 +903,10 @@ A batch is one delivery: the receiver must store it whole or reject it whole, so
 of every record in it, and must still deduplicate on `EventId`. Anything transient resends the whole
 batch.
 
+A `413` (or any other permanent rejection) on a batch makes the worker fall back to per-record delivery
+for that batch, every cycle it is retried, so keep `DeliveryBatchSize` small enough that a full batch
+fits the receiver's request body limit.
+
 `dead-letter/` is a sibling directory of the spool, and nothing in this package ever deletes from
 it: it is the permanent evidence that a record never reached the audit store, and clearing it is a
 manual, investigated action. A record reaches it by three routes, not only the table above: a
