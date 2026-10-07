@@ -25,6 +25,13 @@ internal static class SpoolBenchmarkSupport
         return directory;
     }
 
+    /// <summary>Disposes <paramref name="sink"/> and removes the spool it wrote.</summary>
+    internal static void Discard(EncryptedSpoolAuditSink sink, string spoolDirectory)
+    {
+        sink.Dispose();
+        DeleteWithSiblings(spoolDirectory);
+    }
+
     internal static void DeleteWithSiblings(string spoolDirectory)
     {
         var parent = Path.GetDirectoryName(spoolDirectory)!;
