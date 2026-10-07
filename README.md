@@ -801,7 +801,8 @@ Cover the failure path too: a sink that throws must abort the business operation
 
 `EncryptedSpoolAuditSink` ships inside this same package — no separate install. It is a durable,
 at-least-once `IAuditEventSink`: every audited write is encrypted, written to a local write-ahead
-spool, and delivered to a receiver you configure, one `POST` per record. A crash between "the
+spool, and delivered to a receiver you configure, one `POST` per record by default (or a batch of
+them, see `DeliveryBatchSize`). A crash between "the
 receiver accepted it" and "the spool file was deleted" resends the record on the next drain cycle,
 so **your receiver must deduplicate on `EventId`** — delivery is at-least-once, not exactly-once.
 
@@ -854,9 +855,11 @@ custom handler to that client, register it after `AddEncryptedSpoolAuditSink`.
 | `MaxPayloadBytes` | 64 KB | Largest serialized record accepted. Over it, `AuditAsync` throws at the call site — nothing is encrypted or spooled. |
 | `SpoolMaxBytes` | 256 MB | Spool size cap. Reaching either this or `SpoolMaxEntries` starts dropping new records. |
 | `SpoolMaxEntries` | 100 000 | Spool record-count cap. |
+| `SpoolFullRecheckInterval` | 1 s | How often a spool found full is measured against the disk again (a refused write costs no directory scan in between), and the window in which dropped records are logged as one Critical summary instead of one line each. Must be greater than zero. |
 | `DrainInterval` | 5 s | How often the drain worker looks for records, and the first wait it backs off from. |
 | `MaxDrainBackoff` | 5 min | Ceiling the wait doubles up to while the endpoint keeps failing. |
-| `DeliveryTimeout` | 30 s | Timeout for one delivery attempt. A timeout is transient — retried, never dead-lettered. |
+| `DeliveryBatchSize` | 1 | Most records delivered in one request, 1 to 1024. At 1 each record goes to `{EndpointBaseUrl}/audit`. Above 1, a run of records goes as one JSON array to `{EndpointBaseUrl}/audit/batch`, which your receiver must implement first (see [Delivery contract](#delivery-contract)). |
+| `DeliveryTimeout` | 30 s | Timeout for one delivery attempt — a whole batch, when batching. A timeout is transient — retried, never dead-lettered. |
 | `ShutdownDrainTimeout` | 5 s | How long a stopping host waits for the drain worker. Nothing is lost when it runs out; the next start delivers. |
 | `UnreadableRetryLimit` | 10 | Drain cycles a spool file may fail to even be opened before it is dead-lettered as unreadable. |
 | `SpoolWarnStatus`, `SpoolFullStatus`, `UnreachableStatus` | see [Health check](#health-check) | The statuses the health check reports. |
@@ -885,14 +888,20 @@ into a dropped record.
 
 ### Delivery contract
 
-The drain worker posts one spooled envelope per request to `{EndpointBaseUrl}/audit` and reads the
+The drain worker posts the spooled bytes unchanged as `application/json; charset=utf-8`: one envelope
+per request to `{EndpointBaseUrl}/audit`, or, with `DeliveryBatchSize` above 1, up to that many as one
+JSON array to `{EndpointBaseUrl}/audit/batch` (a run of one still goes to `/audit`). It reads the
 response:
 
 | Response | Meaning | Outcome |
 |---|---|---|
-| `2xx` | The receiver durably stored the record | Deleted from the spool |
-| `400`, `409`, `413`, `415`, `422` | The record itself is defective — malformed, conflicting, oversized, wrongly typed, or unprocessable | Moved to `dead-letter/`, logged Critical, never retried |
+| `2xx` | The receiver durably stored the record (for a batch: every record in it) | Deleted from the spool |
+| `400`, `409`, `413`, `415`, `422` | The record itself is defective — malformed, conflicting, oversized, wrongly typed, or unprocessable | Moved to `dead-letter/`, logged Critical, never retried. For a batch, it says one record is defective, not which: the batch is redelivered record by record to `/audit`, and only the record rejected on its own is dead-lettered |
 | Anything else (`3xx`, `401`/`403`/`404`/`405`/`407`, `408`, `429`, `5xx`, a network failure, a timeout) | The receiver could not take the record right now, or the failure says nothing about the record itself | Retried with backoff |
+
+A batch is one delivery: the receiver must store it whole or reject it whole, so that a `2xx` is true
+of every record in it, and must still deduplicate on `EventId`. Anything transient resends the whole
+batch.
 
 `dead-letter/` is a sibling directory of the spool, and nothing in this package ever deletes from
 it: it is the permanent evidence that a record never reached the audit store, and clearing it is a

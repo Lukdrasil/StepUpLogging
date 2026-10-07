@@ -8,6 +8,15 @@ Tags before 1.8.0 predate this file.
 
 ## [Unreleased]
 
+### Added
+- `EncryptedSpoolOptions.DeliveryBatchSize` (default 1, 1 to 1024). Above 1 the drain worker posts a run of records as one JSON array to `{EndpointBaseUrl}/audit/batch`, so one receiver round trip delivers many records instead of one; the receiver must implement that endpoint, store a batch whole or reject it whole, and deduplicate on `eventId`. A rejected batch is redelivered record by record to `/audit`, so only the record rejected on its own is dead-lettered. At the default the wire is unchanged. Part of #69. See docs/adr/0020-spool-durability-and-delivery-failures.md.
+- `EncryptedSpoolOptions.SpoolFullRecheckInterval` (default 1 s, must be greater than zero): how often a spool found full is measured against the disk again, and the window of the dropped-record log. Part of #69.
+
+### Changed
+- Concurrent durable writes no longer queue behind one process-wide gate: a write reserves room in the spool's tally before it writes, so fsyncs overlap and the cap still holds. Part of #69.
+- A full spool no longer scans the spool directory on every dropped write: it refuses from the tally and measures the disk again at most once per `SpoolFullRecheckInterval`. Dropped records are logged at Critical at a bounded rate: the first drop of each window by `EventId`, the rest as one summary (count, first and last `EventId`). Every drop is still counted on `audit_spool_rejected_full_total`. Part of #69.
+- The drain worker posts the stored bytes unchanged, with a `Content-Length`, instead of re-serializing the envelope and sending it chunked. The body, media type and URI the receiver sees are unchanged. Part of #69.
+
 ## [5.0.2] - 2026-09-30
 
 ### Fixed
