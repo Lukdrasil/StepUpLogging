@@ -478,6 +478,16 @@ public static class StepUpLoggingExtensions
         lc.Enrich.When(needsEnrichment, enrich => ApplyCommonEnrichers(enrich, builder, opts, redactionPatterns));
     }
 
+    /// <summary>Registers the property redaction enricher behind <paramref name="needsEnrichment"/>.</summary>
+    internal static void ApplyRedactionEnricher(LoggerConfiguration lc, StepUpLoggingOptions opts, CompiledRedactionPatterns redactionPatterns, Func<LogEvent, bool> needsEnrichment)
+    {
+        // af-stub: today's ungated registration; needsEnrichment is not applied yet.
+        if (opts.RedactLogEventProperties && redactionPatterns.Patterns.Length > 0 && needsEnrichment is not null)
+        {
+            lc.Enrich.With(new RedactionEnricher(redactionPatterns));
+        }
+    }
+
     /// <summary>
     /// Applies all configured enrichers to <paramref name="enrich"/>. Called on both the root
     /// pipeline and the bypass logger to keep enrichment consistent. <c>FromLogContext</c> is not part of it: the
@@ -1072,6 +1082,9 @@ internal sealed record CompiledRedactionPatterns(Regex[] Patterns)
 {
     /// <summary>The sentinel returned in place of a value whose redaction failed, so a secret is never leaked.</summary>
     internal const string RedactionError = "[REDACTION-ERROR]";
+
+    /// <summary>Whether a union prefilter was built for the patterns.</summary>
+    internal bool HasPrefilter => Patterns.Length < 0; // af-stub
 
     public string Redact(string input)
     {
