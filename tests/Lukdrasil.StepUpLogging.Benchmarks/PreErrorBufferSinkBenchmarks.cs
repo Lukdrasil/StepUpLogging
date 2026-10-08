@@ -1,5 +1,4 @@
 using BenchmarkDotNet.Attributes;
-using Serilog;
 using Serilog.Events;
 
 namespace Lukdrasil.StepUpLogging.Benchmarks;
@@ -14,8 +13,8 @@ namespace Lukdrasil.StepUpLogging.Benchmarks;
 public class PreErrorBufferSinkBenchmarks
 {
     private const int HoldsPerInvoke = 4096;
-    private const int CapacityPerContext = 100;
-    private const int MaxContexts = 1024;
+    private const int CapacityPerContext = BenchmarkFixtures.PrebufferCapacityPerContext;
+    private const int MaxContexts = BenchmarkFixtures.PrebufferMaxContexts;
 
     private readonly NullLogEventSink _flushed = new();
     private PreErrorBufferSink _sink = null!;
@@ -35,11 +34,10 @@ public class PreErrorBufferSinkBenchmarks
     [GlobalSetup]
     public void Setup()
     {
-        var bypass = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(_flushed).CreateLogger();
-        _sink = new PreErrorBufferSink(bypass, CapacityPerContext, MaxContexts, LogEventLevel.Information);
-        _held = [.. Enumerable.Range(0, HoldsPerInvoke).Select(i => InTrace(LogEventLevel.Information, i % Contexts))];
-        _fillOneBuffer = [.. Enumerable.Range(0, CapacityPerContext).Select(_ => InTrace(LogEventLevel.Information, 0))];
-        _error = InTrace(LogEventLevel.Error, 0);
+        _sink = BenchmarkFixtures.PrebufferSink(_flushed);
+        _held = [.. Enumerable.Range(0, HoldsPerInvoke).Select(i => BenchmarkFixtures.InTrace(LogEventLevel.Information, i % Contexts))];
+        _fillOneBuffer = [.. Enumerable.Range(0, CapacityPerContext).Select(_ => BenchmarkFixtures.InTrace(LogEventLevel.Information, 0))];
+        _error = BenchmarkFixtures.InTrace(LogEventLevel.Error, 0);
 
         Hold();
         BenchmarkFixtures.Require(_sink.ContextCount == Math.Min(Contexts, MaxContexts), "the sink does not keep one buffer per trace up to its cap");
@@ -80,7 +78,4 @@ public class PreErrorBufferSinkBenchmarks
             _sink.Hold(_held[i]);
         }
     }
-
-    private static LogEvent InTrace(LogEventLevel level, int trace) =>
-        BenchmarkFixtures.Event(level, BenchmarkFixtures.OrderHandlerContext, BenchmarkFixtures.Text("TraceId", $"{trace:x32}"));
 }
