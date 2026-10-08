@@ -18,6 +18,7 @@ using Microsoft.Extensions.Options;
 using OpenTelemetry;
 using OpenTelemetry.Metrics;
 using Serilog;
+using Serilog.Configuration;
 using Serilog.Core;
 using Serilog.Enrichers.OpenTelemetry;
 using Serilog.Formatting.Compact;
@@ -266,13 +267,7 @@ public static class StepUpLoggingExtensions
             lc.ReadFrom.Configuration(rootConfig)
               .MinimumLevel.Verbose();
 
-            ApplyCommonEnrichers(lc, builder, opts, redactionPatterns);
-
-            var alwaysExport = (opts.AlwaysExportCategories ?? []).Where(c => !string.IsNullOrWhiteSpace(c)).ToArray();
-            if (alwaysExport.Length > 0)
-            {
-                lc.Enrich.With(new AlwaysExportEnricher(alwaysExport));
-            }
+            ApplyRootEnrichers(lc, builder, opts, redactionPatterns, EnrichmentGate.For(stepUpController.LevelSwitch, stepUpController.StepUpLevel, configure, builder.Configuration));
 
             // Bypass logger: exports at full verbosity independent of LevelSwitch.
             // Built directly here (not via DI) to avoid a circular deadlock:
@@ -464,66 +459,62 @@ public static class StepUpLoggingExtensions
         }
     }
 
+    /// <summary>
+    /// Applies the root pipeline enrichers (ADR 0026). <see cref="AlwaysExportEnricher"/> runs first and ungated,
+    /// since it marks the events the gate must let through; every other enricher runs only when
+    /// <paramref name="needsEnrichment"/> accepts the event.
+    /// </summary>
     internal static void ApplyRootEnrichers(LoggerConfiguration lc, IHostApplicationBuilder builder, StepUpLoggingOptions opts, CompiledRedactionPatterns redactionPatterns, Func<LogEvent, bool> needsEnrichment)
-        => ApplyCommonEnrichers(lc, builder, opts, redactionPatterns); // af-stub
+    {
+        var alwaysExport = (opts.AlwaysExportCategories ?? []).Where(c => !string.IsNullOrWhiteSpace(c)).ToArray();
+        if (alwaysExport.Length > 0)
+        {
+            lc.Enrich.With(new AlwaysExportEnricher(alwaysExport));
+        }
+
+        lc.Enrich.When(needsEnrichment, enrich => ApplyCommonEnrichers(enrich, builder, opts, redactionPatterns));
+    }
 
     /// <summary>
-    /// Applies all configured enrichers to <paramref name="lc"/>. Called on both the root
-    /// pipeline and the bypass logger to keep enrichment consistent.
+    /// Applies all configured enrichers to <paramref name="enrich"/>. Called on both the root
+    /// pipeline and the bypass logger to keep enrichment consistent. Each enricher is its own call on
+    /// <paramref name="enrich"/>: a chained <c>.Enrich.</c> inside <c>When</c> would reach the logger
+    /// configuration and escape the gate.
     /// </summary>
-    private static void ApplyCommonEnrichers(LoggerConfiguration lc, IHostApplicationBuilder builder, StepUpLoggingOptions opts, CompiledRedactionPatterns redactionPatterns)
+    private static void ApplyCommonEnrichers(LoggerEnrichmentConfiguration enrich, IHostApplicationBuilder builder, StepUpLoggingOptions opts, CompiledRedactionPatterns redactionPatterns)
     {
-        lc.Enrich.FromLogContext();
+        enrich.FromLogContext();
 
         if (redactionPatterns.Patterns.Length > 0)
         {
-            lc.Enrich.With(new PathPropertyRedactionEnricher(redactionPatterns));
+            enrich.With(new PathPropertyRedactionEnricher(redactionPatterns));
         }
 
-        lc.Enrich.WithOpenTelemetryTraceId()
-          .Enrich.WithOpenTelemetrySpanId()
-          .Enrich.With<ActivityContextEnricher>()
-          .Enrich.WithProperty("Application", builder.Environment.ApplicationName);
+        enrich.WithOpenTelemetryTraceId();
+        enrich.WithOpenTelemetrySpanId();
+        enrich.With<ActivityContextEnricher>();
+        enrich.WithProperty("Application", builder.Environment.ApplicationName);
 
-        if (opts.EnrichWithExceptionDetails && opts.StructuredExceptionDetails)
+        foreach (var add in OptionalEnrichers(builder, opts))
         {
-            lc.Enrich.WithExceptionDetails();
+            add(enrich);
         }
+    }
 
-        if (opts.EnrichWithEnvironment)
-        {
-            lc.Enrich.WithProperty("Environment", builder.Environment.EnvironmentName);
-        }
-
-        if (opts.EnrichWithThreadId)
-        {
-            lc.Enrich.WithThreadId();
-        }
-
-        if (opts.EnrichWithProcessId)
-        {
-            lc.Enrich.WithProcessId();
-        }
-
-        if (opts.EnrichWithMachineName)
-        {
-            lc.Enrich.WithMachineName();
-        }
-
-        if (opts.EnrichWithCallStack)
-        {
-            lc.Enrich.WithCallStack();
-        }
-
-        if (!string.IsNullOrWhiteSpace(opts.ServiceVersion))
-        {
-            lc.Enrich.WithProperty("ServiceVersion", opts.ServiceVersion);
-        }
-
-        if (!string.IsNullOrWhiteSpace(opts.ServiceInstanceId))
-        {
-            lc.Enrich.WithProperty("ServiceInstanceId", opts.ServiceInstanceId);
-        }
+    private static IEnumerable<Action<LoggerEnrichmentConfiguration>> OptionalEnrichers(IHostApplicationBuilder builder, StepUpLoggingOptions opts)
+    {
+        (bool On, Action<LoggerEnrichmentConfiguration> Add)[] table =
+        [
+            (opts.EnrichWithExceptionDetails && opts.StructuredExceptionDetails, e => e.WithExceptionDetails()),
+            (opts.EnrichWithEnvironment, e => e.WithProperty("Environment", builder.Environment.EnvironmentName)),
+            (opts.EnrichWithThreadId, e => e.WithThreadId()),
+            (opts.EnrichWithProcessId, e => e.WithProcessId()),
+            (opts.EnrichWithMachineName, e => e.WithMachineName()),
+            (opts.EnrichWithCallStack, e => e.WithCallStack()),
+            (!string.IsNullOrWhiteSpace(opts.ServiceVersion), e => e.WithProperty("ServiceVersion", (object?)opts.ServiceVersion)),
+            (!string.IsNullOrWhiteSpace(opts.ServiceInstanceId), e => e.WithProperty("ServiceInstanceId", (object?)opts.ServiceInstanceId)),
+        ];
+        return table.Where(row => row.On).Select(row => row.Add);
     }
 
     /// <summary>
@@ -545,7 +536,7 @@ public static class StepUpLoggingExtensions
         CompiledRedactionPatterns redactionPatterns)
     {
         var cfg = new LoggerConfiguration().MinimumLevel.Verbose();
-        ApplyCommonEnrichers(cfg, builder, opts, redactionPatterns);
+        ApplyCommonEnrichers(cfg.Enrich, builder, opts, redactionPatterns);
         cfg.ReadFrom.Configuration(gatedConfig);
         ConfigureOutputSinks(cfg, builder, logFilePath, opts);
         return cfg.CreateLogger();
