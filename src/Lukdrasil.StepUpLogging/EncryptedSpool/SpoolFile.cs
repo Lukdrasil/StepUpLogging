@@ -8,6 +8,11 @@ namespace Lukdrasil.StepUpLogging.Audit.EncryptedSpool;
 /// </summary>
 internal static class SpoolFile
 {
+    private const string CreatedUtcFormat = "yyyyMMdd'T'HHmmssfffffff'Z'";
+
+    /// <summary>The characters <see cref="CreatedUtcFormat"/> produces: the instant a file name starts with.</summary>
+    private const int CreatedUtcLength = 23;
+
     /// <summary>Extension of a complete, readable spool file.</summary>
     internal const string EnvelopeExtension = ".env";
 
@@ -22,8 +27,20 @@ internal static class SpoolFile
     internal static string NameFor(SpoolEnvelope envelope) =>
         string.Create(
             CultureInfo.InvariantCulture,
-            $"{envelope.CreatedUtc.UtcDateTime:yyyyMMdd'T'HHmmssfffffff'Z'}-{envelope.EventId:D}{EnvelopeExtension}");
+            $"{envelope.CreatedUtc.UtcDateTime.ToString(CreatedUtcFormat, CultureInfo.InvariantCulture)}-{envelope.EventId:D}{EnvelopeExtension}");
 
     /// <summary>The creation instant in the name of <paramref name="path"/>, or <see langword="null"/> for a foreign name.</summary>
-    internal static DateTimeOffset? CreatedUtcOrNull(string path) => throw new NotImplementedException(); // af-stub
+    internal static DateTimeOffset? CreatedUtcOrNull(string path)
+    {
+        var name = Path.GetFileName(path.AsSpan());
+        return name.Length >= CreatedUtcLength
+            && DateTimeOffset.TryParseExact(
+                name[..CreatedUtcLength],
+                CreatedUtcFormat,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                out var createdUtc)
+                ? createdUtc
+                : null;
+    }
 }

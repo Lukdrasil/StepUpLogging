@@ -48,7 +48,6 @@ internal sealed class DrainWorker(
     internal const string HttpClientName = "Lukdrasil.StepUpLogging.Audit";
 
     private readonly EncryptedSpoolOptions _options = options.Value;
-    private readonly SpoolHead _spoolHead = spoolHead; // af-stub
     private readonly SpoolReader _reader = new(options.Value.SpoolDirectory);
     private readonly Uri _auditEndpoint = new($"{options.Value.EndpointBaseUrl.TrimEnd('/')}/audit");
     private readonly Uri _batchEndpoint = new($"{options.Value.EndpointBaseUrl.TrimEnd('/')}/audit/batch");
@@ -228,6 +227,7 @@ internal sealed class DrainWorker(
         foreach (var step in Plan(_reader.ReadOldestFirst(), _options.DeliveryBatchSize))
         {
             cancellationToken.ThrowIfCancellationRequested();
+            spoolHead.Seen(step.Head.CreatedUtc);
 
             var carryOn = step.Faulted is { } faulted
                 ? SetAsideFaulted(faulted)
@@ -241,6 +241,8 @@ internal sealed class DrainWorker(
                 return;
             }
         }
+
+        spoolHead.Cleared();
     }
 
     /// <summary>How long to wait before the next attempt after <paramref name="consecutiveFailures"/> failed ones.</summary>
@@ -297,11 +299,11 @@ internal sealed class DrainWorker(
     /// of its records is, not which, so each is delivered on its own and only the one the endpoint
     /// rejects alone is set aside (ADR 0020 D7).
     /// </summary>
-    private async Task<bool> RejectedAsync(HttpClient client, IReadOnlyList<SpoolEntry> batch, string reason, CancellationToken cancellationToken)
+    private async Task<bool> RejectedAsync(HttpClient client, IReadOnlyList<SpoolEntry> batch, string description, CancellationToken cancellationToken)
     {
         if (batch.Count == 1)
         {
-            DeadLetterAndRelease(batch[0], reason);
+            DeadLetterAndRelease(batch[0], DeadLetterReason.Rejected, description);
             return true;
         }
 
@@ -356,7 +358,7 @@ internal sealed class DrainWorker(
         }
 
         _unreadableAttempts.Remove(entry.FilePath);
-        DeadLetterAndRelease(entry, "the spool file could not be parsed as an audit envelope");
+        DeadLetterAndRelease(entry, DeadLetterReason.Corrupt, "the spool file could not be parsed as an audit envelope");
         return true;
     }
 
@@ -379,10 +381,10 @@ internal sealed class DrainWorker(
         EncryptedSpoolMetrics.DrainedCounter.Add(1);
     }
 
-    private void DeadLetterAndRelease(SpoolEntry entry, string reason)
+    private void DeadLetterAndRelease(SpoolEntry entry, DeadLetterReason reason, string description)
     {
         var token = usageTracker.ReleaseToken;
-        DeadLetter(entry.FilePath, reason);
+        DeadLetter(entry.FilePath, reason, description);
         usageTracker.Released(token, entry.Contents.Length);
     }
 
@@ -405,14 +407,14 @@ internal sealed class DrainWorker(
     /// Sets a record aside that no retry can deliver, and says so at Critical: it never reached the
     /// audit store, and only an operator can decide what to do about it (ADR 0020 D7).
     /// </summary>
-    private void DeadLetter(string spoolFilePath, string reason)
+    private void DeadLetter(string spoolFilePath, DeadLetterReason reason, string description)
     {
         var deadLetterPath = deadLetterBox.Deposit(spoolFilePath);
-        EncryptedSpoolMetrics.DeadLetteredCounter.Add(1);
+        EncryptedSpoolMetrics.DeadLetteredCounter.Add(1, new KeyValuePair<string, object?>(DeadLetterReason.TagName, reason.Tag));
 
         logger.LogCritical(
             "Audit record {SpoolFile} was dead-lettered to {DeadLetterFile}: {Reason}. It never reached the audit store, nothing will retry it, and nothing removes it — investigate it and clear the directory by hand.",
-            Path.GetFileName(spoolFilePath), deadLetterPath, reason);
+            Path.GetFileName(spoolFilePath), deadLetterPath, description);
     }
 
     private void ReportUndelivered(string spoolFilePath, string reason)
@@ -447,7 +449,7 @@ internal sealed class DrainWorker(
         }
 
         _unreadableAttempts.Remove(spoolFilePath);
-        DeadLetter(spoolFilePath, $"the spool file could not be read from disk after {_options.UnreadableRetryLimit} attempts");
+        DeadLetter(spoolFilePath, DeadLetterReason.Unreadable, $"the spool file could not be read from disk after {_options.UnreadableRetryLimit} attempts");
         return true;
     }
 
@@ -455,7 +457,11 @@ internal sealed class DrainWorker(
     internal readonly record struct DeliveryAttempt(DeliveryOutcome Outcome, string Description);
 
     /// <summary>One delivery the plan calls for: a batch of readable records, or a faulted file standing on its own.</summary>
-    internal readonly record struct DrainStep(IReadOnlyList<SpoolEntry> Batch, SpoolEntry? Faulted);
+    internal readonly record struct DrainStep(IReadOnlyList<SpoolEntry> Batch, SpoolEntry? Faulted)
+    {
+        /// <summary>The oldest record the step stands on: the faulted file, or the first of the batch.</summary>
+        public SpoolEntry Head => Faulted ?? Batch[0];
+    }
 
     internal enum DeliveryOutcome
     {

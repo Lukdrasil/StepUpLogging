@@ -123,11 +123,22 @@ public sealed class EncryptedSpoolOptions
     /// </summary>
     public HealthStatus UnreachableStatus { get; set; } = HealthStatus.Degraded;
 
-    /// <summary>How old the oldest spooled record may get before the health check reports it; <see langword="null"/> turns the signal off.</summary>
-    public TimeSpan? OldestRecordMaxAge { get; set; } // af-stub
+    /// <summary>
+    /// How old the oldest spooled record may get before the health check reports
+    /// <see cref="OldestRecordStatus"/>. A drain that is stuck on one record (an endpoint that
+    /// answers 503 for ever, a file that stays locked) keeps every record behind it waiting while
+    /// the spool is far from full, and this is the signal that says so. <see langword="null"/>, the
+    /// default, turns the signal off: the right age depends on how long the receiver may be down
+    /// for. The same age is always available as the <c>audit_spool_oldest_age_seconds</c> gauge.
+    /// </summary>
+    public TimeSpan? OldestRecordMaxAge { get; set; }
 
-    /// <summary>The status reported once the oldest spooled record is older than <see cref="OldestRecordMaxAge"/>.</summary>
-    public HealthStatus OldestRecordStatus { get; set; } = HealthStatus.Degraded; // af-stub
+    /// <summary>
+    /// The status the health check reports once the oldest spooled record is older than
+    /// <see cref="OldestRecordMaxAge"/>. Degraded by default: the record is on disk and delivery
+    /// resumes on its own once whatever blocks it clears.
+    /// </summary>
+    public HealthStatus OldestRecordStatus { get; set; } = HealthStatus.Degraded;
 
     /// <summary>
     /// How long the drain worker's <see cref="HttpClient"/> waits for one delivery attempt before

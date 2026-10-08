@@ -15,6 +15,9 @@ namespace Lukdrasil.StepUpLogging.Audit.EncryptedSpool;
 /// <item>Whether the audit endpoint is taking records:
 /// <see cref="EncryptedSpoolOptions.UnreachableStatus"/> once the drain worker's attempts have
 /// failed often enough in a row (ADR 0019 D4).</item>
+/// <item>Whether the drain is stuck on one record: <see cref="EncryptedSpoolOptions.OldestRecordStatus"/>
+/// once the oldest record has waited longer than <see cref="EncryptedSpoolOptions.OldestRecordMaxAge"/>.
+/// Off unless that option is set (ADR 0020 D5).</item>
 /// </list>
 /// </summary>
 internal sealed class EncryptedSpoolHealthCheck(
@@ -25,8 +28,6 @@ internal sealed class EncryptedSpoolHealthCheck(
     TimeProvider timeProvider) : IHealthCheck
 {
     private readonly EncryptedSpoolOptions _options = options.Value;
-    private readonly SpoolHead _spoolHead = spoolHead; // af-stub
-    private readonly TimeProvider _timeProvider = timeProvider; // af-stub
     private readonly SpoolCapacity _capacity = new(options.Value);
 
     /// <inheritdoc />
@@ -35,7 +36,7 @@ internal sealed class EncryptedSpoolHealthCheck(
         // The probe reads the spool directory itself, which takes as long as the spool is deep.
         cancellationToken.ThrowIfCancellationRequested();
 
-        Signal[] signals = [SpoolFillSignal(), DeadLetterSignal(), EndpointSignal()];
+        Signal[] signals = [SpoolFillSignal(), DeadLetterSignal(), EndpointSignal(), OldestRecordSignal()];
 
         // HealthStatus ascends from Unhealthy to Healthy, so the worst signal is the lowest one.
         return Task.FromResult(new HealthCheckResult(
@@ -71,6 +72,16 @@ internal sealed class EncryptedSpoolHealthCheck(
                 _options.UnreachableStatus,
                 $"The audit endpoint at {_options.EndpointBaseUrl} has failed the last {reachability.ConsecutiveFailures} delivery attempts. No record is lost yet — they stay spooled — but the spool fills for as long as this lasts.")
             : new(HealthStatus.Healthy, "The audit endpoint is taking records.");
+
+    private Signal OldestRecordSignal()
+    {
+        var age = spoolHead.AgeAt(timeProvider.GetUtcNow());
+        var waiting = $"The oldest spooled audit record has been waiting {(long)age.TotalSeconds} seconds.";
+
+        return _options.OldestRecordMaxAge is { } maxAge && age > maxAge
+            ? new(_options.OldestRecordStatus, $"{waiting} That is longer than the {(long)maxAge.TotalSeconds} seconds allowed, so delivery is stuck behind it and every record after it waits too.")
+            : new(HealthStatus.Healthy, waiting);
+    }
 
     private readonly record struct Signal(HealthStatus Status, string Description);
 }
