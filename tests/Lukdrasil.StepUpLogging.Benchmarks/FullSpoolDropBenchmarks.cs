@@ -9,6 +9,7 @@ namespace Lukdrasil.StepUpLogging.Benchmarks;
 /// directory.
 /// </summary>
 [MemoryDiagnoser]
+[BenchmarkCategory("Disk")]
 public class FullSpoolDropBenchmarks
 {
     private const int Cap = 100_000;

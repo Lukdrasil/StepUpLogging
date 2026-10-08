@@ -12,6 +12,7 @@ namespace Lukdrasil.StepUpLogging.Benchmarks;
 /// is the whole cost of delivery, so records per second scales with the batch size.
 /// </summary>
 [MemoryDiagnoser]
+[BenchmarkCategory("Disk")]
 public class SpoolDrainBenchmarks
 {
     private const int RecordCount = 512;
