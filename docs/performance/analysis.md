@@ -193,7 +193,7 @@ from the array sizes, not measured).
 **Candidates.**
 
 - *Approximate LRU instead of a global lock* (a timestamp on `Buffer` and a periodic sweep, as ADR 0011
-  proposes). **Done** (follow-up 4) as striping instead: up to 16 stripes of at least 64 traces, each with
+  proposes). **Done** (follow-up 4) as striping instead: one stripe per 64 of `PreErrorMaxContexts`, at most 16 (a cap of 1024 or more gives 16 stripes of at least 64; below 128 there is one stripe and the eviction is exact LRU), each with
   its own lock and its own LRU order (ADR 0027), which keeps exact LRU within a stripe and the property the
   old comment protected, that a concurrent eviction must not orphan an event between the touch and the
   enqueue. The one-trace, eight-thread gap (the buffer's own lock) is untouched. ADRs: 0011, 0023, 0015.

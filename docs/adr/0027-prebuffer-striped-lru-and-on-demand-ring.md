@@ -21,7 +21,7 @@ the trace held.
 ## Decision
 
 **D1. The LRU is split into stripes; a trace belongs to one.** `StripeCountFor(maxContexts)` is
-`maxContexts / 64`, clamped to 1 to 16, so a stripe holds at least 64 traces. `StripeCapacities` spreads
+`maxContexts / 64`, clamped to 1 to 16: one stripe per 64 of the cap, at most 16, so a cap of 1024 or more gives 16 stripes of at least 64 each and a cap below 128 gives one stripe that holds the whole cap (the eviction is then exact LRU). `StripeCapacities` spreads
 `PreErrorMaxContexts` over the stripes with the remainder going to the first ones, so the capacities sum to
 `PreErrorMaxContexts` and the buffer never keeps more traces than the option says. A trace id maps to its
 stripe by `(uint)key.GetHashCode() % stripes`. `string.GetHashCode` is stable for the life of the process and
