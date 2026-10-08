@@ -24,7 +24,7 @@ public class PreErrorBufferSinkBenchmarks
     private LogEvent _error = null!;
 
     /// <summary>How many different traces the held events are spread over.</summary>
-    [Params(1, 4096)]
+    [Params(1, 256, 4096)]
     public int Contexts { get; set; }
 
     /// <summary>How many threads hold at the same time.</summary>

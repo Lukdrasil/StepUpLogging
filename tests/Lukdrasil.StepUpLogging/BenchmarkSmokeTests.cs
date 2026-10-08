@@ -18,6 +18,7 @@ public class BenchmarkSmokeTests
     [
         "StepUpSinkBenchmarks",
         "PreErrorBufferSinkBenchmarks",
+        "PreErrorBufferGrowthBenchmarks",
         "EnricherBenchmarks",
         "RedactionPatternBenchmarks",
         "PipelineBenchmarks",
