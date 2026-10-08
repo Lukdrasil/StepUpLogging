@@ -460,12 +460,15 @@ public static class StepUpLoggingExtensions
     }
 
     /// <summary>
-    /// Applies the root pipeline enrichers (ADR 0026). <see cref="AlwaysExportEnricher"/> runs first and ungated,
-    /// since it marks the events the gate must let through; every other enricher runs only when
+    /// Applies the root pipeline enrichers (ADR 0026). <c>FromLogContext</c> and <see cref="AlwaysExportEnricher"/>
+    /// run first and ungated, in that order: a <c>SourceContext</c> or marker pushed through <c>LogContext</c> must
+    /// reach the always-export match and the gate. Every other enricher runs only when
     /// <paramref name="needsEnrichment"/> accepts the event.
     /// </summary>
     internal static void ApplyRootEnrichers(LoggerConfiguration lc, IHostApplicationBuilder builder, StepUpLoggingOptions opts, CompiledRedactionPatterns redactionPatterns, Func<LogEvent, bool> needsEnrichment)
     {
+        lc.Enrich.FromLogContext();
+
         var alwaysExport = (opts.AlwaysExportCategories ?? []).Where(c => !string.IsNullOrWhiteSpace(c)).ToArray();
         if (alwaysExport.Length > 0)
         {
@@ -477,14 +480,13 @@ public static class StepUpLoggingExtensions
 
     /// <summary>
     /// Applies all configured enrichers to <paramref name="enrich"/>. Called on both the root
-    /// pipeline and the bypass logger to keep enrichment consistent. Each enricher is its own call on
+    /// pipeline and the bypass logger to keep enrichment consistent. <c>FromLogContext</c> is not part of it: the
+    /// root applies it ungated, the bypass logger applies it first. Each enricher is its own call on
     /// <paramref name="enrich"/>: a chained <c>.Enrich.</c> inside <c>When</c> would reach the logger
     /// configuration and escape the gate.
     /// </summary>
     private static void ApplyCommonEnrichers(LoggerEnrichmentConfiguration enrich, IHostApplicationBuilder builder, StepUpLoggingOptions opts, CompiledRedactionPatterns redactionPatterns)
     {
-        enrich.FromLogContext();
-
         if (redactionPatterns.Patterns.Length > 0)
         {
             enrich.With(new PathPropertyRedactionEnricher(redactionPatterns));
@@ -536,6 +538,7 @@ public static class StepUpLoggingExtensions
         CompiledRedactionPatterns redactionPatterns)
     {
         var cfg = new LoggerConfiguration().MinimumLevel.Verbose();
+        cfg.Enrich.FromLogContext();
         ApplyCommonEnrichers(cfg.Enrich, builder, opts, redactionPatterns);
         cfg.ReadFrom.Configuration(gatedConfig);
         ConfigureOutputSinks(cfg, builder, logFilePath, opts);
