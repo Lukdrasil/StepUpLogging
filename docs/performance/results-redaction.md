@@ -73,8 +73,9 @@ of one group come from the same run, so their ratio is better evidence than a be
   allocation-free. Over a header of about a thousand characters that matches none: no change (2748 ns against
   2684 ns), because one of the five patterns costs 2.2 us alone and the union has to scan with it. Over a
   value that matches: not faster, 575 ns against 679 ns with an `Error` wider than the gap.
-- Request logging allocates 0.17 to 0.18 KB less per request in all eight rows, most likely the same
-  `RedactionEnricher` snapshot. Audit is unchanged. `StepUpSink.Emit` is 1.3 to 5.9 ns slower in the four
+- Request logging allocates 0.17 to 0.18 KB less per request in all eight rows. Request logging runs the
+  redaction enricher, so the likeliest cause is the removed `RedactionEnricher` snapshot; the benchmark does
+  not isolate it from the gate. Audit is unchanged. `StepUpSink.Emit` is 1.3 to 5.9 ns slower in the four
   rows, the `TakeSkipped` read of a `[ThreadStatic]` per event.
 
 ## Before and after: the pipeline
@@ -106,12 +107,13 @@ are measured.
 ### The other scenarios (redaction off, or the gate off)
 
 These rows do not run the redaction enricher, so the change should leave them alone. Bytes are unchanged in
-every row. Each cell is before / after:
+every row but one: `Default` with an activity, `WarningExported`, went from 1432 B to 1464 B (32 B more; not
+explained, and the `InformationHeld` row next to it did not move). Each cell is before / after:
 
 | Scenario | Act | DebugDropped | InformationHeld | WarningExported |
 |---|---|---|---|---|
 | Default | no | 251.9 ns, 424 B / 314.1 ns, 424 B | 760.0 ns, 1360 B / 850.0 ns, 1360 B | 588.6 ns, 1360 B / 681.5 ns, 1360 B |
-| Default | yes | 268.9 ns, 424 B / 334.7 ns, 424 B | 972.4 ns, 1432 B / 882.2 ns, 1432 B | 674.7 ns, 1432 B / 766.2 ns, 1432 B |
+| Default | yes | 268.9 ns, 424 B / 334.7 ns, 424 B | 972.4 ns, 1432 B / 882.2 ns, 1432 B | 674.7 ns, 1432 B / 766.2 ns, 1464 B |
 | FloorsAndNeverStepUp | no | 243.1 ns, 424 B / 322.7 ns, 424 B | 867.6 ns, 1360 B / 847.5 ns, 1360 B | 734.2 ns, 1360 B / 708.7 ns, 1360 B |
 | FloorsAndNeverStepUp | yes | 368.3 ns, 424 B / 324.4 ns, 424 B | 865.9 ns, 1432 B / 943.4 ns, 1432 B | 785.3 ns, 1432 B / 768.4 ns, 1432 B |
 | ConsumerRootSink | no | 695.8 ns, 1360 B / 707.8 ns, 1360 B | 775.4 ns, 1360 B / 835.3 ns, 1360 B | 706.3 ns, 1360 B / 688.9 ns, 1360 B |
