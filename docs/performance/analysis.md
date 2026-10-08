@@ -16,7 +16,7 @@ exporter is in these numbers.
 | # | Hot spot | Events/s (1 thread) | Per event | Verdict |
 |---|---|---|---|---|
 | 1 | Event dropped below the pre-error level (Debug at Warning) | 1.46 M | 685 ns, 1360 B | The common case, and 2.9x the time and 3.2x the bytes of plain Serilog at the baseline. Fixed for the default configuration by the enrichment gate (ADR 0026): 343 ns, 424 B after, the bytes of plain Serilog ([results-root-gate.md](results-root-gate.md)). |
-| 1b | The same with redaction on (5 patterns) | 0.76 M | 1309 ns, 1512 B | Redaction adds 624 ns to an event that is then thrown away. After the gate the row is 659 ns, 496 B ([results-root-gate.md](results-root-gate.md)); `RedactionEnricher` is still ungated (follow-up 3). |
+| 1b | The same with redaction on (5 patterns) | 0.76 M | 1309 ns, 1512 B | Redaction adds 624 ns to an event that is then thrown away. After the gate the row was 659 ns, 496 B ([results-root-gate.md](results-root-gate.md)); with `RedactionEnricher` gated too it is 341 ns, 424 B, the row of the default configuration ([results-redaction.md](results-redaction.md), follow-up 3). |
 | 2 | Event held in the pre-error buffer (Information at Warning) | 1.18 M | 844 ns, 1360 B | About 160 ns (23 %) over dropped, inside the range [baseline.md](baseline.md) calls unresolved. The buffer's global lock makes 8 threads slower than one. |
 | 3 | Event exported (Warning at Warning) | 1.47 M | 682 ns, 1360 B | No measurable cost over dropped; the exporter is not in this baseline. |
 | 4 | Error flush of a full 100-event buffer | 7.5 M events (hold + flush) | 13.3 us per flush, 824 B | Dominated by the holds; the flush alone is not resolved. |
@@ -94,7 +94,8 @@ per-property cost, so the **Hypothesis** above stays a hypothesis.
 **After the gate.** `PipelineBenchmarks.DebugDropped`, default configuration: 343 ns and 424 B without an
 `Activity` (668 ns and 1360 B before) and 362 ns and 424 B with one (909 ns and 1432 B before). The bytes
 are those of the plain Serilog logger. The `Redaction` scenario: 659 ns and 496 B (1209 ns, 1512 B before);
-`RedactionEnricher` still runs on a dropped event (follow-up 3). A consumer root sink (the `configure`
+`RedactionEnricher` still ran on a dropped event then. It is gated now (follow-up 3): 341 ns and 424 B against
+618 ns and 496 B in the run that measured it ([results-redaction.md](results-redaction.md)). A consumer root sink (the `configure`
 hook) or a `Serilog:AuditTo` sink keeps the enrichers on: `ConsumerRootSink` measures 691 ns and 1360 B, the
 cost before the gate. The same Debug call through `Microsoft.Extensions.Logging` (`MelDebugDropped`) is
 389 ns and 408 B. The roughly 100 to 130 ns that remain over the plain logger (343 ns against 214.5 ns in
@@ -114,12 +115,13 @@ a decision before it is built; as an opt-in it would be additive. ADRs: 0015, 00
 
 **Candidates.**
 
-- *Redact only what can leave.* A dropped event is never exported, so redacting it is wasted work, but
-  the pre-error buffer holds events already redacted (ADR 0022 D5 puts the enricher before every sink)
-  and flushes them to the bypass logger. Redacting at flush time for held events and not at all for
-  dropped ones removes the 624 ns from 1309 ns (48 %) for dropped events when redaction is on. It moves
-  the point at which fail-closed redaction (ADR 0001) is applied, so it needs an explicit decision.
-  ADRs: 0022 (D4, D5, D7), 0023, 0001.
+- *Redact only what can leave.* **Done** (follow-up 3), not as first proposed. Redacting at flush time for
+  held events would have moved the point where fail-closed redaction (ADR 0001) is applied. Instead
+  `RedactionEnricher` runs behind the enrichment gate (ADR 0022 D5 amendment, ADR 0026 D3): an event no sink
+  can use is not swept, and every event a sink can use is redacted before it reaches one, as before. A dropped
+  Debug event with redaction on is 341 ns and 424 B against 618 ns and 496 B
+  ([results-redaction.md](results-redaction.md)). The price is that a root `Serilog:Filter` sees a skipped
+  event unredacted (ADR 0026 D5).
 - *Do not enrich events no sink will use.* **Done** for the default configuration by the enrichment gate
   (ADR 0026, follow-up 2): 343 ns and 424 B for a dropped Debug event, see
   [results-root-gate.md](results-root-gate.md). The raised-root variant is deferred, above.
@@ -303,9 +305,15 @@ not measured). A value no pattern matches comes back as the same string
 is time, not garbage. ADR 0022 D7 said what a consumer pays "is described rather than measured"; these
 are the measured numbers for the sample patterns, and they do not transfer to a consumer's patterns.
 
-**Candidates.** Reduce passes per value: skip values too short to match any pattern, or test several
-patterns in one pass. Combining patterns changes what a later pattern sees after an earlier one wrote
-`[REDACTED]`, so equivalence has to be shown, not assumed. ADRs: 0001 (fails closed), 0022 D7, 0009.
+**Done** (follow-up 5): `Redact` tests one union of the patterns first and returns the input when the union
+cannot match it. It is built only for two or more linear-time patterns with equal options and timeouts and no
+`#`, so the output equals the loop's except on a timeout (ADR 0001 amendment); equivalence is pinned by an
+oracle test over adversarial and 500 seeded random inputs. Measured in [results-redaction.md](results-redaction.md),
+five patterns: a short value that matches none 355 ns to 91 ns (3.9x); a header of about 1000 characters
+that matches none unchanged (2748 ns to 2684 ns), because `\b\d{16}\b` costs 2.2 us alone and the union scans with
+it; a value that matches about 100 ns slower (575 ns to 679 ns, inside the noise), because the union scan
+precedes the loop. Open: why that one pattern is 13 times the others on a long header, and whether a
+cheaper form of it exists. ADRs: 0001 (fails closed), 0022 D7, 0009.
 
 ## Follow-up tasks, ranked
 
@@ -319,12 +327,15 @@ benchmark row it needs, and states its result against [baseline.md](baseline.md)
    ([results-root-gate.md](results-root-gate.md)). ADRs 0005, 0015, 0022 D5 and 0024 D4 carry an amendment
    note. `Serilog:MinimumLevel:Default` stays ignored. The raised-root / `IsEnabled` opt-in is deferred
    (section 1) and needs a decision.
-3. **Redact only what can leave** (section 1). Ceiling 624 ns per dropped event with redaction on. ADRs
-   0022 D4, D5, D7, 0023, 0001 to amend; a decision on when fail-closed redaction applies.
+3. **Redact only what can leave** (section 1). **Done** by gating `RedactionEnricher` (ADR 0022 D4, D5, D7
+   and ADR 0026 D1, D3, D5 amended; ADR 0023 untouched): a dropped Debug event with redaction on is 341 ns and
+   424 B against 618 ns and 496 B ([results-redaction.md](results-redaction.md)). Fail-closed redaction still
+   applies to every event a sink can use.
 4. **`PreErrorBufferSink` without a global lock** (section 2). Ceiling: eight threads from 772 ns to the
    one-thread 468 ns per hold with many traces (the 4096-trace rows). ADR 0011's recorded ceiling, 0023, 0015.
-5. **Cheaper `Redact`** (section 8). Linear in patterns today; scales rows 1b, 5 and 6. ADRs 0001,
-   0022 D7, 0009.
+5. **Cheaper `Redact`** (section 8). **Done** with a union prefilter (ADR 0001 amended): five patterns on a
+   short value that matches none, 355 ns to 91 ns; no change on a long header or a value that matches
+   ([results-redaction.md](results-redaction.md)). Request logging allocates 0.17 KB less per request.
 6. **Request logging allocations** (section 5): per-header join, the summary's `ForContext` chain.
    Ceiling: 0.31 KB per header, 3.46 KB per summary. ADRs 0008, 0009.
 7. **Size a trace's buffer on demand** (section 2). Ceiling 824 B on the first held event of each trace.
