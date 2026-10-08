@@ -41,8 +41,8 @@ public class RequestLoggingBenchmarks
         _host = BenchmarkFixtures.BuildHost(
         [
             .. BenchmarkFixtures.RedactionSettings(),
-            KeyValuePair.Create<string, string?>("SerilogStepUp:AlwaysLogRequestSummary", AlwaysLogRequestSummary.ToString()),
-            KeyValuePair.Create<string, string?>("SerilogStepUp:DurationSeconds", "86400"),
+            BenchmarkFixtures.StepUpSetting("AlwaysLogRequestSummary", AlwaysLogRequestSummary.ToString()),
+            BenchmarkFixtures.StepUpSetting("DurationSeconds", "86400"),
         ]);
         var app = new ApplicationBuilder(_host.Services);
         app.UseStepUpRequestLogging();
