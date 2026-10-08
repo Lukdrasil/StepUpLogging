@@ -20,6 +20,9 @@ internal sealed record SpoolEntry(string FilePath, SpoolEnvelope? Envelope, Spoo
     /// <summary>True when <see cref="ReadFault"/> is <see cref="SpoolReadFault.Unreadable"/>.</summary>
     public bool IsUnreadable => ReadFault == SpoolReadFault.Unreadable;
 
+    /// <summary>When the record was created: the envelope's instant, or for a faulted entry the one in its file name, which is <see langword="null"/> for a foreign name.</summary>
+    public DateTimeOffset? CreatedUtc => Envelope?.CreatedUtc ?? SpoolFile.CreatedUtcOrNull(FilePath);
+
     /// <summary>The file's exact bytes, set for every entry that could be read (readable or corrupt), empty for an unreadable one.</summary>
     public byte[] Contents { get; init; } = [];
 }

@@ -162,7 +162,7 @@ internal static class EncryptedSpoolMetrics
     internal static readonly Counter<long> DeadLetteredCounter = AuditMetrics.Meter.CreateCounter<long>(
         "audit_spool_dead_lettered_total",
         "count",
-        "Number of audit records moved to dead-letter/ because no retry can deliver them; every one of them is an audit record that never reached the audit store");
+        "Number of audit records moved to dead-letter/ because no retry can deliver them; every one of them is an audit record that never reached the audit store. Tagged reason: rejected (the endpoint refused it), corrupt (the spool file does not parse) or unreadable (the spool file could not be read within the retry limit)");
 
     internal static readonly Counter<long> EncryptionFailureCounter = AuditMetrics.Meter.CreateCounter<long>(
         "audit_encryption_failures_total",

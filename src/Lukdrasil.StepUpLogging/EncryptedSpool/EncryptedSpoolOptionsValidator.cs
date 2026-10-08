@@ -32,6 +32,11 @@ internal sealed class EncryptedSpoolOptionsValidator : IValidateOptions<Encrypte
         RequireInRange(options.DeliveryBatchSize, 1, MaxDeliveryBatchSize, nameof(EncryptedSpoolOptions.DeliveryBatchSize), failures);
         RequirePositive(options.SpoolFullRecheckInterval, nameof(EncryptedSpoolOptions.SpoolFullRecheckInterval), failures);
 
+        if (options.OldestRecordMaxAge is { } oldestRecordMaxAge)
+        {
+            RequirePositive(oldestRecordMaxAge, nameof(EncryptedSpoolOptions.OldestRecordMaxAge), failures);
+        }
+
         return failures.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(failures);
     }
 
