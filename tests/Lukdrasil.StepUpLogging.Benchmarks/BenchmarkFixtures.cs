@@ -123,8 +123,12 @@ internal static class BenchmarkFixtures
     /// <summary>Settings that give the host the first <paramref name="count"/> sample redaction patterns and turn property redaction on.</summary>
     internal static IEnumerable<KeyValuePair<string, string?>> RedactionSettings(int count = 5) =>
         PatternSources.Take(count)
-            .Select((pattern, index) => KeyValuePair.Create<string, string?>($"SerilogStepUp:RedactionRegexes:{index}", pattern))
-            .Append(KeyValuePair.Create<string, string?>("SerilogStepUp:RedactLogEventProperties", "true"));
+            .Select((pattern, index) => StepUpSetting($"RedactionRegexes:{index}", pattern))
+            .Append(StepUpSetting("RedactLogEventProperties", "true"));
+
+    /// <summary>One <c>SerilogStepUp</c> option as a configuration entry; <paramref name="key"/> is the option's path under the section.</summary>
+    internal static KeyValuePair<string, string?> StepUpSetting(string key, string value) =>
+        KeyValuePair.Create<string, string?>($"SerilogStepUp:{key}", value);
 
     /// <summary>How many events <paramref name="action"/> sent to an output sink.</summary>
     internal static int ExportedBy(Action action)

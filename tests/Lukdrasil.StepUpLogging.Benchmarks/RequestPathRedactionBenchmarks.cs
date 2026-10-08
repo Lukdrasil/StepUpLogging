@@ -1,55 +1,53 @@
 using BenchmarkDotNet.Attributes;
 using Serilog.Core;
 using Serilog.Events;
-using Serilog.Parsing;
 
 namespace Lukdrasil.StepUpLogging.Benchmarks;
 
+/// <summary>
+/// What redacting a request's path and route values costs, and what <c>PathPropertyRedactionEnricher</c>
+/// costs on an event that carries the raw request path.
+/// </summary>
 [MemoryDiagnoser]
 [BenchmarkCategory("Logging")]
 public class RequestPathRedactionBenchmarks
 {
-    private const string Path = "/api/orders/8f3a2c1e/items/42/token/xyz9";
-
     private CompiledRedactionPatterns _patterns = null!;
     private Dictionary<string, object?> _routeValues = null!;
     private ILogEventEnricher _pathEnricher = null!;
     private LogEvent _event = null!;
     private LogEventProperty _rawRequestPath = null!;
 
+    /// <summary>Builds the patterns, the route values, the enricher and an event that carries the raw request path.</summary>
     [GlobalSetup]
     public void Setup()
     {
         _patterns = BenchmarkFixtures.SamplePatterns();
-        _routeValues = new Dictionary<string, object?>
-        {
-            ["orderId"] = "8f3a2c1e",
-            ["itemId"] = "42",
-            ["token"] = "xyz9",
-        };
+        _routeValues = BenchmarkFixtures.Request(headerCount: 0).Request.RouteValues.ToDictionary(route => route.Key, route => route.Value);
         var enricherType = typeof(CompiledRedactionPatterns).Assembly.GetType("Lukdrasil.StepUpLogging.PathPropertyRedactionEnricher")
             ?? throw new InvalidOperationException("Lukdrasil.StepUpLogging declares no PathPropertyRedactionEnricher");
         _pathEnricher = (ILogEventEnricher)Activator.CreateInstance(
             enricherType, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic,
             null, [_patterns], null)!;
-        _rawRequestPath = new LogEventProperty("RequestPath", new ScalarValue(Path));
-        _event = new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Debug, null, new MessageTemplateParser().Parse("Handled {Item}"),
-        [
-            new LogEventProperty("SourceContext", new ScalarValue("MyApp.Orders.OrderHandler")),
+        _rawRequestPath = BenchmarkFixtures.Text("RequestPath", BenchmarkFixtures.RequestPath);
+        _event = BenchmarkFixtures.Event(
+            LogEventLevel.Debug,
+            BenchmarkFixtures.OrderHandlerContext,
             _rawRequestPath,
-            new LogEventProperty("RequestId", new ScalarValue("0HN7ABCDEF:00000001")),
-            new LogEventProperty("ConnectionId", new ScalarValue("0HN7ABCDEF")),
-            new LogEventProperty("TraceId", new ScalarValue("4bf92f3577b34da6a3ce929d0e0e4736")),
-            new LogEventProperty("SpanId", new ScalarValue("00f067aa0ba902b7")),
-            new LogEventProperty("Application", new ScalarValue("Orders")),
-            new LogEventProperty("Item", new ScalarValue(42)),
-        ]);
+            BenchmarkFixtures.Text("RequestId", "0HN7ABCDEF:00000001"),
+            BenchmarkFixtures.Text("ConnectionId", "0HN7ABCDEF"),
+            BenchmarkFixtures.Text("TraceId", "4bf92f3577b34da6a3ce929d0e0e4736"),
+            BenchmarkFixtures.Text("SpanId", "00f067aa0ba902b7"),
+            BenchmarkFixtures.Text("Application", "Orders"),
+            new LogEventProperty("Item", new ScalarValue(42)));
     }
 
+    /// <summary>Redacts the route values of the request the way the middleware does, given the redacted path.</summary>
     [Benchmark]
     public Dictionary<string, object?> RedactPathAndRouteValues() =>
-        RequestPathRedaction.RedactRouteValues(_routeValues, Path, _patterns.Redact(Path), _patterns);
+        RequestPathRedaction.RedactRouteValues(_routeValues, BenchmarkFixtures.RequestPath, _patterns.Redact(BenchmarkFixtures.RequestPath), _patterns);
 
+    /// <summary>Runs the path enricher over an event that carries the raw request path.</summary>
     [Benchmark]
     public LogEvent EnrichRequestPath()
     {

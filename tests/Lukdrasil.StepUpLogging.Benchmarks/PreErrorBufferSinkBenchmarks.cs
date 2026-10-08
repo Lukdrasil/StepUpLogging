@@ -56,7 +56,12 @@ public class PreErrorBufferSinkBenchmarks
     public void Hold() =>
         Task.WaitAll([.. Enumerable.Range(0, Threads).Select(thread => Task.Run(() => HoldSlice(thread)))]);
 
-    /// <summary>Holds a full buffer's worth of events in one trace, then emits an Error that flushes them to the bypass logger.</summary>
+    /// <summary>
+    /// Holds a full buffer's worth of events in one trace, then emits an Error that flushes them to the bypass logger.
+    /// It ignores <see cref="Contexts"/> and <see cref="Threads"/>, so BenchmarkDotNet reports it once per
+    /// combination and the rows are one measurement. It stays here because the smoke test lists benchmark
+    /// classes by name and a class of its own would have to be marked Disk.
+    /// </summary>
     [Benchmark]
     public void FillAndFlushOnError()
     {

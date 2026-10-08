@@ -25,11 +25,11 @@ public class PipelineBenchmarks
         [PipelineScenario.Redaction] = [.. BenchmarkFixtures.RedactionSettings()],
         [PipelineScenario.FloorsAndNeverStepUp] =
         [
-            Setting("CategoryFloors:Microsoft.AspNetCore", "Warning"),
-            Setting("CategoryFloors:System.Net.Http", "Warning"),
-            Setting("CategoryFloors:MyApp", "Warning"),
-            Setting("NeverStepUpCategories:0", "Microsoft.AspNetCore.Hosting.Diagnostics"),
-            Setting("NeverStepUpCategories:1", "Microsoft.Extensions.Http"),
+            BenchmarkFixtures.StepUpSetting("CategoryFloors:Microsoft.AspNetCore", "Warning"),
+            BenchmarkFixtures.StepUpSetting("CategoryFloors:System.Net.Http", "Warning"),
+            BenchmarkFixtures.StepUpSetting("CategoryFloors:MyApp", "Warning"),
+            BenchmarkFixtures.StepUpSetting("NeverStepUpCategories:0", "Microsoft.AspNetCore.Hosting.Diagnostics"),
+            BenchmarkFixtures.StepUpSetting("NeverStepUpCategories:1", "Microsoft.Extensions.Http"),
         ],
     };
 
@@ -47,7 +47,7 @@ public class PipelineBenchmarks
         /// <summary>Five redaction patterns, applied to the request path and to every string property.</summary>
         Redaction,
 
-        /// <summary>Three category floors and three deny-list prefixes.</summary>
+        /// <summary>Three category floors and three deny-list prefixes: the two set here and the default Entity Framework Core entry, which the configuration binder keeps and appends to.</summary>
         FloorsAndNeverStepUp,
     }
 
@@ -101,7 +101,4 @@ public class PipelineBenchmarks
     private static int Exports(Action log) => BenchmarkFixtures.ExportedBy(log);
 
     private static long Held(Action log) => BenchmarkFixtures.CountedBy(BufferMeter, BufferedEvents, log);
-
-    private static KeyValuePair<string, string?> Setting(string key, string value) =>
-        KeyValuePair.Create<string, string?>($"SerilogStepUp:{key}", value);
 }
