@@ -1346,7 +1346,9 @@ registered at all and there is no per-event cost.
 
 One consequence of the gate: a root `Serilog:Filter` sees the properties of a skipped event unredacted.
 A filter only decides and exports nothing, so this matters only if your filter logs or forwards the
-properties of the events it inspects. The library's own sinks never export a skipped event.
+properties of the events it inspects. The library's own sinks refuse a skipped event; the one exception is the narrow race of ADR 0026 D3, where
+a log call made by a root filter or a `SelfLog` handler between the gate and `StepUpSink` can let one
+event through unenriched and unredacted, and then only if the switch was also lowered by hand in that window.
 
 ### Sustained-error cost amplification
 

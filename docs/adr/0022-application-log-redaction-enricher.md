@@ -106,7 +106,8 @@ Three facts about the existing pipeline constrain the answer:
    > the gate drops is exported by no sink, so it is not swept. Redaction of every exported, held,
    > immediate and summary event is unchanged, and so is redaction when the gate is off. A root
    > `Serilog:Filter` sees a skipped event's properties unredacted (ADR 0026 D5); `StepUpSink` refuses a
-   > skipped event (ADR 0026 D3), so it cannot be exported unredacted.
+   > skipped event (ADR 0026 D3), so it is not exported unredacted, apart from the one-event race that D3
+   describes (a nested log on the same thread while the switch is lowered by hand).
 
    The dependency is passed **by constructor**, not resolved:
    `lc.Enrich.With(new RedactionEnricher(services.GetRequiredService<CompiledRedactionPatterns>()))`.

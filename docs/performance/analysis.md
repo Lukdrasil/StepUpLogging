@@ -335,7 +335,8 @@ benchmark row it needs, and states its result against [baseline.md](baseline.md)
    one-thread 468 ns per hold with many traces (the 4096-trace rows). ADR 0011's recorded ceiling, 0023, 0015.
 5. **Cheaper `Redact`** (section 8). **Done** with a union prefilter (ADR 0001 amended): five patterns on a
    short value that matches none, 355 ns to 91 ns; no change on a long header or a value that matches
-   ([results-redaction.md](results-redaction.md)). Request logging allocates 0.17 KB less per request.
+   ([results-redaction.md](results-redaction.md)). Request logging allocates 0.17 KB less per request, most
+   likely from `RedactionEnricher` no longer copying each event's properties, not from the prefilter.
 6. **Request logging allocations** (section 5): per-header join, the summary's `ForContext` chain.
    Ceiling: 0.31 KB per header, 3.46 KB per summary. ADRs 0008, 0009.
 7. **Size a trace's buffer on demand** (section 2). Ceiling 824 B on the first held event of each trace.
