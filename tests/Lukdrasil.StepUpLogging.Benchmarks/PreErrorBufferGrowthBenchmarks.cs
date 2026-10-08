@@ -10,8 +10,8 @@ namespace Lukdrasil.StepUpLogging.Benchmarks;
 /// events it holds, and evicts another trace. It is reported per trace, so the bytes show what one trace costs at
 /// each size. The sink is called directly with prebuilt events from one thread.
 /// </summary>
-[MemoryDiagnoser]
 [BenchmarkCategory("Logging")]
+[MemoryDiagnoser]
 public class PreErrorBufferGrowthBenchmarks
 {
     private const int Traces = 4096;
