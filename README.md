@@ -862,6 +862,8 @@ custom handler to that client, register it after `AddEncryptedSpoolAuditSink`.
 | `DeliveryTimeout` | 30 s | Timeout for one delivery attempt — a whole batch, when batching. A timeout is transient — retried, never dead-lettered. |
 | `ShutdownDrainTimeout` | 5 s | How long a stopping host waits for the drain worker. Nothing is lost when it runs out; the next start delivers. |
 | `UnreadableRetryLimit` | 10 | Drain cycles a spool file may fail to even be opened before it is dead-lettered as unreadable. |
+| `OldestRecordMaxAge` | none (signal off) | How old the oldest spooled record may get before the health check reports `OldestRecordStatus`. Must be greater than zero when set. See [Health check](#health-check). |
+| `OldestRecordStatus` | `Degraded` | The status reported once the oldest record is older than `OldestRecordMaxAge`. |
 | `SpoolWarnStatus`, `SpoolFullStatus`, `UnreachableStatus` | see [Health check](#health-check) | The statuses the health check reports. |
 | `ConfigureProducerCredentials` | none | Sets credentials on the delivery `HttpClient`, as above. |
 
@@ -899,6 +901,13 @@ response:
 | `400`, `409`, `413`, `415`, `422` | The record itself is defective — malformed, conflicting, oversized, wrongly typed, or unprocessable | Moved to `dead-letter/`, logged Critical, never retried. For a batch, it says one record is defective, not which: the batch is redelivered record by record to `/audit`, and only the record rejected on its own is dead-lettered |
 | Anything else (`3xx`, `401`/`403`/`404`/`405`/`407`, `408`, `429`, `5xx`, a network failure, a timeout) | The receiver could not take the record right now, or the failure says nothing about the record itself | Retried with backoff |
 
+The status code is the whole contract: the worker reads nothing else from the response, not even a
+problem+json body. So when a record names a key the receiver does not know, the status code is how the
+receiver says which kind of unknown it is: answer `503` while the keys are not loaded yet (a cold start,
+a key store that is still syncing), and the record waits and is retried; answer `422` when the key is
+gone for good, and the record is dead-lettered. A `404` or a `401` for an unknown key would be retried
+for ever, and a `400` would dead-letter a record that a key loaded a minute later could have stored.
+
 A batch is one delivery: the receiver must store it whole or reject it whole, so that a `2xx` is true
 of every record in it, and must still deduplicate on `EventId`. Anything transient resends the whole
 batch.
@@ -912,11 +921,12 @@ it: it is the permanent evidence that a record never reached the audit store, an
 manual, investigated action. A record reaches it by three routes, not only the table above: a
 permanent rejection from the receiver, a spool file that cannot even be parsed as an envelope, or
 one that still cannot be read from disk after `UnreadableRetryLimit` attempts — the last two never
-contact the endpoint at all. All three flip the health check to `Unhealthy`.
+contact the endpoint at all. All three flip the health check to `Unhealthy`, and the
+`audit_spool_dead_lettered_total` counter tells them apart by its `reason` tag (see [Metrics](#metrics)).
 
 ### Health check
 
-One combined health check (registered under the `audit` tag) reports the worst of four conditions:
+One combined health check (registered under the `audit` tag) reports the worst of five conditions:
 
 | Condition | Status | Configurable via |
 |---|---|---|
@@ -924,6 +934,7 @@ One combined health check (registered under the `audit` tag) reports the worst o
 | Spool at 100% of cap (new records are being dropped) | `SpoolFullStatus` (default `Unhealthy`) | `EncryptedSpoolOptions.SpoolFullStatus` |
 | `dead-letter/` holds any record | `Unhealthy`, not configurable | — |
 | Three delivery attempts in a row have failed (the run ends on the first that gets through) | `UnreachableStatus` (default `Degraded`) | `EncryptedSpoolOptions.UnreachableStatus` — the count of three is fixed |
+| The oldest spooled record has waited longer than `OldestRecordMaxAge` (delivery is stuck behind it, whatever the cause; off unless the option is set) | `OldestRecordStatus` (default `Degraded`) | `EncryptedSpoolOptions.OldestRecordMaxAge`, `EncryptedSpoolOptions.OldestRecordStatus` |
 
 ### Metrics
 
@@ -931,10 +942,11 @@ Under the same `StepUpLogging.Audit` meter as the rest of audit logging:
 
 - `audit_spool_depth` — records currently held in the spool.
 - `audit_spool_bytes` — bytes currently held in the spool.
+- `audit_spool_oldest_age_seconds` — age in whole seconds of the oldest record the drain worker is waiting on, 0 when the spool is empty. It keeps growing while delivery is stuck behind one record, however empty the spool still is: alert on it rather than on depth.
 - `audit_spool_rejected_full_total` — records dropped because the spool was at its cap.
 - `audit_spool_drained_total` — records the endpoint confirmed it stored.
 - `audit_spool_drain_failures_total` — delivery attempts, unreadable spool files, and drain-cycle faults that did not get a record through (retried, not lost); it can move while the endpoint itself is perfectly healthy, e.g. one spool file the worker cannot yet open.
-- `audit_spool_dead_lettered_total` — records moved to `dead-letter/`.
+- `audit_spool_dead_lettered_total` — records moved to `dead-letter/`, tagged `reason`: `rejected` (the receiver refused it), `corrupt` (the spool file does not parse) or `unreadable` (the file could not be read within `UnreadableRetryLimit`).
 - `audit_encryption_failures_total` — `IAuditPayloadEncryptor` calls that threw (the exception still propagates; this only counts that it happened).
 
 ### The fsync cost

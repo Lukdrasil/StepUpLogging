@@ -53,6 +53,18 @@ application running by losing audit silently. This ADR rejects every one of them
      measured against the disk again at most once per `SpoolFullRecheckInterval` (default 1 s),
      not on every write, so a refused write no longer scans the directory. The drain worker's
      deletes release their room at once.
+   - > **Amended (2026-10-08, issue #71):** a full or half-full spool is not the only way the drain
+     shows it is stuck: one record the receiver keeps answering `503` for, or one file that stays
+     locked, holds every record behind it while the spool is nowhere near its cap. The
+     `audit_spool_oldest_age_seconds` gauge reports how long the oldest record the worker is
+     waiting on has waited, in whole seconds, 0 for an empty spool and for a creation instant in
+     the future (clock skew). The worker records that instant per drain step in a singleton
+     (`SpoolHead`) the gauge and the health check read, so neither scans the spool; a record whose
+     file is corrupt or unreadable is aged by the instant in its file name. The health check gains
+     a fourth signal, off by default: with `OldestRecordMaxAge` set, an oldest record older than it
+     (`age > max`) reports `OldestRecordStatus` (default `Degraded`, as with `UnreachableStatus` no
+     record is lost yet). It is independent of the other signals and the worst one wins. There is
+     no default age because the right one depends on how long the receiver may be down for.
 
 6. **At 100 % of cap the new record is dropped**, logged at Critical and counted — `WriteAsync`
    returns `AuditWriteResult.Dropped` (ADR 0018 D6) rather than throwing, so core neither counts it
@@ -106,6 +118,17 @@ application running by losing audit silently. This ADR rejects every one of them
      dead-lettered. A corrupt or unreadable file closes the batch before it and is handled alone.
      `DeliveryTimeout` covers the whole batch request. A 15 ms round trip then costs a batch, not
      a record: the receiver's latency, not the disk, bounded the drain.
+   - > **Amended (2026-10-08, issue #71):** two additions, neither changing a status code's
+     outcome. First, `audit_spool_dead_lettered_total` carries a `reason` tag, `rejected` (the
+     receiver refused it), `corrupt` (the spool file does not parse) or `unreadable` (the file
+     could not be read within `UnreadableRetryLimit`), so an operator can tell a defective record
+     from a disk fault without opening `dead-letter/`. Second, the answer for a record that names
+     a key the receiver does not know is stated: the status code is the whole contract, and the
+     worker reads nothing else from the response. `503` while the keys are not loaded yet, so the
+     record is retried; `422` when the key is gone for good, so it is dead-lettered. `404`, `401`
+     and `400` are the wrong answers: the first two retry a record that can never be decrypted,
+     the last dead-letters one that a key loaded a minute later could have stored. Reading a
+     problem+json body to decide was considered and left out.
    - > **Amended (2026-09-30, issue #33):** `DrainWorker` is the only retrying layer on the
      delivery path. The delivery client calls `RemoveAllResilienceHandlers()`, so a resilience
      handler inherited from the consumer's `ConfigureHttpClientDefaults` (the Aspire

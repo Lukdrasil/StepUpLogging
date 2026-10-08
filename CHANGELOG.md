@@ -8,6 +8,16 @@ Tags before 1.8.0 predate this file.
 
 ## [Unreleased]
 
+## [5.2.0] - 2026-10-08
+
+### Added
+- The `audit_spool_oldest_age_seconds` gauge: age in whole seconds of the oldest record the drain worker is waiting on, 0 for an empty spool. It grows while delivery is stuck behind one record, however empty the spool still is. Fixes #71.
+- `EncryptedSpoolOptions.OldestRecordMaxAge` (default none, must be greater than zero when set) and `EncryptedSpoolOptions.OldestRecordStatus` (default `Degraded`): the health check reports the status once the oldest spooled record is older than the maximum. Off unless the maximum is set. Fixes #71.
+- `audit_spool_dead_lettered_total` is tagged `reason`: `rejected`, `corrupt` or `unreadable`. Fixes #71.
+
+### Changed
+- The delivery contract in the README and ADR 0020 now states how a receiver answers a record that names an unknown key: `503` while keys are not loaded yet (retried), `422` when the key is gone for good (dead-lettered). The status code is the whole contract. Fixes #71.
+
 ## [5.1.0] - 2026-10-07
 
 ### Added
