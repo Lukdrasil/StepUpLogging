@@ -42,29 +42,9 @@ internal sealed class StepUpSink : ILogEventSink, IDisposable
 
     public void Emit(LogEvent logEvent)
     {
-        if (_disposed || logEvent is null) return;
+        if (Refuses(logEvent)) return;
 
-        // Drop bypass-routed markers to prevent duplication with SummarySink / ImmediateSink
-        if (IsBoolTrue(logEvent, LogProperties.IsRequestSummary)) return;
-        if (IsBoolTrue(logEvent, LogProperties.IsImmediate)) return;
-
-        // Export at max(switch, NeverStepUp pin unless diagnostic, category floor): the pin keeps
-        // listed categories at BaseLevel, a floor only raises the minimum, neither adds verbosity.
-        var diagnosticActive = _isDiagnosticActive?.Invoke() ?? false;
-        var source = string.Empty;
-        var hasSource = (_neverStepUpCategories.Length > 0 || _categoryFloors is not null)
-            && CategoryPrefix.TryGetSourceContext(logEvent, out source);
-        var minimum = hasSource && !diagnosticActive && CategoryPrefix.MatchesAny(source, _neverStepUpCategories)
-            ? (LogEventLevel)Math.Max((int)_baseLevel, (int)_levelSwitch.MinimumLevel)
-            : _levelSwitch.MinimumLevel;
-        if (hasSource
-            && _categoryFloors is not null
-            && _categoryFloors.TryGetFloor(source, diagnosticActive, out var floor)
-            && floor > minimum)
-        {
-            minimum = floor;
-        }
-        if (logEvent.Level < minimum)
+        if (logEvent.Level < ExportMinimum(logEvent))
         {
             _heldBackBuffer?.Hold(logEvent);
             return;
@@ -73,10 +53,46 @@ internal sealed class StepUpSink : ILogEventSink, IDisposable
         _innerLogger.Write(logEvent);
     }
 
-    private static bool IsBoolTrue(LogEvent evt, string propertyName) =>
-        evt.Properties.TryGetValue(propertyName, out var val)
-        && val is ScalarValue sv
-        && sv.Value is bool b && b;
+    /// <summary>
+    /// Whether the event is not this sink's to export: it arrives after dispose, is null, was dropped by the
+    /// enrichment gate (no enricher ran on it, ADR 0026 D3), or is routed to a bypass sink (marked
+    /// <c>IsRequestSummary</c> or <c>IsImmediate</c>), which prevents duplication with SummarySink / ImmediateSink.
+    /// </summary>
+    private bool Refuses(LogEvent? logEvent)
+        => _disposed
+           || logEvent is null
+           || EnrichmentGate.TakeSkipped(logEvent)
+           || LogProperties.HasFlag(logEvent, LogProperties.IsRequestSummary)
+           || LogProperties.HasFlag(logEvent, LogProperties.IsImmediate);
+
+    /// <summary>
+    /// The level an event must reach to be exported: <c>max(switch, NeverStepUp pin unless diagnostic, category
+    /// floor)</c>. The pin keeps listed categories at BaseLevel, a floor only raises the minimum, neither adds verbosity.
+    /// </summary>
+    private LogEventLevel ExportMinimum(LogEvent logEvent)
+    {
+        var switchLevel = _levelSwitch.MinimumLevel;
+        if (!HasCategoryRules() || !CategoryPrefix.TryGetSourceContext(logEvent, out var source)) return switchLevel;
+
+        var diagnosticActive = IsDiagnosticActive();
+        return Higher(PinnedMinimum(source, diagnosticActive, switchLevel), FloorFor(source, diagnosticActive));
+    }
+
+    private bool HasCategoryRules() => _neverStepUpCategories.Length > 0 || _categoryFloors is not null;
+
+    private LogEventLevel PinnedMinimum(string source, bool diagnosticActive, LogEventLevel switchLevel)
+        => !diagnosticActive && CategoryPrefix.MatchesAny(source, _neverStepUpCategories)
+            ? Higher(_baseLevel, switchLevel)
+            : switchLevel;
+
+    private LogEventLevel FloorFor(string source, bool diagnosticActive)
+        => _categoryFloors is not null && _categoryFloors.TryGetFloor(source, diagnosticActive, out var floor)
+            ? floor
+            : LogEventLevel.Verbose;
+
+    private bool IsDiagnosticActive() => _isDiagnosticActive?.Invoke() ?? false;
+
+    private static LogEventLevel Higher(LogEventLevel left, LogEventLevel right) => left > right ? left : right;
 
     public void Dispose()
     {
