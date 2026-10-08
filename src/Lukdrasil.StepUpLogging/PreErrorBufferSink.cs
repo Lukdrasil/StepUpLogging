@@ -36,6 +36,15 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
     /// <summary>Number of live per-context buffers. Exposed for tests.</summary>
     internal int ContextCount => _buffers.Count;
 
+    /// <summary>Number of LRU stripes for <paramref name="maxContexts"/> traces. Exposed for tests.</summary>
+    internal static int StripeCountFor(int maxContexts) => 0; // af-stub
+
+    /// <summary>Capacity of each of <paramref name="stripes"/> stripes, summing to <paramref name="maxContexts"/>. Exposed for tests.</summary>
+    internal static int[] StripeCapacities(int maxContexts, int stripes) => new int[stripes]; // af-stub
+
+    /// <summary>Index of the stripe that owns <paramref name="key"/>. Exposed for tests.</summary>
+    internal int StripeOf(string key) => (int)((uint)key.GetHashCode() % 2u); // af-stub
+
     /// <summary>
     /// Test-only seam invoked between the LRU touch and the enqueue of a buffered event, so a
     /// test can simulate a concurrent evictor landing in that window. No-op in production.
