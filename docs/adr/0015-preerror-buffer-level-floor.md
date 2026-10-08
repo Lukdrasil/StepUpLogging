@@ -54,3 +54,8 @@ buffer applies a **level floor equal to the resolved `StepUpLevel`**, enforced a
 > that enrichment gate is `min(live switch, StepUpLevel, Error)`: the buffer's own floor, `StepUpLevel`,
 > is part of it, so every event the buffer can hold is enriched before it is held. An `Error` that
 > flushes the buffer is always enriched, even when `StepUpLevel` is `Fatal`.
+
+> **Amended (2026-10-09, ADR 0027):** "memory use of the ring buffers drops" holds as before, and storage
+> now also follows the events held: a trace's ring starts with 4 slots and grows, by doubling, up to
+> `PreErrorBufferSize` (it used to be allocated at that size on the trace's first event). The floor is
+> unchanged: events below the resolved `StepUpLevel` are still dropped before buffering.

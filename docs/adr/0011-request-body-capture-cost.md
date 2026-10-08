@@ -43,3 +43,8 @@ be in hand.
 - Record only (no change): `PreErrorBufferSink.TrackLruFor` takes one global lock on the logging
   hot path for its move-to-front. Known ceiling; approximate-LRU (a timestamp on `Buffer` plus
   periodic sweep) is the upgrade path if contention ever shows in a profile.
+
+> **Amended (2026-10-09, ADR 0027):** the ceiling is gone. The global lock (it was `_lruGate`; `TrackLruFor`
+> no longer exists) is split into up to 16 LRU stripes, each with its own lock, instead of the
+> approximate LRU proposed here. Eight threads holding over 4096 traces went from 711 ns to 231 ns a hold
+> (`docs/performance/results-prebuffer.md`). Eviction is least recently used within a stripe.
