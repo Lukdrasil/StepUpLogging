@@ -8,6 +8,9 @@ Tags before 1.8.0 predate this file.
 
 ## [Unreleased]
 
+### Changed
+- The root enrichers (log context, trace and span ids, `Application`, `Environment`, `MachineName`, `ThreadId`, `ProcessId`, `CallStack`, `ServiceVersion`, `ServiceInstanceId`, exception details and the request-path redaction) now run only on events some sink can use: an event at or above `min(live LevelSwitch, StepUpLevel, Error)`, or marked `IsImmediate` or `IsRequestSummary`. A Debug event that is dropped at the default levels no longer pays for them: 424 B instead of 1360 B, 369 ns instead of 668 ns on the benchmark machine. Exported and held events are enriched as before. The gate is off when the `configure` hook is set or `Serilog:AuditTo` has an entry, so a sink on the Verbose root still receives every event enriched. A root `Serilog:Filter` now sees the events below the floor without the library's properties and with an unredacted `RequestPath`; config-declared `Serilog:Enrich` and `Serilog:Properties` are unchanged. `AlwaysExportCategories` is matched before `FromLogContext`, so a `SourceContext` supplied only through `LogContext.PushProperty` no longer matches. The root stays Verbose, so `IsEnabled(Debug)` is unchanged. See docs/adr/0026-root-enrichment-gate.md and docs/performance/results-root-gate.md.
+
 ## [5.2.0] - 2026-10-08
 
 ### Added

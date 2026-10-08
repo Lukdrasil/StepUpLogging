@@ -36,6 +36,12 @@ validation. Floors in every mode (loses the diagnostic lift) and a separate diag
 change. Category checks inside `ImmediateSink` and `StepUpSink` were rejected: two sinks evaluating
 one predicate is what ADR 0023 D1 rules out.
 
+> **Amended (2026-10-08, ADR 0026):** the enricher is applied before the root enrichment gate and is not
+> gated. It reads only `SourceContext` and marks the event `IsImmediate=true`; the gate lets that marker
+> through, so the event is enriched and exported once by `ImmediateSink` at any level, as before. It
+> now runs ahead of `FromLogContext`, so a `SourceContext` supplied only through the log context is no
+> longer matched.
+
 **D5. Overlapping floor prefixes resolve to the most specific one**, Serilog `LevelOverrideMap`
 semantics. An exempt entry may be narrower than its floor key. The highest matching level was
 rejected: it cannot express a sub-category floor below its parent.
