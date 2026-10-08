@@ -23,4 +23,7 @@ internal static class SpoolFile
         string.Create(
             CultureInfo.InvariantCulture,
             $"{envelope.CreatedUtc.UtcDateTime:yyyyMMdd'T'HHmmssfffffff'Z'}-{envelope.EventId:D}{EnvelopeExtension}");
+
+    /// <summary>The creation instant in the name of <paramref name="path"/>, or <see langword="null"/> for a foreign name.</summary>
+    internal static DateTimeOffset? CreatedUtcOrNull(string path) => throw new NotImplementedException(); // af-stub
 }

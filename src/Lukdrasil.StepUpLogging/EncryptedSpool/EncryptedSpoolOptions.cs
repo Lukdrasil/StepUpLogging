@@ -123,6 +123,12 @@ public sealed class EncryptedSpoolOptions
     /// </summary>
     public HealthStatus UnreachableStatus { get; set; } = HealthStatus.Degraded;
 
+    /// <summary>How old the oldest spooled record may get before the health check reports it; <see langword="null"/> turns the signal off.</summary>
+    public TimeSpan? OldestRecordMaxAge { get; set; } // af-stub
+
+    /// <summary>The status reported once the oldest spooled record is older than <see cref="OldestRecordMaxAge"/>.</summary>
+    public HealthStatus OldestRecordStatus { get; set; } = HealthStatus.Degraded; // af-stub
+
     /// <summary>
     /// How long the drain worker's <see cref="HttpClient"/> waits for one delivery attempt before
     /// giving up on it. A request that runs past this is treated exactly like any other transient
