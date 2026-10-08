@@ -1330,15 +1330,23 @@ warnings — which do not pass root
 enrichment. Do not log secrets in interpolated message templates.
 
 The flag has a running cost worth sizing before you enable it. The sweep sits on the root pipeline,
-which deliberately runs at `Verbose` so the pre-error buffer and trigger sinks see everything, so it
-runs on every event that **reaches the root**, not on the smaller set that is actually exported: a
-`Debug` event the level switch drops is swept before it is dropped. (Events filtered out by a
-`Serilog:MinimumLevel:Override` are dropped before enrichment and are never swept.) Per event the
-work is one regex replace per configured pattern per non-excluded string-valued scalar property,
-each scaling with the length of the value. No figure is published here: a measurement taken against
-this README's sample patterns would not transfer to yours. The lever is the pattern list — keep
-`RedactionRegexes` short and each pattern narrow rather than open-ended. With the flag off, or with
-no patterns configured, the enricher is not registered at all and there is no per-event cost.
+behind the same enrichment gate as the library's other root enrichers, so it runs on an event some sink
+can use: one at or above `min(live level switch, StepUpLevel, Error)`, or marked `IsImmediate` or
+`IsRequestSummary`. A `Debug` event the level switch drops and nothing else reads is not swept. (Events
+filtered out by a `Serilog:MinimumLevel:Override` are dropped before enrichment and are never swept
+either.) The gate is off when you set the `configure` hook or declare `Serilog:AuditTo`, because a sink
+on the Verbose root then receives every event; the sweep then runs on every event that reaches the root.
+Per swept event the work is one regex replace per configured pattern per non-excluded string-valued
+scalar property, each scaling with the length of the value; when every pattern is linear-time and they
+share their options, one scan for the whole list replaces those replaces on a value that matches none of
+them. No figure is published here: a measurement taken against this README's sample patterns would not
+transfer to yours. The lever is the pattern list — keep `RedactionRegexes` short and each pattern
+narrow rather than open-ended. With the flag off, or with no patterns configured, the enricher is not
+registered at all and there is no per-event cost.
+
+One consequence of the gate: a root `Serilog:Filter` sees the properties of a skipped event unredacted.
+A filter only decides and exports nothing, so this matters only if your filter logs or forwards the
+properties of the events it inspects. The library's own sinks never export a skipped event.
 
 ### Sustained-error cost amplification
 
