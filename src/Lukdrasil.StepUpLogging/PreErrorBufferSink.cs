@@ -16,6 +16,8 @@ namespace Lukdrasil.StepUpLogging;
 /// flushed to an inner logger when an Error or Fatal event is observed and dropped on dispose.
 /// Events below <paramref name="minimumLevel"/> are dropped before buffering. Context is keyed by OpenTelemetry/Activity <c>TraceId</c> when available;
 /// otherwise a global buffer is used.
+/// Traces are tracked in up to 16 independent LRU stripes, so a hold locks only its own stripe, and a trace's ring grows
+/// on demand up to <paramref name="capacityPerContext"/> events.
 /// Implements proper disposal to prevent memory leaks in LRU cache.
 ///
 /// Optionally instruments buffer flush operations with ActivitySource for distributed tracing.
@@ -25,25 +27,34 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
 {
     private readonly ILogger _bypassLogger = bypassLogger ?? throw new ArgumentNullException(nameof(bypassLogger));
     private readonly int _capacityPerContext = Math.Max(1, capacityPerContext);
-    private readonly int _maxContexts = Math.Max(1, maxContexts);
+
+    private const int MinTracesPerStripe = 64;
+    private const int MaxStripes = 16;
+    private const int InitialSlots = 4;
 
     private readonly ConcurrentDictionary<string, Buffer> _buffers = new();
-    private readonly object _lruGate = new();
-    private readonly LinkedList<string> _lru = new();
-    private readonly Dictionary<string, LinkedListNode<string>> _lruNodes = new();
-    private bool _disposed;
+    private readonly TraceLruStripe[] _stripes = CreateStripes(Math.Max(1, maxContexts));
+    private volatile bool _disposed;
 
     /// <summary>Number of live per-context buffers. Exposed for tests.</summary>
     internal int ContextCount => _buffers.Count;
 
     /// <summary>Number of LRU stripes for <paramref name="maxContexts"/> traces. Exposed for tests.</summary>
-    internal static int StripeCountFor(int maxContexts) => 0; // af-stub
+    internal static int StripeCountFor(int maxContexts) => Math.Clamp(maxContexts / MinTracesPerStripe, 1, MaxStripes);
 
     /// <summary>Capacity of each of <paramref name="stripes"/> stripes, summing to <paramref name="maxContexts"/>. Exposed for tests.</summary>
-    internal static int[] StripeCapacities(int maxContexts, int stripes) => new int[stripes]; // af-stub
+    internal static int[] StripeCapacities(int maxContexts, int stripes)
+    {
+        var share = maxContexts / stripes;
+        var remainder = maxContexts % stripes;
+        return [.. Enumerable.Range(0, stripes).Select(i => i < remainder ? share + 1 : share)];
+    }
 
     /// <summary>Index of the stripe that owns <paramref name="key"/>. Exposed for tests.</summary>
-    internal int StripeOf(string key) => (int)((uint)key.GetHashCode() % 2u); // af-stub
+    internal int StripeOf(string key) => (int)((uint)key.GetHashCode() % (uint)_stripes.Length);
+
+    private static TraceLruStripe[] CreateStripes(int maxContexts)
+        => Array.ConvertAll(StripeCapacities(maxContexts, StripeCountFor(maxContexts)), capacity => new TraceLruStripe(capacity));
 
     /// <summary>
     /// Test-only seam invoked between the LRU touch and the enqueue of a buffered event, so a
@@ -64,31 +75,41 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
     private static readonly Counter<long> FlushCounter = Meter.CreateCounter<long>("buffer_flush_total", unit: "count", description: "Number of buffer flush operations");
     private static readonly Counter<long> EvictedContextsCounter = Meter.CreateCounter<long>("buffer_evicted_contexts_total", unit: "count", description: "Number of evicted contexts due to LRU");
 
+    /// <summary>
+    /// One trace's ring of held events. It starts with <see cref="InitialSlots"/> slots and doubles up to its capacity as
+    /// events arrive, then overwrites its oldest event.
+    /// </summary>
     private sealed class Buffer
     {
-        private readonly Queue<LogEvent> _queue;
         private readonly int _capacity;
         private readonly object _gate = new();
-
-        public DateTime LastTouchedUtc { get; private set; }
+        private LogEvent[] _items;
+        private int _head;
+        private int _count;
 
         public Buffer(int capacity)
         {
             _capacity = Math.Max(1, capacity);
-            _queue = new Queue<LogEvent>(_capacity);
-            LastTouchedUtc = DateTime.UtcNow;
+            _items = new LogEvent[Math.Min(InitialSlots, _capacity)];
         }
 
         public void Enqueue(LogEvent evt)
         {
             lock (_gate)
             {
-                if (_queue.Count == _capacity)
+                if (_count == _capacity)
                 {
-                    _queue.Dequeue();
+                    _items[_head] = evt;
+                    _head = (_head + 1) % _items.Length;
+                    return;
                 }
-                _queue.Enqueue(evt);
-                LastTouchedUtc = DateTime.UtcNow;
+
+                if (_count == _items.Length)
+                {
+                    Grow();
+                }
+                _items[(_head + _count) % _items.Length] = evt;
+                _count++;
             }
         }
 
@@ -97,13 +118,11 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
             LogEvent[] items;
             lock (_gate)
             {
-                if (_queue.Count == 0)
+                if (_count == 0)
                 {
                     return 0;
                 }
-                items = _queue.ToArray();
-                _queue.Clear();
-                LastTouchedUtc = DateTime.UtcNow;
+                items = TakeAll();
             }
 
             // Create activity span only if there are actual events to flush
@@ -116,6 +135,31 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
             }
 
             return items.Length;
+        }
+
+        private void Grow()
+        {
+            var grown = new LogEvent[Math.Min(_items.Length * 2, _capacity)];
+            CopyInOrder(grown);
+            _items = grown;
+            _head = 0;
+        }
+
+        private void CopyInOrder(LogEvent[] target)
+        {
+            var untilWrap = Math.Min(_count, _items.Length - _head);
+            Array.Copy(_items, _head, target, 0, untilWrap);
+            Array.Copy(_items, 0, target, untilWrap, _count - untilWrap);
+        }
+
+        private LogEvent[] TakeAll()
+        {
+            var snapshot = new LogEvent[_count];
+            CopyInOrder(snapshot);
+            Array.Clear(_items);
+            _head = 0;
+            _count = 0;
+            return snapshot;
         }
     }
 
@@ -162,14 +206,13 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
         BufferedEventsCounter.Add(1);
     }
 
-    // ponytail: get-or-create, LRU touch, and enqueue for a key must complete as one unit —
-    // otherwise a concurrent TouchLru for a different key can evict this key's buffer between
-    // the touch and the enqueue, silently orphaning the event. Holding _lruGate for the whole
-    // operation serializes all buffering across every context behind one lock; revisit with
-    // per-key locking if that ever shows up as a throughput bottleneck.
+    // Get-or-create, LRU touch, eviction and enqueue for a key must complete as one unit under the key's stripe lock;
+    // otherwise a concurrent touch for another key of the same stripe could evict this key's buffer between the
+    // touch and the enqueue, silently orphaning the event. Keys of different stripes never share a lock.
     private void BufferEvent(string key, LogEvent logEvent)
     {
-        lock (_lruGate)
+        var stripe = _stripes[StripeOf(key)];
+        lock (stripe.Gate)
         {
             if (_disposed)
             {
@@ -177,40 +220,18 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
             }
 
             var buffer = _buffers.GetOrAdd(key, static (_, capacity) => new Buffer(capacity), _capacityPerContext);
-            TouchLru(key);
+            Evict(stripe.Touch(key));
             BeforeEnqueueTestHook?.Invoke();
             buffer.Enqueue(logEvent);
             AfterEnqueueTestHook?.Invoke();
         }
     }
 
-    // Must be called while holding _lruGate.
-    private void TouchLru(string key)
+    private void Evict(string? evictedKey)
     {
-        // O(1) move-to-front via the node index.
-        if (_lruNodes.TryGetValue(key, out var node))
+        if (evictedKey is not null && _buffers.TryRemove(evictedKey, out _))
         {
-            _lru.Remove(node);
-            _lru.AddFirst(node);
-        }
-        else
-        {
-            _lruNodes[key] = _lru.AddFirst(key);
-        }
-
-        // Enforce max contexts, evicting least-recently-touched first.
-        while (_lru.Count > _maxContexts)
-        {
-            var last = _lru.Last;
-            if (last is not null)
-            {
-                _lru.RemoveLast();
-                _lruNodes.Remove(last.Value);
-                if (_buffers.TryRemove(last.Value, out _))
-                {
-                    EvictedContextsCounter.Add(1);
-                }
-            }
+            EvictedContextsCounter.Add(1);
         }
     }
 
@@ -245,11 +266,13 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
 
         _disposed = true;
 
-        lock (_lruGate)
+        foreach (var stripe in _stripes)
         {
-            _buffers.Clear();
-            _lru.Clear();
-            _lruNodes.Clear();
+            lock (stripe.Gate)
+            {
+                stripe.Clear();
+            }
         }
+        _buffers.Clear();
     }
 }
