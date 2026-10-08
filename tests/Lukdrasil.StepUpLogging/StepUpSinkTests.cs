@@ -584,4 +584,52 @@ public class StepUpSinkTests
         Assert.Empty(exported.Events);
         Assert.Equal(["floored-debug"], Texts(flushed));
     }
+
+    private static long AllocatedBytesOfSecondRun(Action run)
+    {
+        run();
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        run();
+        return GC.GetAllocatedBytesForCurrentThread() - before;
+    }
+
+    [Fact]
+    public void StepUpSink_DroppedBelowLevelSwitch_DoesNotAllocate()
+    {
+        var exported = new CollectingSink();
+        var inner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(exported).CreateLogger();
+        using var sink = new StepUpSink(inner, new LoggingLevelSwitch(LogEventLevel.Warning), LogEventLevel.Warning, []);
+        var debug = Tagged(LogEventLevel.Debug, "dropped-debug");
+
+        var delta = AllocatedBytesOfSecondRun(() =>
+        {
+            for (var i = 0; i < 10_000; i++) sink.Emit(debug);
+        });
+
+        Assert.Equal(0, delta);
+        Assert.Empty(exported.Events);
+    }
+
+    [Fact]
+    public void StepUpSink_DroppedWithDenyListAndFloors_DoesNotAllocate()
+    {
+        var exported = new CollectingSink();
+        var inner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(exported).CreateLogger();
+        var floors = new CategoryFloorMap(new Dictionary<string, LogEventLevel>(StringComparer.Ordinal) { [FlooredCategory] = LogEventLevel.Warning }, []);
+        using var sink = new StepUpSink(inner, new LoggingLevelSwitch(LogEventLevel.Information), LogEventLevel.Warning, [EfCommandCategory], categoryFloors: floors);
+        LogEvent[] dropped =
+        [
+            Tagged(LogEventLevel.Information, "floored-info", SourceContext(FlooredCategory)),
+            Tagged(LogEventLevel.Information, "ef-info", SourceContext(EfCommandCategory)),
+            Tagged(LogEventLevel.Debug, "app-debug", SourceContext("My.App.Service")),
+        ];
+
+        var delta = AllocatedBytesOfSecondRun(() =>
+        {
+            for (var i = 0; i < 10_000; i++) sink.Emit(dropped[i % dropped.Length]);
+        });
+
+        Assert.Equal(0, delta);
+        Assert.Empty(exported.Events);
+    }
 }

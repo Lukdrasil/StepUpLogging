@@ -99,5 +99,14 @@ namespace Lukdrasil.StepUpLogging.Tests
 
             Assert.Equal("my [REDACTED] here", result);
         }
+
+        [Fact]
+        public void Redact_ReturnsSameInstance_WhenNoPatternMatches()
+        {
+            var patterns = new CompiledRedactionPatterns(new[] { Compile("password=[^&]+"), Compile(@"token/[^/]+") });
+            var input = "/api/orders/8f3a2c1e/items/42?page=2";
+
+            Assert.Same(input, patterns.Redact(input));
+        }
     }
 }

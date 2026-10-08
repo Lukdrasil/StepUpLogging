@@ -41,6 +41,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Lukdrasil.StepUpLogging\Lukdrasil.StepUpLogging.csproj" />
+    <ProjectReference Include="..\Lukdrasil.StepUpLogging.Benchmarks\Lukdrasil.StepUpLogging.Benchmarks.csproj" />
   </ItemGroup>
 
   <ItemGroup>
