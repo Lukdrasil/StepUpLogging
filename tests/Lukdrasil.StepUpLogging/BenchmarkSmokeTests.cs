@@ -24,6 +24,7 @@ public class BenchmarkSmokeTests
         "RequestLoggingBenchmarks",
         "AuditBenchmarks",
         "RequestPathRedactionBenchmarks",
+        "DroppedPathBenchmarks",
     ];
 
     public static TheoryData<string> SmokeRunClasses => new(SmokeRunClassNames);
