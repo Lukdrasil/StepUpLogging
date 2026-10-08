@@ -38,7 +38,6 @@ public class DroppedPathBenchmarks
     [GlobalSetup]
     public void Setup()
     {
-        _activity = InActivity ? BenchmarkFixtures.StartTrace() : null;
         _controller = new StepUpLoggingController(new StepUpLoggingOptions());
         var output = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(_exported).CreateLogger();
         _buffer = new PreErrorBufferSink(Logger.None, 100, 1024, _controller.StepUpLevel);
@@ -47,6 +46,7 @@ public class DroppedPathBenchmarks
         _summarySink = new SummarySink(Logger.None);
         _immediateSink = new ImmediateSink(Logger.None);
 
+        _activity = InActivity ? BenchmarkFixtures.StartTrace() : null;
         var stages = Stages().ToArray();
         _rungs = [.. Enumerable.Range(0, stages.Length + 1).Select(count => Rung(stages.Take(count)))];
 
