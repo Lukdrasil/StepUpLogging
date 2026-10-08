@@ -13,9 +13,11 @@ public static class KeyedCaptureSink
     public static LoggerConfiguration StepUpCapture(this LoggerSinkConfiguration sinkConfiguration, string key)
         => sinkConfiguration.Sink(new Sink(Captured.GetOrAdd(key, _ => new ConcurrentQueue<LogEvent>())));
 
+    /// <summary>Audit-sink form of <c>StepUpCapture</c>: captures the events an audit sink receives under <paramref name="key"/>.</summary>
     public static LoggerConfiguration StepUpAuditCapture(this LoggerAuditSinkConfiguration auditSinkConfiguration, string key)
         => auditSinkConfiguration.Sink(new Sink(Captured.GetOrAdd(key, _ => new ConcurrentQueue<LogEvent>())));
 
+    /// <summary>Records a snapshot of every event that reaches the root logger under <paramref name="key"/>, without filtering any.</summary>
     public static LoggerConfiguration RootProbe(this LoggerFilterConfiguration filterConfiguration, string key)
     {
         var events = Captured.GetOrAdd(key, _ => new ConcurrentQueue<LogEvent>());
