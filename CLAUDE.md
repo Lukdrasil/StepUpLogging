@@ -38,12 +38,13 @@ dotnet pack src/Lukdrasil.StepUpLogging/Lukdrasil.StepUpLogging.csproj --configu
 | `ActivityContextEnricher` | Adds `ParentSpanId`, `TraceFlags`, `TraceState` from `Activity.Current` — fields not provided by `Serilog.Enrichers.OpenTelemetry`. |
 | `StepUpLoggingExtensions` | Public static class. Exposes `AddStepUpLogging()` and `UseStepUpRequestLogging()`, all three `ActivitySource` instances, `AddStepUpLoggingMeters()`, and `CompiledRedactionPatterns`. All Serilog pipeline wiring happens here. |
 | `AlwaysExportEnricher` | Internal root enricher, registered only when `AlwaysExportCategories` has a non-blank entry. Sets `IsImmediate=true` on a matching `SourceContext`, so `ImmediateSink` exports it once and `StepUpSink` and the pre-error buffer skip it. |
+| `EnrichmentGate` | Internal. `Needs(LogEvent)` is true when the level is at or above `min(live LevelSwitch, StepUpLevel, Error)` or the event carries `IsImmediate` or `IsRequestSummary`; `For(...)` returns the predicate the root enrichers run behind (`Enrich.When`), or always-true when the `configure` hook is set or `Serilog:AuditTo` has an entry (ADR 0026). |
 | `CategoryPrefix` | Internal static class. The one `SourceContext` prefix rule for every category option (ADR 0021 D3): ordinal equal, or starts with prefix + `.`. |
 | `StepUpLoggingOptions` | All configuration knobs with defaults. Bound from `"SerilogStepUp"` appsettings section. |
 
 ### Serilog pipeline (wired in `AddStepUpLoggingInternal`)
 
-The root logger is deliberately set to `MinimumLevel.Verbose()` so the buffer and trigger sinks see every event regardless of the current level. Actual export is gated inside sub-loggers:
+The root logger is deliberately set to `MinimumLevel.Verbose()` so the buffer and trigger sinks see every event regardless of the current level. Actual export is gated inside sub-loggers. The root's library enrichers (`ApplyCommonEnrichers`) run behind the `EnrichmentGate`, so a Debug event nobody will export is not enriched; `AlwaysExportEnricher` runs before the gate, `RedactionEnricher` stays last and ungated, and the bypass logger enriches ungated. Inside `Enrich.When` make one call per enricher on the `LoggerEnrichmentConfiguration`; a chained `.Enrich.` escapes the gate (ADR 0026):
 
 ```
 Root (Verbose)

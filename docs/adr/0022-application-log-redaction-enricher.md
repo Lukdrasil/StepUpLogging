@@ -88,6 +88,14 @@ Three facts about the existing pipeline constrain the answer:
    unredacted. Consequence accepted: a consumer wanting an enricher exempt from redaction has no
    escape hatch short of turning the flag off.
 
+   > **Amended (2026-10-08, ADR 0026):** "enrichers in place by that point" now needs one qualification.
+   > The library's own root enrichers run behind an enrichment gate, so on an event no sink will use they
+   > do not run. `RedactionEnricher` is not among them: it stays registered last and ungated, so the
+   > sweep still runs on every event that reaches the root, as D7 says. The path-only
+   > `PathPropertyRedactionEnricher` (amendment to D4) is gated with the rest of `ApplyCommonEnrichers`;
+   > the gate lets every exported or held event through, so redaction of exported events is unchanged.
+   > The gate is off when the `configure` hook or `Serilog:AuditTo` puts a sink on the root.
+
    The dependency is passed **by constructor**, not resolved:
    `lc.Enrich.With(new RedactionEnricher(services.GetRequiredService<CompiledRedactionPatterns>()))`.
    The only enricher precedent in the repo is `Enrich.With<ActivityContextEnricher>()` (`:395`),

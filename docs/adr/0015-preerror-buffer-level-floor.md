@@ -48,3 +48,9 @@ buffer applies a **level floor equal to the resolved `StepUpLevel`**, enforced a
 - `NeverStepUpCategories` remains orthogonal: it exempts categories from the
   *live* step-up window and still does not filter the buffer (ADR 0021 remark
   unchanged) — the buffer floor is by level only.
+
+> **Amended (2026-10-08, ADR 0026):** the root logger stays Verbose "so the internal sinks see every
+> event", but the library's root enrichers no longer run on an event that no sink will use. The floor of
+> that enrichment gate is `min(live switch, StepUpLevel, Error)`: the buffer's own floor, `StepUpLevel`,
+> is part of it, so every event the buffer can hold is enriched before it is held. An `Error` that
+> flushes the buffer is always enriched, even when `StepUpLevel` is `Fatal`.

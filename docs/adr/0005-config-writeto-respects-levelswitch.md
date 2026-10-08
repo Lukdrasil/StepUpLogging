@@ -27,3 +27,10 @@ Verbose. It is called out in the migration notes and covered by ADR 0006 (v2).
   MUST receive them once stepped up.
 - The decision stands; its implementation was changed by ADR 0012 to wrap the live
   `IConfiguration` instead of snapshotting it, restoring `reloadOnChange`.
+
+> **Amended (2026-10-08, ADR 0026):** "the root reads only `MinimumLevel.Override` and enrichers" still holds,
+> but the library's own root enrichers (log context, trace and span ids, `Application`, `Environment` and
+> the rest of `ApplyCommonEnrichers`) now run only on events some root sink can use, behind an enrichment
+> gate. The root stays Verbose. A `Serilog:AuditTo` sink or a `configure`-hook sink on the root switches
+> the gate off, so it still receives every event enriched; a root `Serilog:Filter` does not, and sees the
+> events the gate skips without those properties.
