@@ -8,8 +8,8 @@
     <!-- Package Metadata -->
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <PackageId>Lukdrasil.StepUpLogging</PackageId>
-    <Version>5.1.0</Version>
-    <PackageReleaseNotes>v5.1.0 - Encrypted spool throughput (#69): opt-in batched delivery (EncryptedSpoolOptions.DeliveryBatchSize, POST {EndpointBaseUrl}/audit/batch; default 1 keeps the wire unchanged); concurrent durable writes no longer queue behind one gate, the cap still holds; a full spool refuses from its tally and re-checks the disk at most once per SpoolFullRecheckInterval instead of scanning the directory on every write; dropped records are logged at Critical at a bounded rate. See CHANGELOG.md.</PackageReleaseNotes>
+    <Version>5.2.0</Version>
+    <PackageReleaseNotes>v5.2.0 - Stalled drain made visible (#71): audit_spool_oldest_age_seconds gauge, opt-in health signal (EncryptedSpoolOptions.OldestRecordMaxAge, OldestRecordStatus), a reason tag on audit_spool_dead_lettered_total, and the documented answer for an unknown key (503 while keys load, 422 when gone). See CHANGELOG.md. v5.1.0 - Encrypted spool throughput (#69): opt-in batched delivery (EncryptedSpoolOptions.DeliveryBatchSize, POST {EndpointBaseUrl}/audit/batch; default 1 keeps the wire unchanged); concurrent durable writes no longer queue behind one gate, the cap still holds; a full spool refuses from its tally and re-checks the disk at most once per SpoolFullRecheckInterval instead of scanning the directory on every write; dropped records are logged at Critical at a bounded rate. See CHANGELOG.md.</PackageReleaseNotes>
     <Authors>Lukdrasil</Authors>
     <Description>Dynamic step-up logging for ASP.NET Core with Serilog - automatically increase log verbosity when errors occur, with minimal performance overhead. Includes request body capture, sensitive data redaction, and OpenTelemetry metrics.</Description>
     <PackageTags>serilog;logging;aspnetcore;observability;otel;stepup;dynamic-logging;error-logging</PackageTags>
