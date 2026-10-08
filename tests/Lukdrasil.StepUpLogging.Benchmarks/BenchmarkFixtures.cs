@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Serilog;
 using Serilog.Core;
 using Serilog.Events;
 using Serilog.Parsing;
@@ -105,8 +106,11 @@ internal static class BenchmarkFixtures
     /// <summary>
     /// A host wired by <c>AddStepUpLogging()</c> with no OTLP, console or file output; the only output
     /// sink is the <c>Counting</c> sink, so the benchmarks measure the pipeline and not an exporter.
+    /// <paramref name="configure"/> is the consumer's Serilog hook; it runs on the Verbose root.
     /// </summary>
-    internal static IHost BuildHost(IEnumerable<KeyValuePair<string, string?>> settings)
+    internal static IHost BuildHost(
+        IEnumerable<KeyValuePair<string, string?>> settings,
+        Action<IServiceProvider, LoggerConfiguration>? configure = null)
     {
         var builder = Host.CreateApplicationBuilder();
         builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
@@ -116,7 +120,7 @@ internal static class BenchmarkFixtures
             ["Serilog:WriteTo:0:Name"] = nameof(BenchmarkSinkExtensions.Counting),
         });
         builder.Configuration.AddInMemoryCollection(settings);
-        builder.AddStepUpLogging();
+        builder.AddStepUpLogging(configureOptions: null, configure: configure);
         return builder.Build();
     }
 
