@@ -267,7 +267,8 @@ public static class StepUpLoggingExtensions
             lc.ReadFrom.Configuration(rootConfig)
               .MinimumLevel.Verbose();
 
-            ApplyRootEnrichers(lc, builder, opts, redactionPatterns, EnrichmentGate.For(stepUpController.LevelSwitch, stepUpController.StepUpLevel, configure, builder.Configuration));
+            var needsEnrichment = EnrichmentGate.For(stepUpController.LevelSwitch, stepUpController.StepUpLevel, configure, builder.Configuration);
+            ApplyRootEnrichers(lc, builder, opts, redactionPatterns, needsEnrichment);
 
             // Bypass logger: exports at full verbosity independent of LevelSwitch.
             // Built directly here (not via DI) to avoid a circular deadlock:
@@ -358,13 +359,8 @@ public static class StepUpLoggingExtensions
             // Registered last, after the consumer hook above and the library's own enrichers, so a
             // property a consumer's own enricher just added is swept too (ADR 0022 D5). Root-only:
             // enrichment here precedes every sink, so PreErrorBufferSink already buffers redacted
-            // events and needs no second pass. With no pattern to apply the enricher would walk
-            // every event's properties to no effect, so the flag alone does not earn the sweep;
-            // the pattern array is fixed at startup, so this decision cannot go stale.
-            if (opts.RedactLogEventProperties && redactionPatterns.Patterns.Length > 0)
-            {
-                lc.Enrich.With(new RedactionEnricher(redactionPatterns));
-            }
+            // events and needs no second pass.
+            ApplyRedactionEnricher(lc, opts, redactionPatterns, needsEnrichment);
         }, preserveStaticLogger: !staticLoggerSnapshot.SetStaticLogger, writeToProviders: false);
 
         return builder;
@@ -478,14 +474,16 @@ public static class StepUpLoggingExtensions
         lc.Enrich.When(needsEnrichment, enrich => ApplyCommonEnrichers(enrich, builder, opts, redactionPatterns));
     }
 
-    /// <summary>Registers the property redaction enricher behind <paramref name="needsEnrichment"/>.</summary>
+    /// <summary>
+    /// Registers the property redaction enricher (ADR 0022 D5) behind <paramref name="needsEnrichment"/>: an event the
+    /// gate drops is exported by no sink, so sweeping its properties would be wasted work. With no pattern to apply
+    /// the enricher would walk every event's properties to no effect, so the flag alone does not earn the sweep; the
+    /// pattern array is fixed at startup, so this decision cannot go stale.
+    /// </summary>
     internal static void ApplyRedactionEnricher(LoggerConfiguration lc, StepUpLoggingOptions opts, CompiledRedactionPatterns redactionPatterns, Func<LogEvent, bool> needsEnrichment)
     {
-        // af-stub: today's ungated registration; needsEnrichment is not applied yet.
-        if (opts.RedactLogEventProperties && redactionPatterns.Patterns.Length > 0 && needsEnrichment is not null)
-        {
-            lc.Enrich.With(new RedactionEnricher(redactionPatterns));
-        }
+        if (!opts.RedactLogEventProperties || redactionPatterns.Patterns.Length == 0) return;
+        lc.Enrich.When(needsEnrichment, enrich => enrich.With(new RedactionEnricher(redactionPatterns)));
     }
 
     /// <summary>
