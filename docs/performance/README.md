@@ -6,6 +6,7 @@ measure the library's hot paths in isolation so a change to `src/` can be compar
 - [baseline.md](baseline.md): what the Logging and Audit suites measured, on which machine and commit.
 - [analysis.md](analysis.md): the hot spots ranked by events per second, their causes, and the follow-up tasks.
 - [results-root-gate.md](results-root-gate.md): the dropped-path cost before and after the root enrichment gate (ADR 0026), and where it goes.
+- [results-redaction.md](results-redaction.md): the gated redaction enricher and the union prefilter of `Redact` (ADR 0022, ADR 0001), before and after.
 
 The k6 load test in `tests/k6` measures a whole application under load. These benchmarks measure one
 component at a time, so they say where the time goes; k6 says whether it matters end to end.
@@ -45,7 +46,7 @@ Every benchmark class carries exactly one suite category, which `--anyCategories
 
 | Category | Classes | Measures |
 |---|---|---|
-| `Logging` | `StepUpSinkBenchmarks`, `PreErrorBufferSinkBenchmarks`, `EnricherBenchmarks`, `RedactionPatternBenchmarks`, `PipelineBenchmarks`, `DroppedPathBenchmarks`, `RequestLoggingBenchmarks`, `RequestPathRedactionBenchmarks` | CPU and allocation of the logging pipeline, per event or per request |
+| `Logging` | `StepUpSinkBenchmarks`, `PreErrorBufferSinkBenchmarks`, `EnricherBenchmarks`, `RedactionPatternBenchmarks`, `RedactionPerPatternBenchmarks`, `PipelineBenchmarks`, `DroppedPathBenchmarks`, `RequestLoggingBenchmarks`, `RequestPathRedactionBenchmarks` | CPU and allocation of the logging pipeline, per event or per request |
 | `Audit` | `AuditBenchmarks` | CPU and allocation of an audit write before the disk |
 | `Disk` | `DurableWriteBenchmarks`, `FullSpoolDropBenchmarks`, `SpoolDrainBenchmarks` | The encrypted spool: fsync per record, the full-spool drop, the drain |
 
