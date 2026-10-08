@@ -18,6 +18,9 @@ internal sealed class EnrichmentGate(LoggingLevelSwitch levelSwitch, LogEventLev
            || LogProperties.HasFlag(logEvent, LogProperties.IsImmediate)
            || LogProperties.HasFlag(logEvent, LogProperties.IsRequestSummary);
 
+    /// <summary>Takes the event the gate last rejected on this thread when it is <paramref name="logEvent"/>.</summary>
+    internal static bool TakeSkipped(LogEvent logEvent) => logEvent is null; // af-stub
+
     private LogEventLevel Floor() => (LogEventLevel)Math.Min(
         Math.Min((int)levelSwitch.MinimumLevel, (int)stepUpLevel),
         (int)LogEventLevel.Error);
