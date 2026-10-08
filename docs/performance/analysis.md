@@ -17,7 +17,7 @@ exporter is in these numbers.
 |---|---|---|---|---|
 | 1 | Event dropped below the pre-error level (Debug at Warning) | 1.46 M | 685 ns, 1360 B | The common case, and 2.9x the time and 3.2x the bytes of plain Serilog at the baseline. Fixed for the default configuration by the enrichment gate (ADR 0026): 343 ns, 424 B after, the bytes of plain Serilog ([results-root-gate.md](results-root-gate.md)). |
 | 1b | The same with redaction on (5 patterns) | 0.76 M | 1309 ns, 1512 B | Redaction adds 624 ns to an event that is then thrown away. After the gate the row was 659 ns, 496 B ([results-root-gate.md](results-root-gate.md)); with `RedactionEnricher` gated too it is 341 ns, 424 B, the row of the default configuration ([results-redaction.md](results-redaction.md), follow-up 3). |
-| 2 | Event held in the pre-error buffer (Information at Warning) | 1.18 M | 844 ns, 1360 B | About 160 ns (23 %) over dropped, inside the range [baseline.md](baseline.md) calls unresolved. The buffer's global lock makes 8 threads slower than one. |
+| 2 | Event held in the pre-error buffer (Information at Warning) | 1.18 M | 844 ns, 1360 B | About 160 ns (23 %) over dropped, inside the range [baseline.md](baseline.md) calls unresolved. The buffer's global lock made 8 threads slower than one; fixed by up to 16 LRU stripes and a ring that grows on demand (ADR 0027): with 4096 traces eight threads hold in 231 ns against 711 ns, and a new trace's first hold allocates 224 B against 1032 B ([results-prebuffer.md](results-prebuffer.md)). |
 | 3 | Event exported (Warning at Warning) | 1.47 M | 682 ns, 1360 B | No measurable cost over dropped; the exporter is not in this baseline. |
 | 4 | Error flush of a full 100-event buffer | 7.5 M events (hold + flush) | 13.3 us per flush, 824 B | Dominated by the holds; the flush alone is not resolved. |
 | 5 | Request through the middleware, 4 / 32 headers | 79 k / 33 k requests | 12.7 us, 6.4 KB / 30.5 us, 15 KB | Per header 0.58 to 0.66 us. |
@@ -142,9 +142,9 @@ attributed to the hold; the `Hold` row below is the measured cost of the hold. `
 
 Two findings.
 
-*Eight threads hold slower in aggregate than one.* The same events take 772 ns each with eight threads
+*Eight threads hold slower in aggregate than one (baseline; fixed, see below).* The same events take 772 ns each with eight threads
 against 468 ns with one when they are spread over many traces, and 237 ns against 127 ns with one trace
-(`Hold` reports wall time per hold, so aggregate throughput falls to 60 % and 54 %). **Code:** `BufferEvent`
+(`Hold` reports wall time per hold, so aggregate throughput falls to 60 % and 54 %). **Code (at the baseline commit):** `BufferEvent`
 holds `_lruGate` across the buffer lookup, the LRU move-to-front and the enqueue
 (`PreErrorBufferSink.cs:163-173`), and the enqueue takes a second lock inside the buffer (`:75`). The
 code comment at `:156-160` and ADR 0011 already name `_lruGate` as the known ceiling, with approximate LRU
@@ -168,17 +168,38 @@ pins: `GetContextKey` reads `activity.TraceId.ToString()` (`:214`), which does n
 (the test measures 0 bytes over 10 000 holds in one trace; the benchmark rows use the `TraceId` property
 path and also show 0 B). It is not a cost to remove.
 
+**After the change.** Both candidates below were built (ADR 0027), as striping and not as approximate LRU, and
+measured in [results-prebuffer.md](results-prebuffer.md) (`PreErrorBufferSinkBenchmarks`, now with 1, 256 and
+4096 traces, and the new `PreErrorBufferGrowthBenchmarks`):
+
+| Traces | Threads | Per hold before | Per hold after | Allocated before / after |
+|---|---|---|---|---|
+| 1 | 1 | 127.5 ns | 150.0 ns | 0 / 0 |
+| 1 | 8 | 227.0 ns | 274.4 ns | 0 / 0 |
+| 256 | 1 | 164.3 ns | 185.4 ns | 0 / 0 |
+| 256 | 8 | 291.8 ns | 106.2 ns | 0 / 0 |
+| 4096 | 1 | 488.5 ns | 386.4 ns | 1032 B / 224 B |
+| 4096 | 8 | 710.9 ns | 231.1 ns | 1029 B / 224 B |
+
+Eight threads that spread over many traces are 2.7x (256 traces) and 3.1x (4096 traces) faster per hold
+and now beat one thread. The one-trace row (all eight threads on one buffer's lock) does not move, and the
+single-thread rows are 13 % to 18 % slower where nothing is evicted, which is inside the noise of the run
+and which the code predicts (one more hash of the trace id to pick the stripe; **Hypothesis**, not separated).
+Allocated bytes per trace, with 3, 10 and 100 events held in it: 224 B, 464 B and 2104 B against 1.01 KB
+before. A trace that fills a 100-slot ring therefore allocates about twice what it did, because the ring
+doubles through 4, 8, 16, 32, 64 and 100 slots; the crossover is between 32 and 64 events held (arithmetic
+from the array sizes, not measured).
+
 **Candidates.**
 
 - *Approximate LRU instead of a global lock* (a timestamp on `Buffer` and a periodic sweep, as ADR 0011
-  proposes). Ceiling of the win: eight threads at the one-thread rate, 772 to 468 ns with churn (the
-  4096-trace rows; the one-trace gap of 237 to 127 ns also includes the buffer's own lock, which this keeps);
-  whether it is reachable is **unmeasured**. It must keep the property the
-  comment at `:156` protects: a concurrent eviction must not orphan an event between the touch and the
-  enqueue. ADRs: 0011 (the recorded ceiling), 0023, 0015.
-- *Size a trace's queue on demand* (grow from small). Ceiling: the 824 B array on the first hold of each
-  trace; the saving is real only for traces that hold fewer events than the capacity, which needs a row
-  with 3, 10 and 100 held events per trace to size. ADR: 0015.
+  proposes). **Done** (follow-up 4) as striping instead: up to 16 stripes of at least 64 traces, each with
+  its own lock and its own LRU order (ADR 0027), which keeps exact LRU within a stripe and the property the
+  old comment protected, that a concurrent eviction must not orphan an event between the touch and the
+  enqueue. The one-trace, eight-thread gap (the buffer's own lock) is untouched. ADRs: 0011, 0023, 0015.
+- *Size a trace's queue on demand* (grow from small). **Done** (follow-up 7): the ring starts with 4 slots and
+  doubles up to the capacity. Measured above: the saving is 4.6x fewer bytes at 3 events held and 2.2x at 10;
+  at 100 held the doubling costs 2.1x more. ADR: 0015.
 
 ## 3. Events exported
 
@@ -331,16 +352,21 @@ benchmark row it needs, and states its result against [baseline.md](baseline.md)
    and ADR 0026 D1, D3, D5 amended; ADR 0023 untouched): a dropped Debug event with redaction on is 341 ns and
    424 B against 618 ns and 496 B ([results-redaction.md](results-redaction.md)). Fail-closed redaction still
    applies to every event a sink can use.
-4. **`PreErrorBufferSink` without a global lock** (section 2). Ceiling: eight threads from 772 ns to the
-   one-thread 468 ns per hold with many traces (the 4096-trace rows). ADR 0011's recorded ceiling, 0023, 0015.
+4. **`PreErrorBufferSink` without a global lock** (section 2). **Done** with up to 16 LRU stripes (ADR 0027;
+   ADR 0011's recorded ceiling and ADR 0023 untouched in their decisions): eight threads over 4096 traces
+   hold in 231 ns against 711 ns, over 256 traces in 106 ns against 292 ns
+   ([results-prebuffer.md](results-prebuffer.md)). Not removed: eight threads on one trace still queue on
+   that buffer's own lock; single-thread holds are about 15 to 20 ns slower (unresolved).
 5. **Cheaper `Redact`** (section 8). **Done** with a union prefilter (ADR 0001 amended): five patterns on a
    short value that matches none, 355 ns to 91 ns; no change on a long header or a value that matches
    ([results-redaction.md](results-redaction.md)). Request logging allocates 0.17 KB less per request, most
    likely from `RedactionEnricher` no longer copying each event's properties, not from the prefilter.
 6. **Request logging allocations** (section 5): per-header join, the summary's `ForContext` chain.
    Ceiling: 0.31 KB per header, 3.46 KB per summary. ADRs 0008, 0009.
-7. **Size a trace's buffer on demand** (section 2). Ceiling 824 B on the first held event of each trace.
-   ADR 0015.
+7. **Size a trace's buffer on demand** (section 2). **Done** (ADR 0027, ADR 0015 amended): the first held
+   event of a new trace allocates 224 B against 1032 B, and a trace with 3 or 10 events held allocates 224 B
+   or 464 B against 1.01 KB; one that fills the default 100-slot ring allocates 2104 B
+   ([results-prebuffer.md](results-prebuffer.md)).
 8. **Complete the baseline (benchmark only):** run the Disk suite and record it; add a row with a real
    output sink (file, then OTLP to a local collector) behind the pipeline, the Error flush and a stepped-up
    request; add rows for `StepUpTriggerSink`, `SummarySink`, `ImmediateSink` and
