@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using BenchmarkDotNet.Attributes;
+using BenchmarkDotNet.Configs;
 using Serilog;
 using Serilog.Core;
 using Serilog.Enrichers.OpenTelemetry;
@@ -17,6 +18,7 @@ namespace Lukdrasil.StepUpLogging.Benchmarks;
 /// </summary>
 [MemoryDiagnoser]
 [BenchmarkCategory("Logging")]
+[Config(typeof(NuGetDependencyConfig))]
 public class DroppedPathBenchmarks
 {
     private readonly NullLogEventSink _exported = new();
@@ -155,4 +157,14 @@ public class DroppedPathBenchmarks
         return configuration.WriteTo.Sink(_terminal).CreateLogger()
             .ForContext("SourceContext", BenchmarkFixtures.OrderHandlerContext);
     }
+}
+
+/// <summary>
+/// Lets the ladder reference <c>Serilog.Enrichers.OpenTelemetry</c> directly: that NuGet package ships a
+/// non-optimized build, which BenchmarkDotNet's validator rejects for any assembly the benchmark names. The
+/// library itself calls the same package, so the ladder measures what the library runs.
+/// </summary>
+internal sealed class NuGetDependencyConfig : ManualConfig
+{
+    public NuGetDependencyConfig() => WithOptions(ConfigOptions.DisableOptimizationsValidator);
 }
