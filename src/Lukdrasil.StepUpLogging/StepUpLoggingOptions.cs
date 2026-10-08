@@ -97,10 +97,17 @@ public sealed class StepUpLoggingOptions
     /// <see cref="RedactionRegexes"/> configuration does not change behavior on upgrade; with no
     /// patterns configured the flag has no effect either.
     ///
-    /// The sweep sits on the root pipeline, which runs at <c>Verbose</c>, so it costs one regex
-    /// replace per pattern per non-excluded string-valued scalar property on every event that reaches the root —
-    /// including the events the step-up level switch later drops and never exports — which is why
-    /// <see cref="RedactionRegexes"/> is best kept short and each pattern narrow.
+    /// The sweep sits on the root pipeline, behind the same enrichment gate as the library's other
+    /// root enrichers: it runs on an event at or above <c>min(live level switch, StepUpLevel, Error)</c>
+    /// or marked <c>IsImmediate</c> or <c>IsRequestSummary</c>, and not on an event no sink will use, such as a
+    /// Debug event the switch drops. It costs one regex replace per pattern per non-excluded
+    /// string-valued scalar property on every such event, which is why <see cref="RedactionRegexes"/> is best
+    /// kept short and each pattern narrow; when every pattern is linear-time and they share their options, one
+    /// scan for the whole list replaces the per-pattern replaces on a value that matches none of them. The gate is
+    /// off when the <c>configure</c> hook is set or <c>Serilog:AuditTo</c> has an entry, and then the sweep runs on
+    /// every event that reaches the root. A root <c>Serilog:Filter</c> still sees the properties of a skipped
+    /// event unredacted; a filter only decides and exports nothing, but one that logs or forwards those properties
+    /// reads the raw values.
     ///
     /// What the sweep does NOT reach:
     /// <list type="bullet">

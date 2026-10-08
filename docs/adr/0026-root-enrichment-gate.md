@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-10-08
 - Amends: ADR 0005, ADR 0015, ADR 0022 D5, ADR 0024 D4 (notes only; their decisions stand)
+- Amended 2026-10-09 (redaction gate): D1, D3 and D5 below; ADR 0001 and ADR 0022 D4, D5 and D7 carry their own amendments
 
 ## Context
 
@@ -43,6 +44,12 @@ or `ServiceVersion`. With `StepUpLevel` in the floor, the switch cannot drop to 
 skipped. The remaining window is a consumer lowering the switch below `StepUpLevel` by hand while an event
 is in flight; that event is exported without the library's enrichers, once.
 
+> **Amended (2026-10-09, redaction gate):** that window now drops the event instead of exporting it
+> unenriched. `EnrichmentGate.Needs` records the event it rejects in a per-thread slot, and `StepUpSink`
+> refuses an event found there (D3). An event the gate skipped is therefore never exported, whatever the
+> switch is by the time `StepUpSink` runs; with the slot overwritten (D3) the old behaviour returns for that
+> one event. This matters more than before because the skipped event now also lacks redaction.
+
 **D2. The gate is off when a consumer sink sees the Verbose root.** `EnrichmentGate.For` returns an
 always-true predicate when the `configure` hook is set or `Serilog:AuditTo` has an entry, because a
 consumer sink added there, or an audit sink, receives every event at Verbose and expects the same
@@ -57,6 +64,32 @@ sets `IsImmediate=true` (ADR 0024 D4); D1 lets that marker through, so the event
 once by `ImmediateSink`. `RedactionEnricher` stays last and ungated (ADR 0022 D5; its own gating is
 separate work). The bypass logger runs the same enrichers ungated: everything that reaches it is exported.
 
+> **Amended (2026-10-09, redaction gate):** "stays last and ungated" no longer holds. `RedactionEnricher` is
+> still registered last, after the consumer hook, but behind the same predicate as the gated set
+> (`ApplyRedactionEnricher` wraps it in `Enrich.When`), which `AddStepUpLoggingInternal` computes once and
+> passes to both. Redaction of every event a sink can use is unchanged. Two evaluations can run for one
+> event, and either one rejecting leaves the event skipped.
+>
+> The gate has to make sure a skipped event is never exported. `Needs` writes the rejected event to a
+> `[ThreadStatic]` slot, and `StepUpSink.Emit` calls `EnrichmentGate.TakeSkipped(logEvent)` right after its
+> null and disposed guard: a reference match clears the slot and refuses the event (it is neither exported
+> nor handed to the buffer, which would ignore it below `StepUpLevel` anyway). A mismatch leaves the slot
+> alone. The slot holds one event per thread.
+>
+> Preconditions: Serilog evaluates the root enrichers, the root filters and `StepUpSink` on the calling thread,
+> in that order, with no thread hop before `StepUpSink` (the library's `Async` wrappers sit only on the
+> inner and bypass loggers); `StepUpSink` is the first root sink; and the gate is on, which D2 limits to a
+> host without the `configure` hook and without `Serilog:AuditTo`. With the gate off the slot is never written.
+>
+> The edge: between `Needs` rejecting event A and `StepUpSink.Emit(A)`, something on the same thread logs
+> another event B through the root and B is rejected too. The root filters and a `SelfLog` handler are the
+> two such places. B replaces A in the slot, so `TakeSkipped(A)` is false. A is then exported only if the
+> switch has also been lowered by hand to or below A's level in those microseconds, which is the D1 window:
+> A leaves unenriched and unredacted, once. B itself is refused as normal. Rejected: a per-thread ring of
+> four entries, which bounds nothing and costs a lookup on every event. The slot also keeps one rejected
+> event alive per thread until the next rejection (a root filter that drops it, or a disposed sink, leaves it
+> there).
+
 **D4. Config-declared root settings are not gated.** `Serilog:Enrich`, `Serilog:Properties`,
 `Serilog:Using` and `Serilog:MinimumLevel:Override` are read by the root before the library's enrichers
 and behave as before. `Serilog:MinimumLevel:Default` stays ignored: the root is Verbose after the
@@ -68,6 +101,14 @@ library property, and the `RequestPath` the ASP.NET Core hosting scope attaches 
 `PathPropertyRedactionEnricher` is among the gated enrichers. A filter only decides; it does not export.
 A filter that logs or forwards a property of such an event can read the raw path. Such a filter is the one
 consumer sink the gate does not detect (D2): it sits on the root, in configuration, and declares no sink.
+
+> **Amended (2026-10-09, redaction gate):** the same holds for application properties. With
+> `RedactLogEventProperties` on, `RedactionEnricher` is gated (D3), so a root `Serilog:Filter` sees the
+> string properties of a sub-floor event unredacted, a secret in `token={Token}` included. A filter that
+> logs, forwards or stores such a property reads the raw value; one that only decides, the usual case, does
+> not export it, and no library sink exports a skipped event (D3). A host that cannot accept this adds a sink
+> through the `configure` hook, which turns the gate off (D2), or does not filter on the root. Pinned by
+> `RootFilterProbe_SubFloorDebug_SeesRawSecret_NotExported`.
 
 **D6. The root stays Verbose.** A raised root minimum with `MinimumLevel.Override` entries for
 `AlwaysExportCategories` would drop the event before it is built, but `IsEnabled(Debug)` would change from

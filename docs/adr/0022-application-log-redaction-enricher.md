@@ -77,6 +77,10 @@ Three facts about the existing pipeline constrain the answer:
    > the root. The second pass on events the root hands to the bypass logger is a no-op, since
    > `Redact` is idempotent.
 
+   > **Amended (2026-10-09, ADR 0026):** `RedactionEnricher` is still registered on the root only, and
+   > now behind the root enrichment gate (see the D5 amendment). A pre-error buffer flush still replays
+   > redacted events: the buffer holds only events at or above `StepUpLevel`, which the gate lets through.
+
 5. **The enricher is registered last — after the consumer hook**
    `configure?.Invoke(services, lc)` (`StepUpLoggingExtensions.cs:287`), not at the library's own
    enricher block. A redaction sweep that runs before other enrichers can still add properties is
@@ -95,6 +99,14 @@ Three facts about the existing pipeline constrain the answer:
    > `PathPropertyRedactionEnricher` (amendment to D4) is gated with the rest of `ApplyCommonEnrichers`;
    > the gate lets every exported or held event through, so redaction of exported events is unchanged.
    > The gate is off when the `configure` hook or `Serilog:AuditTo` puts a sink on the root.
+
+   > **Amended (2026-10-09, redaction gate):** the paragraph above no longer holds for `RedactionEnricher`.
+   > It is registered last, still after the consumer hook and the library's own enrichers, but inside
+   > `Enrich.When` on the same predicate as the gated set (`ApplyRedactionEnricher`), computed once. An event
+   > the gate drops is exported by no sink, so it is not swept. Redaction of every exported, held,
+   > immediate and summary event is unchanged, and so is redaction when the gate is off. A root
+   > `Serilog:Filter` sees a skipped event's properties unredacted (ADR 0026 D5); `StepUpSink` refuses a
+   > skipped event (ADR 0026 D3), so it cannot be exported unredacted.
 
    The dependency is passed **by constructor**, not resolved:
    `lc.Enrich.With(new RedactionEnricher(services.GetRequiredService<CompiledRedactionPatterns>()))`.
@@ -173,6 +185,16 @@ Three facts about the existing pipeline constrain the answer:
    > describing the shape and not the figure. No metric is added either. `docs/performance/analysis.md`
    > lists redacting only what can leave the process as a follow-up; it would amend D4 and D5, and is not
    > decided here.
+
+   > **Amended (2026-10-09, redaction gate):** the sweep no longer runs on every event that reaches the
+   > root. It runs on the events the enrichment gate accepts (D5 amendment): at or above `min(switch,
+   > StepUpLevel, Error)` or marked `IsImmediate` or `IsRequestSummary`, and on every event when the gate is
+   > off. A Debug event the pipeline then drops is no longer swept. A swept event costs less too: `Redact`
+   > tests one union of the patterns first and skips the per-pattern replaces on a value none of them
+   > matches (ADR 0001 amendment), and `RedactionEnricher` walks the properties without a snapshot, which
+   > removes an array allocation on every event. The README and the `RedactLogEventProperties` XML doc say so
+   > and still name the shape and not the figure; `docs/performance/results-redaction.md` has the numbers for
+   > the library's sample patterns. This closes the follow-up the previous amendment left open.
 
 ## Consequences
 
