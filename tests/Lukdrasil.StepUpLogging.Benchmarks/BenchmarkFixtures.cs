@@ -22,6 +22,12 @@ internal static class BenchmarkFixtures
     /// <summary>The message template of every benchmark event.</summary>
     internal const string HandledTemplate = "Handled {Item} {Token}";
 
+    /// <summary>How many events the prebuffer benchmarks let one trace hold.</summary>
+    internal const int PrebufferCapacityPerContext = 100;
+
+    /// <summary>How many traces the prebuffer benchmarks let the sink keep.</summary>
+    internal const int PrebufferMaxContexts = 1024;
+
     internal const string RequestPath = "/api/orders/8f3a2c1e/items/42/token/xyz9";
 
     private const string BenchmarkAssemblyName = "Lukdrasil.StepUpLogging.Benchmarks";
@@ -67,6 +73,17 @@ internal static class BenchmarkFixtures
     /// <summary>An event holding the shape of a log call: the two template arguments plus <paramref name="extra"/> string properties.</summary>
     internal static LogEvent HandledEvent(LogEventLevel level, int extra) =>
         Event(level, OrderHandlerContext, [Text("Item", "42"), Text("Token", "an ordinary value"), .. TextProperties(extra)]);
+
+    /// <summary>An event of the given trace: the prebuffer keys its buffers by the <c>TraceId</c> property.</summary>
+    internal static LogEvent InTrace(LogEventLevel level, int trace) =>
+        Event(level, OrderHandlerContext, Text("TraceId", $"{trace:x32}"));
+
+    /// <summary>A <see cref="PreErrorBufferSink"/> at the prebuffer benchmarks' limits whose flushes reach <paramref name="flushed"/>.</summary>
+    internal static PreErrorBufferSink PrebufferSink(NullLogEventSink flushed)
+    {
+        var bypass = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(flushed).CreateLogger();
+        return new PreErrorBufferSink(bypass, PrebufferCapacityPerContext, PrebufferMaxContexts, LogEventLevel.Information);
+    }
 
     /// <summary>Starts a W3C <see cref="Activity"/> and leaves it as <see cref="Activity.Current"/>; the caller stops it.</summary>
     internal static Activity StartTrace()

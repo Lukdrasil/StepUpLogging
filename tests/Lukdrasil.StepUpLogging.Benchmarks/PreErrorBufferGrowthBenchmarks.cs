@@ -1,5 +1,4 @@
 using BenchmarkDotNet.Attributes;
-using Serilog;
 using Serilog.Events;
 
 namespace Lukdrasil.StepUpLogging.Benchmarks;
@@ -10,13 +9,12 @@ namespace Lukdrasil.StepUpLogging.Benchmarks;
 /// events it holds, and evicts another trace. It is reported per trace, so the bytes show what one trace costs at
 /// each size. The sink is called directly with prebuilt events from one thread.
 /// </summary>
-[BenchmarkCategory("Logging")]
 [MemoryDiagnoser]
+[BenchmarkCategory("Logging")]
 public class PreErrorBufferGrowthBenchmarks
 {
     private const int Traces = 4096;
-    private const int CapacityPerContext = 100;
-    private const int MaxContexts = 1024;
+    private const int MaxContexts = BenchmarkFixtures.PrebufferMaxContexts;
 
     private readonly NullLogEventSink _flushed = new();
     private PreErrorBufferSink _sink = null!;
@@ -31,10 +29,9 @@ public class PreErrorBufferGrowthBenchmarks
     [GlobalSetup]
     public void Setup()
     {
-        var bypass = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(_flushed).CreateLogger();
-        _sink = new PreErrorBufferSink(bypass, CapacityPerContext, MaxContexts, LogEventLevel.Information);
-        _held = [.. Enumerable.Range(0, Traces).Select(trace => InTrace(LogEventLevel.Information, trace))];
-        _error = InTrace(LogEventLevel.Error, Traces - 1);
+        _sink = BenchmarkFixtures.PrebufferSink(_flushed);
+        _held = [.. Enumerable.Range(0, Traces).Select(trace => BenchmarkFixtures.InTrace(LogEventLevel.Information, trace))];
+        _error = BenchmarkFixtures.InTrace(LogEventLevel.Error, Traces - 1);
 
         HoldTraces();
         BenchmarkFixtures.Require(_sink.ContextCount == MaxContexts, "the sink does not keep exactly its cap of traces");
@@ -58,7 +55,4 @@ public class PreErrorBufferGrowthBenchmarks
             }
         }
     }
-
-    private static LogEvent InTrace(LogEventLevel level, int trace) =>
-        BenchmarkFixtures.Event(level, BenchmarkFixtures.OrderHandlerContext, BenchmarkFixtures.Text("TraceId", $"{trace:x32}"));
 }
