@@ -565,4 +565,27 @@ public class PreErrorBufferSinkTests
         Assert.Empty(collector.Events);
         Assert.Equal(0, sink.ContextCount);
     }
+
+    [Fact]
+    public void Hold_RepeatedInOneW3CTrace_DoesNotAllocate()
+    {
+        var collector = new CollectingSink();
+        var bypass = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
+        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 10, maxContexts: 16, minimumLevel: LogEventLevel.Information);
+        var held = new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Information, null, new MessageTemplateParser().Parse("held-info"), Array.Empty<LogEventProperty>());
+        using var trace = new Activity("held").SetIdFormat(ActivityIdFormat.W3C).Start();
+
+        void Run()
+        {
+            for (var i = 0; i < 10_000; i++) sink.Hold(held);
+        }
+
+        Run();
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        Run();
+        var delta = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Equal(0, delta);
+        Assert.Equal(1, sink.ContextCount);
+    }
 }
