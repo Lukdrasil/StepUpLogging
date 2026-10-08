@@ -464,6 +464,9 @@ public static class StepUpLoggingExtensions
         }
     }
 
+    internal static void ApplyRootEnrichers(LoggerConfiguration lc, IHostApplicationBuilder builder, StepUpLoggingOptions opts, CompiledRedactionPatterns redactionPatterns, Func<LogEvent, bool> needsEnrichment)
+        => ApplyCommonEnrichers(lc, builder, opts, redactionPatterns); // af-stub
+
     /// <summary>
     /// Applies all configured enrichers to <paramref name="lc"/>. Called on both the root
     /// pipeline and the bypass logger to keep enrichment consistent.
