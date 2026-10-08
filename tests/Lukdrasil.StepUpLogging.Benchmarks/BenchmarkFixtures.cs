@@ -35,6 +35,10 @@ internal static class BenchmarkFixtures
         @"\b\d{16}\b",
     ];
 
+    /// <summary>A header value of about a thousand characters that no sample pattern matches.</summary>
+    internal static readonly string LongHeader =
+        string.Join("; ", Enumerable.Range(0, 24).Select(i => $"segment{i}=an ordinary header value"));
+
     /// <summary>Counts what reaches an output sink behind the step-up switch, or the bypass logger: the host's config-declared <c>Counting</c> sink.</summary>
     internal static readonly NullLogEventSink ExportedEvents = new();
 
