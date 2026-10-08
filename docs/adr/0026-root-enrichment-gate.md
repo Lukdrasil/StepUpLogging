@@ -10,10 +10,10 @@ The root Serilog logger is `MinimumLevel.Verbose()` so the pre-error buffer and 
 every event they need (ADR 0003, 0005, 0015). Serilog therefore builds each event and runs every root
 enricher before any sink decides whether the event goes anywhere. Most events do not: at `BaseLevel`
 Warning and `StepUpLevel` Information, a Debug event is dropped by `StepUpSink` and ignored by the
-buffer, the trigger sink and both bypass sinks. `docs/performance/analysis.md` section 1 measured what
-that costs: a dropped Debug event took 668 ns and 1360 B against 241 ns and 424 B for plain Serilog, and
-the ladder in `docs/performance/results-root-gate.md` puts all 936 B and about 360 of the 401 ns the
-pipeline adds in the enrichers that add properties.
+buffer, the trigger sink and both bypass sinks. The before run in `docs/performance/results-root-gate.md`
+measured what that costs: a dropped Debug event took 668 ns and 1360 B against 239 ns and 424 B for plain
+Serilog, and the ladder in the same file puts all 936 B and about 330 of the 414 ns the pipeline adds in
+the enrichers that add properties.
 
 Raising the root minimum level would remove the cost, and more: Serilog would not build the event. It is
 rejected here (D6) because it changes what `ILogger.IsEnabled(Debug)` answers through
@@ -38,8 +38,8 @@ The gate reads the live switch (`StepUpLoggingController.LevelSwitch` is public)
 Diagnostic mode, by `Trigger()` or by a consumer lowers the floor with it. The floor always includes
 `StepUpLevel`, never the switch alone. Without it, an `Information` event logged just before a step-up
 would be judged against a switch still at Warning, skipped by the enrichers, and then exported by
-`StepUpSink` after the switch rose: an exported event without `Application`, trace ids or
-`ServiceVersion`. With `StepUpLevel` in the floor, the switch cannot rise to a level the gate had
+`StepUpSink` after the switch dropped to Information: an exported event without `Application`, trace ids
+or `ServiceVersion`. With `StepUpLevel` in the floor, the switch cannot drop to a level the gate had
 skipped. The remaining window is a consumer lowering the switch below `StepUpLevel` by hand while an event
 is in flight; that event is exported without the library's enrichers, once.
 
@@ -50,7 +50,9 @@ properties it always had. The decision is made once, when the logger is built. R
 that strips enrichment before a configure-hook sink, which changes what the hook receives; and leaving the
 gate on with a documented limitation, which silently removes properties from a sink that did not ask.
 
-**D3. `AlwaysExportEnricher` runs before the gate and is not gated.** It reads only `SourceContext` and
+**D3. `FromLogContext` and `AlwaysExportEnricher` run before the gate and are not gated.** `FromLogContext`
+comes first, so a `SourceContext` pushed through `LogContext` is there when `AlwaysExportEnricher` reads it
+(the order before this change). The latter reads only `SourceContext` and
 sets `IsImmediate=true` (ADR 0024 D4); D1 lets that marker through, so the event is enriched and exported
 once by `ImmediateSink`. `RedactionEnricher` stays last and ungated (ADR 0022 D5; its own gating is
 separate work). The bypass logger runs the same enrichers ungated: everything that reaches it is exported.
@@ -76,21 +78,21 @@ consumer sink the gate does not detect (D2): it sits on the root, in configurati
 makes one call per enricher on it: inside `Enrich.When`, a chained `.Enrich.` call reaches the logger
 configuration and escapes the condition. The optional enrichers are a table of (flag, add) rows filtered
 by the flag, which also takes the method from cyclomatic complexity 12 to 3. `ApplyRootEnrichers` wires
-the always-export enricher and then `Enrich.When(gate, ...)`; `CreateBypassLogger` applies
-`ApplyCommonEnrichers(cfg.Enrich, ...)` directly.
+`FromLogContext`, the always-export enricher and then `Enrich.When(gate, ...)`; `CreateBypassLogger`
+applies `FromLogContext` and then `ApplyCommonEnrichers(cfg.Enrich, ...)` directly.
 
 ## Consequences
 
 - Measured in `docs/performance/results-root-gate.md`: in the default configuration a dropped Debug event
-  allocates 424 B, the bytes of plain Serilog (1360 B before), at 369 ns against 668 ns. With a consumer
+  allocates 424 B, the bytes of plain Serilog (1360 B before), at 343 ns against 668 ns. With a consumer
   root sink it stays at 1360 B and about 690 ns. Held and exported events are unchanged.
 - Nothing exported changes: every exported or held event is at or above the floor, or carries a marker,
   so it is enriched as before. The characterisation tests in `EnrichmentGateHostTests` pin this for manual
   switch changes, Diagnostic mode, a step-up, the pre-error flush, immediate and summary events, the
   configure hook and `Serilog:AuditTo`.
-- A `SourceContext` supplied only by the log context (`LogContext.PushProperty`) is no longer seen by
-  `AlwaysExportEnricher`, which now runs before `FromLogContext`; a `SourceContext` from `ForContext` or
-  from `Microsoft.Extensions.Logging` is unaffected.
+- `FromLogContext` is not gated and runs first, so a `SourceContext` or marker supplied only through the log
+  context (`LogContext.PushProperty`) reaches `AlwaysExportEnricher` and the gate as before. It costs a few
+  ns and no allocation on the dropped path (`docs/performance/results-root-gate.md`).
 - A consumer who wants the gate and a root sink has no switch; D2 trades that for not changing what the
   sink receives.
 - Enrichers a consumer registers in the `configure` hook, or in `Serilog:Enrich`, are not gated: D2 turns
