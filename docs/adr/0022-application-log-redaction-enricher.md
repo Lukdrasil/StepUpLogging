@@ -154,6 +154,18 @@ Three facts about the existing pipeline constrain the answer:
    the mid-value secrets this feature exists to catch. No redaction-hit counter is added to the
    existing meters.
 
+   > **Amended (2026-10-08, performance benchmarks):** "no benchmark project" no longer holds:
+   > `tests/Lukdrasil.StepUpLogging.Benchmarks` measures the cost this decision only described, and
+   > `docs/performance/baseline.md` records it on five sample patterns (`RedactionPatternBenchmarks`,
+   > `EnricherBenchmarks.RedactProperties`, the `Redaction` scenario of `PipelineBenchmarks`). The sweep
+   > over a dropped event is no longer a description: with redaction on, a Debug event the pipeline
+   > then drops takes 1309 ns against 685 ns without, and `Redact` over a short string costs about 71 ns
+   > per pattern. The caveat above stands: those patterns are the library's samples and the numbers do
+   > not transfer to a consumer's, so the README and the `RedactLogEventProperties` XML doc keep
+   > describing the shape and not the figure. No metric is added either. `docs/performance/analysis.md`
+   > lists redacting only what can leave the process as a follow-up; it would amend D4 and D5, and is not
+   > decided here.
+
 ## Consequences
 
 - The gap the issue describes closes only for consumers who both set `RedactionRegexes` and flip
