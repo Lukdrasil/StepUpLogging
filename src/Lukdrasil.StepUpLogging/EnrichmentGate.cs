@@ -13,13 +13,31 @@ namespace Lukdrasil.StepUpLogging;
 /// </summary>
 internal sealed class EnrichmentGate(LoggingLevelSwitch levelSwitch, LogEventLevel stepUpLevel)
 {
+    // The last event Needs rejected on this thread. Serilog runs the enrichers, the sinks and so StepUpSink on
+    // the calling thread, so StepUpSink finds out through TakeSkipped that no enricher ran on its event. One slot:
+    // a nested rejection (a root filter or SelfLog handler that logs) replaces it (ADR 0026 D3).
+    [ThreadStatic]
+    private static LogEvent? _skipped;
+
     public bool Needs(LogEvent logEvent)
+    {
+        if (Accepts(logEvent)) return true;
+        _skipped = logEvent;
+        return false;
+    }
+
+    /// <summary>Takes the event the gate last rejected on this thread when it is <paramref name="logEvent"/>.</summary>
+    internal static bool TakeSkipped(LogEvent logEvent)
+    {
+        if (!ReferenceEquals(_skipped, logEvent)) return false;
+        _skipped = null;
+        return true;
+    }
+
+    private bool Accepts(LogEvent logEvent)
         => logEvent.Level >= Floor()
            || LogProperties.HasFlag(logEvent, LogProperties.IsImmediate)
            || LogProperties.HasFlag(logEvent, LogProperties.IsRequestSummary);
-
-    /// <summary>Takes the event the gate last rejected on this thread when it is <paramref name="logEvent"/>.</summary>
-    internal static bool TakeSkipped(LogEvent logEvent) => logEvent is null; // af-stub
 
     private LogEventLevel Floor() => (LogEventLevel)Math.Min(
         Math.Min((int)levelSwitch.MinimumLevel, (int)stepUpLevel),
