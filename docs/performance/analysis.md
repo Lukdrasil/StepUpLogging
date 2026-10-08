@@ -15,8 +15,8 @@ exporter is in these numbers.
 
 | # | Hot spot | Events/s (1 thread) | Per event | Verdict |
 |---|---|---|---|---|
-| 1 | Event dropped below the pre-error level (Debug at Warning) | 1.46 M | 685 ns, 1360 B | The common case, and 2.9x the time and 3.2x the bytes of plain Serilog. Worth an optimisation. |
-| 1b | The same with redaction on (5 patterns) | 0.76 M | 1309 ns, 1512 B | Redaction adds 624 ns to an event that is then thrown away. |
+| 1 | Event dropped below the pre-error level (Debug at Warning) | 1.46 M | 685 ns, 1360 B | The common case, and 2.9x the time and 3.2x the bytes of plain Serilog at the baseline. Fixed for the default configuration by the enrichment gate (ADR 0026): 369 ns, 424 B after, the bytes of plain Serilog ([results-root-gate.md](results-root-gate.md)). |
+| 1b | The same with redaction on (5 patterns) | 0.76 M | 1309 ns, 1512 B | Redaction adds 624 ns to an event that is then thrown away. After the gate the row is 782 ns, 496 B ([results-root-gate.md](results-root-gate.md)); `RedactionEnricher` is still ungated (follow-up 3). |
 | 2 | Event held in the pre-error buffer (Information at Warning) | 1.18 M | 844 ns, 1360 B | About 160 ns (23 %) over dropped, inside the range [baseline.md](baseline.md) calls unresolved. The buffer's global lock makes 8 threads slower than one. |
 | 3 | Event exported (Warning at Warning) | 1.47 M | 682 ns, 1360 B | No measurable cost over dropped; the exporter is not in this baseline. |
 | 4 | Error flush of a full 100-event buffer | 7.5 M events (hold + flush) | 13.3 us per flush, 824 B | Dominated by the holds; the flush alone is not resolved. |
@@ -30,7 +30,7 @@ runs once per audit record, while rows 1 to 3 run once per log call.
 
 ## 1. Events dropped below the pre-error level
 
-**Measured.** `PipelineBenchmarks.DebugDropped`, default configuration, no activity: 685 ns and 1360 B per
+**Measured (baseline commit, before the gate).** `PipelineBenchmarks.DebugDropped`, default configuration, no activity: 685 ns and 1360 B per
 call against 238 ns and 424 B for the plain Serilog logger. The library adds 447 ns and 936 B to a Debug
 call that exports nothing and holds nothing. With an `Activity` current: 736 ns, 1432 B. With three
 category floors and three deny-list prefixes (the two the benchmark sets plus the default Entity Framework Core
@@ -42,14 +42,13 @@ without category rules and 46.8 ns with the deny-list and floors, 0 B either way
 `StepUpSink_DroppedBelowLevelSwitch_DoesNotAllocate` and `..._DroppedWithDenyListAndFloors_DoesNotAllocate`
 pin that). So at least 90 % of the 685 ns happens before or beside `StepUpSink.Emit`.
 
-**Code.** The root logger is `MinimumLevel.Verbose()` (`StepUpLoggingExtensions.cs:267`) so the buffer and
+**Code (at the baseline commit, before the gate).** The root logger is `MinimumLevel.Verbose()` (`StepUpLoggingExtensions.cs:267`) so the buffer and
 trigger sinks see every event. Serilog therefore builds the event and runs every root enricher
 (`ApplyCommonEnrichers`, `StepUpLoggingExtensions.cs:471`: log context, the OpenTelemetry trace and span
 ids, `ActivityContextEnricher`, `Application`, `Environment`, `MachineName`, and with patterns the
 `PathPropertyRedactionEnricher` and `RedactionEnricher`) and offers it to all five root sinks
-(`StepUpLoggingExtensions.cs:336-359`) before `StepUpSink.Emit` drops it. Only the second of the two
-facts is measured, by the 2.9x ratio; which enricher or sink holds the 447 ns is **not** measured: no row
-here removes them one at a time.
+(`StepUpLoggingExtensions.cs:336-359`) before `StepUpSink.Emit` drops it. The
+measured attribution of the 447 ns and 936 B is the ladder below.
 
 What the enrichers cost individually is measured on a fresh event (`EnricherBenchmarks`, baseline
 `NewEvent` 734 ns and 1.77 KB for 4 string properties):
@@ -71,6 +70,47 @@ the one non-excluded string property the benchmark event carries, which `RedactS
 352 ns for 5 patterns. The other 270 ns or so (the enricher's property snapshot,
 `RedactionEnricher.cs:44`, its lookups, and `PathPropertyRedactionEnricher`) are not separated.
 
+**Attribution (measured).** `DroppedPathBenchmarks` (commit `12340e4`, [results-root-gate.md](results-root-gate.md))
+builds a Serilog logger one stage longer per row, in the order the root runs them, and logs a Debug event
+through each. Without an `Activity`, a Verbose logger over a null sink is 241 ns and 424 B and the whole
+root pipeline is 642 ns and 1360 B, so the pipeline adds 401 ns and 936 B (the 447 ns and 936 B above were
+measured on the host; the bytes agree exactly):
+
+| Stage added | Added time | Added bytes |
+|---|---|---|
+| `FromLogContext` | +2 ns | 0 |
+| Trace id and span id enrichers | +163 ns | +360 B |
+| `ActivityContextEnricher` | none measurable (-3 ns); +49 ns in an activity | 0; +24 B in an activity |
+| `Application`, `Environment`, `MachineName` | +198 ns | +576 B |
+| `WithExceptionDetails` | +10 ns | 0 |
+| The five root sinks together | about +30 ns | 0 |
+
+So the two enricher groups that add properties (trace and span ids, then the three properties) are about
+360 of the 401 ns and all 936 B; the root sinks are about 30 ns and allocate nothing. Steps of about 10 ns
+or less are inside the noise of a three-iteration run. The bytes arrive at those two groups and not at
+`ActivityContextEnricher`, which does not separate a one-off resize of the property dictionary from a
+per-property cost, so the **Hypothesis** above stays a hypothesis.
+
+**After the gate.** `PipelineBenchmarks.DebugDropped`, default configuration: 369 ns and 424 B without an
+`Activity` (668 ns and 1360 B before) and 345 ns and 424 B with one (909 ns and 1432 B before). The bytes
+are those of the plain Serilog logger. The `Redaction` scenario: 782 ns and 496 B (1209 ns, 1512 B before);
+`RedactionEnricher` still runs on a dropped event (follow-up 3). A consumer root sink (the `configure`
+hook) or a `Serilog:AuditTo` sink keeps the enrichers on: `ConsumerRootSink` measures 689 ns and 1360 B, the
+cost before the gate. The same Debug call through `Microsoft.Extensions.Logging` (`MelDebugDropped`) is
+382 ns and 408 B. The 140 ns that remain over the plain logger (369 ns against 230 ns in that run) are not
+separated by a row; the ladder puts the five root sinks at about 30 ns of them.
+
+**Deferred: a raised root minimum level.** The gate keeps the root at Verbose, so the event is still built
+and offered to the root sinks. Raising the root minimum to the lowest level any consumer wants
+(`StepUpLevel`, `DiagnosticLevel` in Diagnostic mode), with `MinimumLevel.Override` entries for
+`AlwaysExportCategories`, would let Serilog drop a Debug event before it is built. **Hypothesis:** under
+about 20 ns and 0 B for a dropped Debug event; no row measures a logger with a raised root, and the number
+is to be measured before anyone builds on it. It changes a published answer: `ILogger.IsEnabled(Debug)`
+through `Microsoft.Extensions.Logging` is `true` today because the root is Verbose, and it would become
+`false` for the dropped levels, which consumers that guard expensive log arguments with `IsEnabled` would
+observe. It also has to settle `Serilog:MinimumLevel:Default`, which the library ignores today. So it needs
+a decision before it is built; as an opt-in it would be additive. ADRs: 0015, 0024, 0005, 0021, 0026.
+
 **Candidates.**
 
 - *Redact only what can leave.* A dropped event is never exported, so redacting it is wasted work, but
@@ -79,15 +119,10 @@ the one non-excluded string property the benchmark event carries, which `RedactS
   dropped ones removes the 624 ns from 1309 ns (48 %) for dropped events when redaction is on. It moves
   the point at which fail-closed redaction (ADR 0001) is applied, so it needs an explicit decision.
   ADRs: 0022 (D4, D5, D7), 0023, 0001.
-- *Do not enrich events no sink will use.* Raise the root minimum level to the lowest level any consumer
-  wants (`StepUpLevel`, and `DiagnosticLevel` in Diagnostic mode), with `MinimumLevel.Override` entries
-  for `AlwaysExportCategories` so those still reach `ImmediateSink` at any level (ADR 0024). The ceiling
-  of the win is the whole 685 ns and 1360 B for a Debug event below that level; the realistic win is
-  **unmeasured** and needs a row for a logger whose root minimum is raised. Today the line at
-  `StepUpLoggingExtensions.cs:267` sets `Verbose` after `ReadFrom.Configuration`, so a consumer's own
-  `Serilog:MinimumLevel:Default` is overridden (their `Override` entries still apply, ADR 0022 D7); any
-  change has to settle that too. ADRs: 0015, 0024, 0005, 0021.
-- *Measure first.* The breakdown benchmark in follow-up 1 comes before either.
+- *Do not enrich events no sink will use.* **Done** for the default configuration by the enrichment gate
+  (ADR 0026, follow-up 2): 369 ns and 424 B for a dropped Debug event, see
+  [results-root-gate.md](results-root-gate.md). The raised-root variant is deferred, above.
+- *Measure first.* **Done** (follow-up 1): the ladder above.
 
 ## 2. Events held in the pre-error buffer
 
@@ -276,12 +311,13 @@ patterns in one pass. Combining patterns changes what a later pattern sees after
 Rank is the measured ceiling times how often the path runs. Every optimisation task starts by adding the
 benchmark row it needs, and states its result against [baseline.md](baseline.md).
 
-1. **Break down the dropped-path cost (benchmark only).** Add pipeline rows with the root enrichers and
-   root sinks turned off one at a time, so the 447 ns and 936 B of section 1 are attributed. Nothing in
-   `src/`. Every task below that touches the pipeline waits for it.
-2. **Do not enrich events no sink will use** (section 1). Ceiling 685 ns and 1360 B per event below the
-   buffer's level. ADRs 0015, 0024, 0005, 0021 to amend; includes the `Serilog:MinimumLevel:Default`
-   question.
+1. **Break down the dropped-path cost (benchmark only).** **Done:** `DroppedPathBenchmarks` attributes
+   the 447 ns and 936 B of section 1 by stage; results in [results-root-gate.md](results-root-gate.md).
+2. **Do not enrich events no sink will use** (section 1). **Done** for the default configuration:
+   ADR 0026 gates the root enrichers; a dropped Debug event is 369 ns and 424 B
+   ([results-root-gate.md](results-root-gate.md)). ADRs 0005, 0015, 0022 D5 and 0024 D4 carry an amendment
+   note. `Serilog:MinimumLevel:Default` stays ignored. The raised-root / `IsEnabled` opt-in is deferred
+   (section 1) and needs a decision.
 3. **Redact only what can leave** (section 1). Ceiling 624 ns per dropped event with redaction on. ADRs
    0022 D4, D5, D7, 0023, 0001 to amend; a decision on when fail-closed redaction applies.
 4. **`PreErrorBufferSink` without a global lock** (section 2). Ceiling: eight threads from 772 ns to the
