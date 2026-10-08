@@ -1051,6 +1051,8 @@ Benchmark results (k6 load test, 50 VUs, 3 minutes):
 
 See full [performance test results](tests/k6/performance_test_results.md).
 
+Per-component BenchmarkDotNet benchmarks (log pipeline, sinks, enrichers, redaction, request logging, audit CPU and the encrypted spool), a recorded baseline and a ranked list of hot spots are in [docs/performance](docs/performance/README.md).
+
 ## How It Works
 
 1. **Normal operation**: Logs at `BaseLevel` (e.g., Warning)
