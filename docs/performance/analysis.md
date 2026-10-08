@@ -199,7 +199,7 @@ from the array sizes, not measured).
   enqueue. The one-trace, eight-thread gap (the buffer's own lock) is untouched. ADRs: 0011, 0023, 0015.
 - *Size a trace's queue on demand* (grow from small). **Done** (follow-up 7): the ring starts with 4 slots and
   doubles up to the capacity. Measured above: the saving is 4.6x fewer bytes at 3 events held and 2.2x at 10;
-  at 100 held the doubling costs 2.1x more. ADR: 0015.
+  at 100 held the doubling costs 2.0x more. ADR: 0015.
 
 ## 3. Events exported
 

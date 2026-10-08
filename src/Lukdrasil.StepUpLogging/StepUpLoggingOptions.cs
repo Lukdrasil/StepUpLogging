@@ -218,9 +218,10 @@ public sealed class StepUpLoggingOptions
     /// the least recently used context of its stripe is evicted to bound memory usage.
     /// </summary>
     /// <remarks>
-    /// The contexts are split into up to 16 stripes of at least 64 contexts each; a context belongs to one stripe,
-    /// so a stripe evicts its own least recently used context while others are still below their share.
-    /// Below 128 the buffer uses one stripe and the eviction is exactly least recently used.
+    /// The contexts are split into one stripe per 64 of the cap, at most 16 (a cap of 1024 or more gives 16 stripes of
+    /// at least 64 each); a context belongs to one stripe, so a stripe evicts its own least recently used context while
+    /// others are still below their share. Below 128 the buffer uses one stripe holding the whole cap and the eviction
+    /// is exactly least recently used.
     /// </remarks>
     public int PreErrorMaxContexts { get; set; } = 1024;
 

@@ -46,7 +46,7 @@ WarmupCount=3
 Read the `Mean` of a row together with its `Error`, and treat a difference under 25 % between two rows as
 unresolved. Below, a change is called resolved only when it is well outside that: the 8-thread rows with many
 traces (2.7x and 3.1x) and the allocation column, which is deterministic and agrees between runs. The
-single-thread rows move by 13 % to 23 %, which is inside the rule, and several rows have an `Error` as wide as
+single-thread rows move by 13 % to 21 %, which is inside the rule, and several rows have an `Error` as wide as
 their `Mean` (the `FillAndFlushOnError` row at 256 contexts and 8 threads: 17.1 us, error 20.6 us). The
 `Contexts` 256 row is new, so the before rows for it come from the old code run by the new benchmark.
 
@@ -108,7 +108,7 @@ trace, one thread, so every trace pays for its buffer and evicts another.
 |---|---|---|---|
 | 3 | 705.9 ns, 1.01 KB | 588.4 ns, 224 B | 4.6x fewer bytes; time inside the noise (error 1.6 us) |
 | 10 | 1492.1 ns, 1.01 KB | 1687.8 ns, 464 B | 2.2x fewer bytes; time inside the noise |
-| 100 | 11786.7 ns, 1.01 KB | 14343.3 ns, 2104 B | 2.1x **more** bytes; time +22 %, unresolved |
+| 100 | 11786.7 ns, 1.01 KB | 14343.3 ns, 2104 B | 2.0x **more** bytes; time +22 %, unresolved |
 
 The bytes are exact and show the trade. A ring that grows copies: 4, 8, 16, 32, 64, then 100 slots are 56,
 88, 152, 280, 536 and 824 B of array, and each step leaves the one before to the garbage collector. A trace
