@@ -5,6 +5,7 @@ using Serilog.Parsing;
 
 namespace Lukdrasil.StepUpLogging.Benchmarks;
 
+[BenchmarkCategory("Logging")]
 public class RequestPathRedactionBenchmarks
 {
     private const string Path = "/api/orders/8f3a2c1e/items/42/token/xyz9";
@@ -14,19 +15,11 @@ public class RequestPathRedactionBenchmarks
     private ILogEventEnricher _pathEnricher = null!;
     private LogEvent _event = null!;
     private LogEventProperty _rawRequestPath = null!;
-    private readonly PropertyFactory _propertyFactory = new();
 
     [GlobalSetup]
     public void Setup()
     {
-        _patterns = new CompiledRedactionPatterns(
-        [
-            StepUpLoggingExtensions.CompilePattern(@"token/[^/]+"),
-            StepUpLoggingExtensions.CompilePattern(@"password=[^&]+"),
-            StepUpLoggingExtensions.CompilePattern(@"api[_-]?key=[^&]+"),
-            StepUpLoggingExtensions.CompilePattern(@"Bearer\s+[A-Za-z0-9._-]+"),
-            StepUpLoggingExtensions.CompilePattern(@"\b\d{16}\b"),
-        ]);
+        _patterns = BenchmarkFixtures.SamplePatterns();
         _routeValues = new Dictionary<string, object?>
         {
             ["orderId"] = "8f3a2c1e",
@@ -60,13 +53,7 @@ public class RequestPathRedactionBenchmarks
     public LogEvent EnrichRequestPath()
     {
         _event.AddOrUpdateProperty(_rawRequestPath);
-        _pathEnricher.Enrich(_event, _propertyFactory);
+        _pathEnricher.Enrich(_event, BenchmarkFixtures.PropertyFactory);
         return _event;
-    }
-
-    private sealed class PropertyFactory : ILogEventPropertyFactory
-    {
-        public LogEventProperty CreateProperty(string name, object? value, bool destructureObjects = false) =>
-            new(name, new ScalarValue(value));
     }
 }

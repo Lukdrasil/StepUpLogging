@@ -10,6 +10,7 @@ namespace Lukdrasil.StepUpLogging.Benchmarks;
 /// when set — never on a RAM disk, where there is no fsync to wait for.
 /// </summary>
 [MemoryDiagnoser]
+[BenchmarkCategory("Disk")]
 public class DurableWriteBenchmarks
 {
     private const int RecordCount = 64;
