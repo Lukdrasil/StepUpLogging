@@ -117,6 +117,9 @@ with `--anyCategories Disk` and `STEPUP_BENCH_SPOOL_ROOT` as described in [READM
 | **Hold**                | **4096**     | **8**       |    **771.9 ns** |    **135.47 ns** |   **7.43 ns** | **0.0830** | **0.0820** |    **1031 B** |
 | FillAndFlushOnError | 4096     | 8       | 14,306.4 ns |    388.96 ns |  21.32 ns | 0.0610 |      - |     824 B |
 
+`FillAndFlushOnError` does not use `Contexts` or `Threads`, so its four rows are one measurement taken
+four times; read their spread (13.3 to 14.3 us) as its noise. `Hold` is one benchmark per row.
+
 
 ## Root enrichers
 
