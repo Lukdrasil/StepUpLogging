@@ -9,7 +9,9 @@ namespace Lukdrasil.StepUpLogging.Benchmarks;
 /// <summary>
 /// What an audit write costs before the disk: enriching and counting the record in
 /// <see cref="AuditLogger{T}"/> over a sink that stores nothing, and turning the enriched record into the
-/// bytes the spool writes. The fsync that follows is measured by the Disk benchmarks.
+/// bytes the spool writes. The fsync that follows is measured by the Disk benchmarks. The consumer's
+/// <c>IAuditPayloadEncryptor</c> is not in these numbers: the serialisation here puts the plaintext payload
+/// in the envelope, where the real sink encrypts it first.
 /// </summary>
 [MemoryDiagnoser]
 [BenchmarkCategory("Audit")]
@@ -51,7 +53,7 @@ public class AuditBenchmarks
     [Benchmark]
     public ValueTask AuditToNullSink() => _logger.AuditAsync(_event);
 
-    /// <summary>The enriched record as the spool's bytes: the payload JSON, then the envelope JSON; returns the envelope's size.</summary>
+    /// <summary>The enriched record as the spool's bytes: the payload JSON, then the envelope JSON around the unencrypted payload; returns the envelope's size.</summary>
     [Benchmark]
     public int SerializeForSpool()
     {
