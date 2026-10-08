@@ -5,6 +5,7 @@ using Serilog.Parsing;
 
 namespace Lukdrasil.StepUpLogging.Benchmarks;
 
+[MemoryDiagnoser]
 [BenchmarkCategory("Logging")]
 public class RequestPathRedactionBenchmarks
 {
