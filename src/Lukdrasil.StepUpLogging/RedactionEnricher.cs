@@ -39,19 +39,27 @@ internal sealed class RedactionEnricher(CompiledRedactionPatterns patterns) : IL
 
     public void Enrich(LogEvent logEvent, ILogEventPropertyFactory propertyFactory)
     {
-        // Snapshot first: AddOrUpdateProperty below mutates the same dictionary this would
-        // otherwise be enumerating live.
-        foreach (var property in logEvent.Properties.ToArray())
+        // Replacements are applied after the walk: AddOrUpdateProperty mutates the dictionary the
+        // walk enumerates. Most events replace nothing, so the list is created on the first hit.
+        List<LogEventProperty>? replacements = null;
+        foreach (var property in logEvent.Properties)
         {
-            if (ExcludedProperties.Contains(property.Key)) continue;
-            if (property.Value is not ScalarValue { Value: string or PathString or QueryString or HostString or Uri } scalar) continue;
-
-            var original = scalar.Value.ToString()!;
-            var redacted = patterns.Redact(original);
-            if (!string.Equals(redacted, original, StringComparison.Ordinal))
-            {
-                logEvent.AddOrUpdateProperty(propertyFactory.CreateProperty(property.Key, redacted));
-            }
+            var redacted = RedactedValue(property);
+            if (redacted is null) continue;
+            (replacements ??= []).Add(propertyFactory.CreateProperty(property.Key, redacted));
         }
+
+        replacements?.ForEach(logEvent.AddOrUpdateProperty);
+    }
+
+    /// <summary>The redacted text of the property, or <see langword="null"/> when it is excluded, not redactable or unchanged.</summary>
+    private string? RedactedValue(KeyValuePair<string, LogEventPropertyValue> property)
+    {
+        if (ExcludedProperties.Contains(property.Key)) return null;
+        if (property.Value is not ScalarValue { Value: string or PathString or QueryString or HostString or Uri } scalar) return null;
+
+        var original = scalar.Value.ToString()!;
+        var redacted = patterns.Redact(original);
+        return string.Equals(redacted, original, StringComparison.Ordinal) ? null : redacted;
     }
 }
