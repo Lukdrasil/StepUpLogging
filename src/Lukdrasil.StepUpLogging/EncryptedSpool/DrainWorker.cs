@@ -39,6 +39,7 @@ internal sealed class DrainWorker(
     IHttpClientFactory httpClientFactory,
     DeadLetterBox deadLetterBox,
     EndpointReachability reachability,
+    SpoolHead spoolHead,
     SpoolUsageTracker usageTracker,
     TimeProvider timeProvider,
     ILogger<DrainWorker> logger) : BackgroundService
@@ -47,6 +48,7 @@ internal sealed class DrainWorker(
     internal const string HttpClientName = "Lukdrasil.StepUpLogging.Audit";
 
     private readonly EncryptedSpoolOptions _options = options.Value;
+    private readonly SpoolHead _spoolHead = spoolHead; // af-stub
     private readonly SpoolReader _reader = new(options.Value.SpoolDirectory);
     private readonly Uri _auditEndpoint = new($"{options.Value.EndpointBaseUrl.TrimEnd('/')}/audit");
     private readonly Uri _batchEndpoint = new($"{options.Value.EndpointBaseUrl.TrimEnd('/')}/audit/batch");

@@ -127,7 +127,7 @@ internal sealed class SpoolDrainHarness : IDisposable
         DeadLetter = new DeadLetterBox(Options.Create(SpoolOptions));
         Reachability = new EndpointReachability();
         Worker = StartedOver();
-        HealthCheck = new EncryptedSpoolHealthCheck(Options.Create(SpoolOptions), DeadLetter, Reachability);
+        HealthCheck = new EncryptedSpoolHealthCheck(Options.Create(SpoolOptions), DeadLetter, Reachability, Head, Time);
     }
 
     public EncryptedSpoolOptions SpoolOptions { get; }
@@ -146,6 +146,9 @@ internal sealed class SpoolDrainHarness : IDisposable
 
     public EndpointReachability Reachability { get; }
 
+    /// <summary>The oldest record the worker is waiting on, shared by the worker and the health check.</summary>
+    public SpoolHead Head { get; } = new();
+
     public DrainWorker Worker { get; }
 
     public EncryptedSpoolHealthCheck HealthCheck { get; }
@@ -156,7 +159,7 @@ internal sealed class SpoolDrainHarness : IDisposable
 
     /// <summary>Another worker over the same spool, endpoint and directories — what a restarted host builds.</summary>
     public DrainWorker StartedOver() =>
-        new(Options.Create(SpoolOptions), new SingleClientHttpClientFactory(_client), DeadLetter, Reachability, Tracker, Time, Logger);
+        new(Options.Create(SpoolOptions), new SingleClientHttpClientFactory(_client), DeadLetter, Reachability, Head, Tracker, Time, Logger);
 
     /// <summary>Spools <paramref name="auditEvent"/> through the sink, exactly as an audited operation does.</summary>
     public async Task<AuditEvent> SpoolAsync(AuditEvent auditEvent)

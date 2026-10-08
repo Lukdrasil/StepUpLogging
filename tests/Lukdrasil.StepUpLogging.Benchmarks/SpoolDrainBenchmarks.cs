@@ -40,6 +40,7 @@ public class SpoolDrainBenchmarks
             new SingleClientFactory(_client),
             new DeadLetterBox(Options.Create(_options)),
             new EndpointReachability(),
+            new SpoolHead(),
             SpoolBenchmarkSupport.TrackerFor(_options),
             TimeProvider.System,
             NullLogger<DrainWorker>.Instance);

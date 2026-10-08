@@ -83,6 +83,7 @@ public static class StepUpLoggingEncryptedSpoolExtensions
             SpoolOptions(sp).SpoolFullRecheckInterval));
         builder.Services.AddSingleton<DeadLetterBox>();
         builder.Services.AddSingleton<EndpointReachability>();
+        builder.Services.AddSingleton<SpoolHead>(); // af-stub
         // TryAdd, not Add: a consumer who registered their own TimeProvider first (a FakeTimeProvider
         // in their own integration tests, say) keeps it — this library's opinion only applies when
         // nothing else already supplied one.

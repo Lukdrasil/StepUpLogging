@@ -110,7 +110,7 @@ public class EncryptedSpoolAuditSinkTests
     }
 
     private static EncryptedSpoolHealthCheck CreateHealthCheck(EncryptedSpoolOptions options) =>
-        new(Options.Create(options), new DeadLetterBox(Options.Create(options)), new EndpointReachability());
+        new(Options.Create(options), new DeadLetterBox(Options.Create(options)), new EndpointReachability(), new SpoolHead(), TimeProvider.System);
 
     /// <summary>A record of its own, so every write lands on a spool file of its own.</summary>
     private static AuditEvent SpoolableEvent() =>

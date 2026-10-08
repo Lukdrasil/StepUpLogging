@@ -20,9 +20,13 @@ namespace Lukdrasil.StepUpLogging.Audit.EncryptedSpool;
 internal sealed class EncryptedSpoolHealthCheck(
     IOptions<EncryptedSpoolOptions> options,
     DeadLetterBox deadLetterBox,
-    EndpointReachability reachability) : IHealthCheck
+    EndpointReachability reachability,
+    SpoolHead spoolHead,
+    TimeProvider timeProvider) : IHealthCheck
 {
     private readonly EncryptedSpoolOptions _options = options.Value;
+    private readonly SpoolHead _spoolHead = spoolHead; // af-stub
+    private readonly TimeProvider _timeProvider = timeProvider; // af-stub
     private readonly SpoolCapacity _capacity = new(options.Value);
 
     /// <inheritdoc />
