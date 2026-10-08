@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Microsoft.Extensions.Configuration;
 using Serilog;
+using Serilog.Context;
 using Serilog.Core;
 using Serilog.Events;
 using Serilog.Parsing;
@@ -127,6 +128,25 @@ public class EnrichmentGateTests
             new StepUpLoggingOptions { AlwaysExportCategories = [AlwaysCategory] },
             logEvent => LogProperties.HasFlag(logEvent, LogProperties.IsImmediate),
             logger => logger.ForContext("SourceContext", AlwaysCategory).Debug("always export"));
+
+        var evt = Assert.Single(collector.Events);
+        Assert.True(LogProperties.HasFlag(evt, LogProperties.IsImmediate));
+        Assert.Contains("Application", evt.Properties.Keys);
+    }
+
+    [Fact]
+    public void ApplyRootEnrichers_SourceContextFromLogContext_AlwaysExportDebugIsImmediateAndEnriched()
+    {
+        var collector = Root(
+            new StepUpLoggingOptions { AlwaysExportCategories = [AlwaysCategory] },
+            logEvent => LogProperties.HasFlag(logEvent, LogProperties.IsImmediate),
+            logger =>
+            {
+                using (LogContext.PushProperty("SourceContext", AlwaysCategory))
+                {
+                    logger.Debug("always export from log context");
+                }
+            });
 
         var evt = Assert.Single(collector.Events);
         Assert.True(LogProperties.HasFlag(evt, LogProperties.IsImmediate));
