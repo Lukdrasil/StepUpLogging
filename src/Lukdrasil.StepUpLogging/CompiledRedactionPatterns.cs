@@ -17,7 +17,7 @@ internal sealed class CompiledRedactionPatterns
 
     private readonly Regex? _union;
 
-    public CompiledRedactionPatterns(Regex[] patterns)
+    internal CompiledRedactionPatterns(Regex[] patterns)
     {
         Patterns = patterns;
         _union = BuildUnion(patterns);
@@ -28,7 +28,7 @@ internal sealed class CompiledRedactionPatterns
     /// <summary>Whether a union prefilter was built for the patterns.</summary>
     internal bool HasPrefilter => _union is not null;
 
-    public string Redact(string input)
+    internal string Redact(string input)
     {
         if (string.IsNullOrEmpty(input) || Patterns.Length == 0 || CannotMatch(input)) return input;
         return RedactEach(input);
@@ -41,8 +41,9 @@ internal sealed class CompiledRedactionPatterns
         {
             return !_union.IsMatch(input);
         }
-        catch (RegexMatchTimeoutException)
+        catch
         {
+            // Fail closed: a union that throws must not skip the per-pattern loop and its sentinel.
             return false;
         }
     }
