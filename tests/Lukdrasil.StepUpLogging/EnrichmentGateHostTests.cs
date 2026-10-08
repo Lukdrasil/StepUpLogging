@@ -102,7 +102,7 @@ public class EnrichmentGateHostTests
         var exported = Run([], configure: null, (services, _) =>
             MelLogger(services).LogImmediate(LogLevel.Debug, "{Token}", "GATE_IMMEDIATE_MEL_DEBUG"));
 
-        Single(exported, "GATE_IMMEDIATE_MEL_DEBUG");
+        Assert.Contains(Application, Single(exported, "GATE_IMMEDIATE_MEL_DEBUG").Properties.Keys);
     }
 
     [Fact]
@@ -117,7 +117,7 @@ public class EnrichmentGateHostTests
             }
         });
 
-        Single(exported, "GATE_IMMEDIATE_SCOPE_TRACE");
+        Assert.Contains(Application, Single(exported, "GATE_IMMEDIATE_SCOPE_TRACE").Properties.Keys);
     }
 
     [Fact]
@@ -130,7 +130,7 @@ public class EnrichmentGateHostTests
                 .ForContext("SourceContext", AlwaysCategory)
                 .Debug("{Token}", "GATE_ALWAYS_DEBUG"));
 
-        Single(exported, "GATE_ALWAYS_DEBUG");
+        Assert.Contains(Application, Single(exported, "GATE_ALWAYS_DEBUG").Properties.Keys);
     }
 
     [Fact]
@@ -141,7 +141,7 @@ public class EnrichmentGateHostTests
                 .ForContext(LogProperties.IsRequestSummary, true)
                 .Debug("{Token}", "GATE_SUMMARY_DEBUG"));
 
-        Single(exported, "GATE_SUMMARY_DEBUG");
+        Assert.Contains(Application, Single(exported, "GATE_SUMMARY_DEBUG").Properties.Keys);
     }
 
     [Fact]
@@ -201,7 +201,7 @@ public class EnrichmentGateHostTests
 
         var keys = Single(exported, "GATE_COMMON_WARN").Properties.Keys;
         Assert.All(
-            new[] { Application, "Environment", "MachineName", "ServiceVersion", "ServiceInstanceId", "ThreadId" },
+            new[] { Application, "TraceId", "SpanId", "Environment", "MachineName", "ServiceVersion", "ServiceInstanceId", "ThreadId" },
             property => Assert.Contains(property, keys));
     }
 
