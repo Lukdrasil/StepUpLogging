@@ -87,6 +87,9 @@ public sealed class StepUpLoggingController : IDisposable
     /// Creates a controller with an attached summary/bypass logger. Ownership of <paramref name="summaryLogger"/>
     /// transfers to the controller — <see cref="Dispose"/> disposes it. See <see cref="SetSummaryLogger"/>.
     /// </summary>
+    /// <remarks>
+    /// In the request summary, route values are converted per value with the logger's scalar conversion; a <c>ToMaximumCollectionCount</c> below the number of route values or a destructuring depth limit on a consumer-supplied summary logger is not applied to <c>RouteParameters</c>. The library's own bypass logger has no such settings.
+    /// </remarks>
     public StepUpLoggingController(StepUpLoggingOptions options, Serilog.ILogger? summaryLogger)
         : this(options, summaryLogger, Stopwatch.GetTimestamp)
     {
@@ -154,6 +157,9 @@ public sealed class StepUpLoggingController : IDisposable
     /// Ownership transfers to this controller: <see cref="Dispose"/> disposes the attached logger to flush its
     /// async buffers on shutdown. Pass a logger dedicated to this controller — not a shared logger you keep using
     /// elsewhere (e.g. <c>Log.Logger</c>), which would be disposed out from under you.
+    /// <para>
+    /// In the request summary, route values are converted per value with the logger's scalar conversion; a <c>ToMaximumCollectionCount</c> below the number of route values or a destructuring depth limit on a consumer-supplied summary logger is not applied to <c>RouteParameters</c>. The library's own bypass logger has no such settings.
+    /// </para>
     /// </remarks>
     public void SetSummaryLogger(Serilog.ILogger? summaryLogger)
     {
@@ -163,6 +169,12 @@ public sealed class StepUpLoggingController : IDisposable
     /// <summary>
     /// Emit a structured request summary using the configured summary logger (bypass) if available.
     /// </summary>
+    /// <remarks>
+    /// Route values are converted per value with the logger's scalar conversion. A <c>ToMaximumCollectionCount</c>
+    /// below the number of route values, or a destructuring depth limit, on a consumer-supplied summary logger is not
+    /// applied to <c>RouteParameters</c>. The library's own bypass logger has no such settings, so the default
+    /// pipeline is unchanged. See ADR 0009.
+    /// </remarks>
     /// <param name="method">HTTP method of the request.</param>
     /// <param name="path">Normalized request path.</param>
     /// <param name="statusCode">HTTP status code of the response.</param>
@@ -251,6 +263,7 @@ public sealed class StepUpLoggingController : IDisposable
         summary.AddPropertyIfAbsent(SummaryValueFactory.Instance, "RouteParameters", new DictionaryValue(elements));
     }
 
+    // A custom ILogger that does not override BindProperty returns false while IsEnabled is true, so the fallback is reachable.
     private static LogEventPropertyValue RouteValue(Serilog.ILogger logger, object? value) =>
         value is string or null || !logger.BindProperty("RouteValue", value, false, out var property)
             ? new ScalarValue(value)
