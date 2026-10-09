@@ -114,8 +114,8 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
     private static readonly Counter<long> EvictedContextsCounter = Meter.CreateCounter<long>("buffer_evicted_contexts_total", unit: "count", description: "Number of evicted contexts due to LRU");
 
     /// <summary>
-    /// One trace's ring of held events. It starts with <see cref="InitialSlots"/> slots and doubles up to its capacity as
-    /// events arrive, then overwrites its oldest event.
+    /// One trace's ring of held events. It starts with <see cref="InitialSlots"/> slots, grows to <see cref="MidSlots"/>
+    /// and then to its capacity as events arrive, then overwrites its oldest event.
     /// </summary>
     private sealed class Buffer
     {
@@ -177,7 +177,7 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
 
         private void Grow()
         {
-            var grown = new LogEvent[Math.Min(_items.Length * 2, _capacity)];
+            var grown = new LogEvent[_items.Length < MidSlots ? Math.Min(MidSlots, _capacity) : _capacity];
             CopyInOrder(grown);
             _items = grown;
             _head = 0;
