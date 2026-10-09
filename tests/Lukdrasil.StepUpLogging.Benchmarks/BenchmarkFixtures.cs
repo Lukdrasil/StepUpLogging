@@ -128,10 +128,12 @@ internal static class BenchmarkFixtures
     /// A host wired by <c>AddStepUpLogging()</c> with no OTLP, console or file output; the only output
     /// sink is the <c>Counting</c> sink, so the benchmarks measure the pipeline and not an exporter.
     /// <paramref name="configure"/> is the consumer's Serilog hook; it runs on the Verbose root.
+    /// <paramref name="logFilePath"/>, when given, adds the library's rolling file sink.
     /// </summary>
     internal static IHost BuildHost(
         IEnumerable<KeyValuePair<string, string?>> settings,
-        Action<IServiceProvider, LoggerConfiguration>? configure = null)
+        Action<IServiceProvider, LoggerConfiguration>? configure = null,
+        string? logFilePath = null)
     {
         var builder = Host.CreateApplicationBuilder();
         builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
@@ -141,7 +143,7 @@ internal static class BenchmarkFixtures
             ["Serilog:WriteTo:0:Name"] = nameof(BenchmarkSinkExtensions.Counting),
         });
         builder.Configuration.AddInMemoryCollection(settings);
-        builder.AddStepUpLogging(configureOptions: null, configure: configure);
+        builder.AddStepUpLogging(configureOptions: null, configure: configure, logFilePath: logFilePath);
         return builder.Build();
     }
 
