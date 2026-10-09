@@ -190,6 +190,16 @@ before. A trace that fills a 100-slot ring therefore allocates about twice what 
 doubles through 4, 8, 16, 32, 64 and 100 slots; the crossover is between 32 and 64 events held (arithmetic
 from the array sizes, not measured).
 
+**After the hold-cost change.** The hypothesis above, one more hash of the trace id to pick the stripe, was
+acted on: the stripe is now chosen from the last 4 characters of the id and the ring grows 4, 16, then its
+capacity (ADR 0027, amended; [results-hold-cost.md](results-hold-cost.md)). The single-thread `Hold` rows fall
+by 33 ns, 47 ns and 45 ns (1, 256 and 4096 traces), the six `FillAndFlushOnError` rows by 7 % to 30 % (14.9 to
+17.1 us to 11.9 to 14.5 us), and the one-trace, eight-thread `Hold` from 289.6 ns to 241.5 ns; every time row
+is inside the 25 % rule, so the direction is reported and the size is not. The hypothesis is not separated
+from run to run drift, but the removed hash is the only change on that path. Allocated bytes per trace with
+10, 16, 17 and 100 events held are 376 B, 376 B, 1200 B and 1200 B against 464 B, 464 B, 744 B and 2104 B: a
+trace of 17 to 32 events costs more than before (744 B to 1200 B) and a trace of 100 less (2104 B to 1200 B).
+
 **Candidates.**
 
 - *Approximate LRU instead of a global lock* (a timestamp on `Buffer` and a periodic sweep, as ADR 0011
@@ -197,9 +207,11 @@ from the array sizes, not measured).
   its own lock and its own LRU order (ADR 0027), which keeps exact LRU within a stripe and the property the
   old comment protected, that a concurrent eviction must not orphan an event between the touch and the
   enqueue. The one-trace, eight-thread gap (the buffer's own lock) is untouched. ADRs: 0011, 0023, 0015.
+  The cost of choosing the stripe, the hash of the whole trace id, is closed by the hold-cost change above.
 - *Size a trace's queue on demand* (grow from small). **Done** (follow-up 7): the ring starts with 4 slots and
   doubles up to the capacity. Measured above: the saving is 4.6x fewer bytes at 3 events held and 2.2x at 10;
-  at 100 held the doubling costs 2.0x more. ADR: 0015.
+  at 100 held the doubling costs 2.0x more. ADR: 0015. The growth shape was then changed to 4, 16, capacity
+  (see above): 100 events held cost 1200 B, and 17 to 32 events cost more than the doubling did.
 
 ## 3. Events exported
 
@@ -382,7 +394,9 @@ benchmark row it needs, and states its result against [baseline.md](baseline.md)
    ADR 0011's recorded ceiling and ADR 0023 untouched in their decisions): eight threads over 4096 traces
    hold in 231 ns against 711 ns, over 256 traces in 106 ns against 292 ns
    ([results-prebuffer.md](results-prebuffer.md)). Not removed: eight threads on one trace still queue on
-   that buffer's own lock; single-thread holds are about 15 to 20 ns slower (unresolved).
+   that buffer's own lock; single-thread holds are about 15 to 20 ns slower (unresolved). The stripe is now
+   chosen from the last 4 characters of the id, and the holds measure 33 to 47 ns faster
+   ([results-hold-cost.md](results-hold-cost.md)).
 5. **Cheaper `Redact`** (section 8). **Done** with a union prefilter (ADR 0001 amended): five patterns on a
    short value that matches none, 355 ns to 91 ns; no change on a long header or a value that matches
    ([results-redaction.md](results-redaction.md)). Request logging allocates 0.17 KB less per request, most
@@ -395,7 +409,8 @@ benchmark row it needs, and states its result against [baseline.md](baseline.md)
 7. **Size a trace's buffer on demand** (section 2). **Done** (ADR 0027, ADR 0015 amended): the first held
    event of a new trace allocates 224 B against 1032 B, and a trace with 3 or 10 events held allocates 224 B
    or 464 B against 1.01 KB; one that fills the default 100-slot ring allocates 2104 B
-   ([results-prebuffer.md](results-prebuffer.md)).
+   ([results-prebuffer.md](results-prebuffer.md)). The ring then grew 4, 16, capacity: 1200 B at 100 events
+   held, 376 B at 10 ([results-hold-cost.md](results-hold-cost.md)).
 8. **Complete the baseline (benchmark only).** **Done:** the Disk suite is recorded; `ExporterBenchmarks`
    put a rolling file and OTLP to a local collector behind a warning, the Error flush and a stepped-up
    request; `SideSinkBenchmarks` covers `StepUpTriggerSink`, `SummarySink` and `ImmediateSink` (8 to 70 ns,

@@ -154,7 +154,8 @@ Stated plainly, because a results page that lists only the wins is not one:
 - **`PreErrorBufferSinkBenchmarks.FillAndFlushOnError`: 13.3 to 14.2 us to 15.4 to 16.9 us, +15 % to +25 %.**
   All six rows move the same way on a drift of 1 % to 3 %, so it is probably real although each row is inside
   the 25 % rule. It is the 15 to 20 ns more per single-thread hold that [results-prebuffer.md](results-prebuffer.md)
-  recorded, over the 100 holds of a cycle. Allocations unchanged at 824 B.
+  recorded, over the 100 holds of a cycle. Allocations unchanged at 824 B. The stripe is now chosen from the last 4 characters
+  of the trace id, and the six rows measure 11.9 to 14.5 us ([results-hold-cost.md](results-hold-cost.md)).
 - **`PreErrorBufferSinkBenchmarks.Hold`, one trace, 8 threads: 233.9 ns to 284.5 ns, +22 % (unresolved).**
   Both final runs (289.3 ns, 279.7 ns) are above both baseline runs (229.8 ns, 238.0 ns), on a drift of 3 % in
   each pair, the evidence used for `FillAndFlushOnError` above, so it is probably real although it is inside
@@ -163,14 +164,19 @@ Stated plainly, because a results page that lists only the wins is not one:
   there and called it unchanged). **Hypothesis**: the 15 to 20 ns more per single-thread hold, spent inside that
   lock, is paid by the threads that wait for it; not measured per cause, and not measured at the parent
   `490a54d`. The follow-up 6 diff does not touch `PreErrorBufferSink`. Allocations unchanged at 0 B. The
-  one-thread row of the same trace moves +11 % (124 ns to 138 ns) on a 21 % drift and is not claimed.
+  one-thread row of the same trace moves +11 % (124 ns to 138 ns) on a 21 % drift and is not claimed. After the
+  stripe change the row measures 241.5 ns against 289.6 ns in a paired run, unresolved
+  ([results-hold-cost.md](results-hold-cost.md)).
 - **`InformationHeld`: +3 % to +16 % (unresolved)** on the six non-redacting scenarios, the same direction
   as the single-thread hold seen from the whole pipeline. **Hypothesis**: one more stripe lookup per held
-  event; not measured separately.
+  event; not measured separately. After the stripe change the eight rows measure 1 % to 10 % faster except one at
+  +11 %, all unresolved ([results-hold-cost.md](results-hold-cost.md)).
 - **`HoldTraces`, `HeldPerTrace=100` (a trace that fills its ring): 11.7 us to 14.2 us, +21 % (unresolved),
   1.01 KB to 2.05 KB allocated per trace.** A ring that grows from 4 slots to 100 allocates the steps on the
   way, so a trace that fills it costs twice the bytes of the old fixed ring; a trace that holds 3 or 10
-  events allocates 224 B or 464 B instead of 1.01 KB.
+  events allocates 224 B or 464 B instead of 1.01 KB. The ring now grows 4, 16, capacity: 1200 B at 100 events
+  held (376 B at 10), at the price of 1200 B instead of 744 B at 17 to 32
+  ([results-hold-cost.md](results-hold-cost.md)).
 - **`StepUpSinkBenchmarks` rows move by +3 % to +44 % (unresolved)**; `EmitBelowSwitch` without rules is 13 ns
   to 19 ns on a drift of 55 % in the baseline pair. Nothing in `StepUpSink.Emit` changed on this branch; the
   rows are 0 B and 13 to 53 ns.

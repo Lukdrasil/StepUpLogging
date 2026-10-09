@@ -4,6 +4,7 @@
 - Date: 2026-10-09
 - Amends: ADR 0011 (the recorded global-lock ceiling), ADR 0015 (notes only; the floor stands). ADR 0023's
   decisions (exactly once, dropped on dispose) are unchanged.
+- Amended 2026-10-09 (hold cost): D1, D5 and two Consequences below
 
 ## Context
 
@@ -27,6 +28,16 @@ the trace held.
 stripe by `(uint)key.GetHashCode() % stripes`. `string.GetHashCode` is stable for the life of the process and
 randomised per process, so a trace id cannot be chosen by a caller to aim at one stripe. Caps below 128
 use one stripe, which is the exact LRU of before; every existing test (caps 1, 2, 16, 64) is in that range.
+
+> **Amended (2026-10-09, hold cost):** a trace id maps to its stripe by FNV-1a over its last 4 characters
+> (the whole key when it is shorter), mixed with a 32-bit finaliser and reduced to the stripe count by
+> multiply-shift, not by `GetHashCode`. The result is the same in every process and does not hash the other 28
+> characters, which `ConcurrentDictionary` then hashed again. W3C trace ids are random, so the last 4
+> characters spread traces evenly over the stripes. The sentence above that a caller cannot aim a trace at a
+> stripe no longer holds: a forged `traceparent` can steer its traces into one stripe, and that stripe then
+> serialises its holds like the old global lock. The honest traces that share it (1 in 16 with 16 stripes) are
+> evicted after 64 newer traces instead of after about 1024. No event is orphaned or exported twice, because
+> the stripe lock and the eviction are still the same lock. The buffer dictionary keeps its randomised hash.
 
 **D2. Each stripe has its own lock and its own order.** `TraceLruStripe` holds the linked list and the node
 index for its traces, and nothing else: no buffers, no counters. `BufferEvent` locks the key's stripe,
@@ -54,6 +65,14 @@ is that of before. The ring does not shrink after a flush. The `Queue` is gone b
 `Queue.EnsureCapacity` overshoots (it grew to 128 for a capacity of 100). `LastTouchedUtc`, written on every
 enqueue and never read, is removed with it.
 
+> **Amended (2026-10-09, hold cost):** the ring grows 4, 16, then its capacity, not by doubling. A
+> capacity below 16 goes from 4 to the capacity in one step. Per trace this is 376 B instead of 464 B at 9 to
+> 16 events held, 1200 B instead of 744 B at 17 to 32 (worse), and 1200 B instead of 2104 B at 100; 5 to 8
+> events held cost 376 B instead of 312 B (also worse), and a trace of 4 events or fewer is unchanged at
+> 224 B. Measured at 10, 16, 17 and 100 events in `docs/performance/results-hold-cost.md`; the 5 to 8 band is
+> arithmetic from the array sizes. The trade is that a trace crossing 16 events allocates its whole array at
+> once, in return for three fewer copies and 904 B less at the default capacity of 100.
+
 ## Alternatives considered
 
 - **Approximate LRU** (a timestamp per buffer and a periodic sweep, as ADR 0011 proposed). Rejected: it
@@ -71,11 +90,14 @@ enqueue and never read, is removed with it.
 - Measured in `docs/performance/results-prebuffer.md`: eight threads over 4096 traces hold in 231 ns
   against 711 ns, over 256 traces in 106 ns against 292 ns; a new trace's first hold allocates 224 B against
   1032 B; a trace with 3 or 10 events held allocates 224 B or 464 B against 1.01 KB.
+  The hold-cost amendment (`docs/performance/results-hold-cost.md`) brings the 10-event trace to 376 B.
 - A trace that fills a 100-slot ring allocates 2104 B against 1.01 KB, because the ring doubles through 4,
   8, 16, 32, 64 and 100 slots. The crossover is between 32 and 64 events held. A host that fills its rings
-  pays for that once per trace.
+  pays for that once per trace. After the hold-cost amendment the same ring allocates 1200 B (17 events
+  held or more), against 744 B at 17 to 32 events before it; see `docs/performance/results-hold-cost.md`.
 - Single-thread holds are about 15 to 20 ns slower (unresolved in a three-iteration run); **Hypothesis:** one
-  more hash of the trace id to pick the stripe.
+  more hash of the trace id to pick the stripe. The hold-cost amendment removes that hash; the single-thread
+  holds measure 33 to 47 ns faster in `docs/performance/results-hold-cost.md`, unresolved by the 25 % rule.
 - Eight threads that log in the same trace still queue on that trace's own buffer lock. Not changed here.
 - `ContextCount` is at most `PreErrorMaxContexts` and, with all stripes in use, equal to it. The four buffer
   metrics keep their names and meaning; `buffer_evicted_contexts_total` counts one per evicted trace.
