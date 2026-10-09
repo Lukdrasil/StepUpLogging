@@ -20,10 +20,10 @@ exporter is in these numbers.
 | 2 | Event held in the pre-error buffer (Information at Warning) | 1.18 M | 844 ns, 1360 B | About 160 ns (23 %) over dropped, inside the range [baseline.md](baseline.md) calls unresolved. The buffer's global lock made 8 threads slower than one; fixed by up to 16 LRU stripes and a ring that grows on demand (ADR 0027): with 4096 traces eight threads hold in 231 ns against 711 ns, and a new trace's first hold allocates 224 B against 1032 B ([results-prebuffer.md](results-prebuffer.md)). |
 | 3 | Event exported (Warning at Warning) | 1.47 M | 682 ns, 1360 B | No measurable cost over dropped; the exporter is not in this baseline. |
 | 4 | Error flush of a full 100-event buffer | 7.5 M events (hold + flush) | 13.3 us per flush, 824 B | Dominated by the holds; the flush alone is not resolved. |
-| 5 | Request through the middleware, 4 / 32 headers | 79 k / 33 k requests | 12.7 us, 6.4 KB / 30.5 us, 15 KB | Per header 0.58 to 0.66 us. |
-| 5b | The same with `AlwaysLogRequestSummary` | 42 k / 24 k requests | +8.5 to +12 us, +3.46 KB | The summary costs about as much as the request log itself. |
+| 5 | Request through the middleware, 4 / 32 headers | 79 k / 33 k requests | 12.7 us, 6.4 KB / 30.5 us, 15 KB | Per header 0.58 to 0.66 us. After follow-ups 3, 5 and 6: 17.3 us, 10.0 KB at 32 headers (-43 %), 11.6 us, 5.4 KB at 4 headers ([results-final.md](results-final.md)). |
+| 5b | The same with `AlwaysLogRequestSummary` | 42 k / 24 k requests | +8.5 to +12 us, +3.46 KB | The summary costs about as much as the request log itself. After follow-up 6 the summary adds 2.80 KB instead of 3.46 KB, and `EmitRequestSummary` with every field halves (1.42 us to 723 ns). |
 | 6 | Audit write before the disk | 0.18 M to 0.56 M records | 1.8 to 5.7 us, 1.9 to 3.6 KB, without the consumer's encryptor | Microseconds against an fsync that costs milliseconds (ADR 0020), so not a hot spot; encryption is not measured here. |
-| 7 | fsync of an audit record | not measured here | | The Disk suite was not run for this baseline. |
+| 7 | fsync of an audit record | not measured here | | Run in [results-final.md](results-final.md): 2.16 ms per record with one writer, 336 us with eight; the audit CPU is 0.08 % to 1.7 % of it. |
 
 The order is the order of the triage: volume first. Row 7 is the slowest per event by a large margin but
 runs once per audit record, while rows 1 to 3 run once per log call.
@@ -213,7 +213,9 @@ summary), 6.4 KB and 29.9 to 30.5 us (32 headers).
 
 So the library's own cost of an export is the cost of every event, not of the export. What a real
 exporter adds (OTLP serialisation and batching, console or file formatting) is not in this baseline, and
-it is where an exported event will cost more than a dropped one. Follow-up 8 adds it.
+it is where an exported event will cost more than a dropped one. Follow-up 8 added it: an exported warning
+through a file is 18 us and through OTLP 15 to 20 us, 20 to 30 times the 0.68 us of the pipeline
+([results-final.md](results-final.md), Exporter).
 
 Stepping up does not make the library slower per event: the pipeline spends the same time on the event
 whichever level it ends at. It makes more events reach the exporter, which is a cost the exporter owns.
@@ -232,7 +234,9 @@ behind it is **not** measured.
 **Code.** The 824 B per cycle is the size of a 100-reference array, which fits `_queue.ToArray()` at `:95`.
 **Hypothesis**, not measured separately.
 
-No candidate yet: the row does not show a flush cost to remove. Follow-up 8 puts a real sink behind it.
+No candidate yet: the row does not show a flush cost to remove. Follow-up 8 put a real sink behind it: an
+Error that flushes two held events costs 66 us through a file and 64 us through OTLP, 4.4 KB and 9.7 KB, and
+the difference from the pipeline row is the sink's ([results-final.md](results-final.md)).
 
 ## 5. Request logging
 
@@ -267,6 +271,15 @@ the query string, path, route values, user agent and forwarded-for in the middle
   12 us; **unmeasured** which part. ADRs: 0008, 0009.
 - Both depend on the cost of `Redact` itself (section 8).
 
+**Done** (follow-up 6): a single-valued header is returned as the value itself instead of through `Where` and
+`string.Join`, the header dictionary is sized to the header count, and the summary is built as one `LogEvent`
+with its properties bound once instead of a `ForContext` chain. Measured in [results-final.md](results-final.md)
+against the parent branch: a request allocates 4.87 KB less at 32 headers (14.85 KB to 9.98 KB) and 0.84 KB
+less at 4 (6.23 KB to 5.39 KB); the per-header cost falls from 0.31 KB to 0.16 KB; the summary adds 2.80 KB
+instead of 3.46 KB; `EmitRequestSummary` with every optional field goes from 1.48 us, 2.77 KB to 725 ns,
+2.00 KB. The request time falls 4 % to 15 %, inside the 25 % rule. A summary with no optional field allocates
+88 B more (856 B to 944 B), which is the one regression, with no change in time.
+
 ## 6. Audit write before the disk
 
 **Measured.** `AuditBenchmarks`, five redaction patterns, a sink that stores nothing:
@@ -292,20 +305,33 @@ ADR 0020 puts the fsync of one record at "single-digit to tens of milliseconds o
 figure is the ADR's, not a measurement of this baseline (the Disk suite was not run). If it holds, the
 CPU above, without encryption, is about a tenth of a percent of a 5 ms fsync and less of a slower one,
 and no change to it can matter until the fsync is the smaller part. It says nothing about the encryptor's
-share of the write.
+share of the write. The Disk suite has since measured the fsync ([results-final.md](results-final.md)): 2.16 ms
+per record with one writer and 336 us with eight, so the audit CPU is 0.08 % to 0.26 % of a write and at
+most 1.7 % when eight writers overlap their fsyncs.
 
 **Code.** The record is serialised twice: the payload to JSON bytes (`SpoolPayload.cs:28`), which the
 encryptor turns into ciphertext, and then the envelope with those bytes as a base64 string
 (`SpoolWriter.cs:50`). The envelope format is the contract with the receiving service (ADR 0020,
 ADR 0016), so a change to it is a contract change, not an optimisation.
 
-**Candidate.** None worth building before the Disk baseline exists: see follow-up 8.
+**Candidate.** None: with the Disk baseline in hand (follow-up 8) the audit CPU is under 2 % of a write.
 
 ## 7. fsync
 
-Not measured in this baseline. `DurableWriteBenchmarks` (1 and 8 writers), `FullSpoolDropBenchmarks` and
-`SpoolDrainBenchmarks` exist (issue #69) and are marked `Disk`. Run them on the target volume with
-`STEPUP_BENCH_SPOOL_ROOT` set (see [README.md](README.md)) and record the result next to this one.
+Not measured in the baseline. `DurableWriteBenchmarks` (1 and 8 writers), `FullSpoolDropBenchmarks` and
+`SpoolDrainBenchmarks` exist (issue #69) and are marked `Disk`. **Measured** in
+[results-final.md](results-final.md) on btrfs over an NVMe drive, the default job, `STEPUP_BENCH_SPOOL_ROOT`
+under `/home`:
+
+| Benchmark | Writers / batch | Per record |
+|---|---|---|
+| `DurableWriteBenchmarks.WriteRecords` | 1 | 2.16 ms, 7.48 KB |
+| `DurableWriteBenchmarks.WriteRecords` | 8 | 336 us, 7.50 KB |
+| `FullSpoolDropBenchmarks.DroppedWrite` | | 2.90 us, 2.95 KB (a full spool refuses without touching the disk) |
+| `SpoolDrainBenchmarks.DrainSpool` | 1 / 64 | 15.4 ms / 259 us |
+
+The numbers belong to this volume; run them on the target volume with `STEPUP_BENCH_SPOOL_ROOT` set (see
+[README.md](README.md)).
 
 ## 8. The cost under everything: `Redact`
 
@@ -361,17 +387,22 @@ benchmark row it needs, and states its result against [baseline.md](baseline.md)
    short value that matches none, 355 ns to 91 ns; no change on a long header or a value that matches
    ([results-redaction.md](results-redaction.md)). Request logging allocates 0.17 KB less per request, most
    likely from `RedactionEnricher` no longer copying each event's properties, not from the prefilter.
-6. **Request logging allocations** (section 5): per-header join, the summary's `ForContext` chain.
-   Ceiling: 0.31 KB per header, 3.46 KB per summary. ADRs 0008, 0009.
+6. **Request logging allocations** (section 5). **Done:** a single-valued header is not joined, the header
+   dictionary is presized, the summary is one event built once. A request allocates 4.87 KB less at 32
+   headers and 0.84 KB less at 4; the summary adds 2.80 KB against 3.46 KB; `EmitRequestSummary` with every
+   field 1.48 us to 725 ns. The request time falls 4 % to 15 %, unresolved; a summary with no optional field
+   allocates 88 B more ([results-final.md](results-final.md)). ADRs 0008, 0009 untouched.
 7. **Size a trace's buffer on demand** (section 2). **Done** (ADR 0027, ADR 0015 amended): the first held
    event of a new trace allocates 224 B against 1032 B, and a trace with 3 or 10 events held allocates 224 B
    or 464 B against 1.01 KB; one that fills the default 100-slot ring allocates 2104 B
    ([results-prebuffer.md](results-prebuffer.md)).
-8. **Complete the baseline (benchmark only):** run the Disk suite and record it; add a row with a real
-   output sink (file, then OTLP to a local collector) behind the pipeline, the Error flush and a stepped-up
-   request; add rows for `StepUpTriggerSink`, `SummarySink`, `ImmediateSink` and
-   `StepUpLoggingController.EmitRequestSummary`, which no benchmark covers.
+8. **Complete the baseline (benchmark only).** **Done:** the Disk suite is recorded; `ExporterBenchmarks`
+   put a rolling file and OTLP to a local collector behind a warning, the Error flush and a stepped-up
+   request; `SideSinkBenchmarks` covers `StepUpTriggerSink`, `SummarySink` and `ImmediateSink` (8 to 70 ns,
+   0 B) and `RequestSummaryBenchmarks` covers `EmitRequestSummary`. Results in
+   [results-final.md](results-final.md).
 
-Not recommended on this evidence: any change to the audit CPU path (section 6) or to the spool envelope
+Not recommended on this evidence: any change to the audit CPU path (section 6), now measured at 0.08 % to
+1.7 % of a durable write (2.16 ms with one writer, 336 us per record with eight), or to the spool envelope
 (a contract with the receiving service, ADR 0020), and any change to `StepUpSink.Emit` itself, which is
 15 to 51 ns and allocation-free by test.
