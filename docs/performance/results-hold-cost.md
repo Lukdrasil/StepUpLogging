@@ -158,7 +158,7 @@ single-thread path.
 
 The bytes are identical. Seven of eight rows are 1 % to 10 % faster and one is 11 % slower, all inside the
 25 % rule and inside the `Error` of most rows (up to 1176 ns), so I do not resolve a change. A hold that is 33
-to 47 ns faster would show as 3 % to 5 % of an 800 to 1400 ns event, which is the size of the movement and
+to 47 ns faster would show as 2 % to 6 % of an 800 to 1400 ns event, which is the size of the movement and
 cannot be told from the run to run spread here. [results-final.md](results-final.md) listed `InformationHeld`
 as +3 % to +16 % against the baseline; this run compares against `a5fe20b`, so it does not restate that figure.
 
