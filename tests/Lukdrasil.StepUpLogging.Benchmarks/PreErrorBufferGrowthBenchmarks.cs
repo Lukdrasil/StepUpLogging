@@ -22,7 +22,7 @@ public class PreErrorBufferGrowthBenchmarks
     private LogEvent _error = null!;
 
     /// <summary>How many events each trace holds before the next trace begins.</summary>
-    [Params(3, 10, 100)]
+    [Params(3, 10, 16, 17, 100)]
     public int HeldPerTrace { get; set; }
 
     /// <summary>Builds the sink and one event per trace, and checks how many traces it keeps and what an Error flushes.</summary>
