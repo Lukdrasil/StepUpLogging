@@ -27,3 +27,13 @@ metric is unchanged.
 - Redaction cost on the body rises by the bounded margin (256 chars).
 - Trace volume drops. The `security.redaction_type` tag is gone, replaced by the aggregated
   `security.redaction_targets`.
+
+## Amendment (2026-10-09, performance)
+The request summary is built as one `LogEvent` instead of a `ForContext` chain, and `RouteParameters` is
+converted by the controller itself: each route value goes through the summary logger's scalar conversion, and
+the values are stored in one dictionary value. Binding the dictionary through the logger cost 197 B per optional
+field, over the 182 B limit set for the change; the custom conversion costs 176 B. Redaction is unchanged: every
+value is still redacted before it reaches the summary (decision (b)). One divergence: a
+`ToMaximumCollectionCount` below the number of route values, or a destructuring depth limit, on a
+consumer-supplied summary logger is not applied to `RouteParameters`. The library's own bypass logger has no such
+settings, so the default pipeline is unchanged.
