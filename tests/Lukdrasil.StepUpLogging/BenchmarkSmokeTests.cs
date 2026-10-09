@@ -8,12 +8,13 @@ public class BenchmarkSmokeTests
 {
     private const string BenchmarkNamespace = "Lukdrasil.StepUpLogging.Benchmarks.";
     private const string DiskCategory = "Disk";
+    private const string ExporterCategory = "Exporter";
 
-    private static readonly string[] SuiteCategories = ["Logging", "Audit", DiskCategory];
+    private static readonly string[] SuiteCategories = ["Logging", "Audit", DiskCategory, ExporterCategory];
 
     private static readonly Assembly BenchmarkAssembly = typeof(DurableWriteBenchmarks).Assembly;
 
-    /// <summary>The benchmark classes cheap enough to run once in <c>dotnet test</c>; every other one is marked Disk.</summary>
+    /// <summary>The benchmark classes cheap enough to run once in <c>dotnet test</c>; every other one is marked Disk, or Exporter when it needs a collector.</summary>
     private static readonly string[] SmokeRunClassNames =
     [
         "StepUpSinkBenchmarks",
@@ -27,6 +28,8 @@ public class BenchmarkSmokeTests
         "RequestPathRedactionBenchmarks",
         "DroppedPathBenchmarks",
         "RedactionPerPatternBenchmarks",
+        "SideSinkBenchmarks",
+        "RequestSummaryBenchmarks",
     ];
 
     public static TheoryData<string> SmokeRunClasses => new(SmokeRunClassNames);
@@ -42,10 +45,10 @@ public class BenchmarkSmokeTests
     }
 
     [Fact]
-    public void EveryBenchmarkClass_IsSmokeRunOrMarkedDisk()
+    public void EveryBenchmarkClass_IsSmokeRunOrMarkedDiskOrExporter()
     {
         var neither = BenchmarkClasses()
-            .Where(type => !SmokeRunClassNames.Contains(type.Name) && !CategoriesOf(type).Contains(DiskCategory))
+            .Where(type => !SmokeRunClassNames.Contains(type.Name) && !CategoriesOf(type).Contains(DiskCategory) && !CategoriesOf(type).Contains(ExporterCategory))
             .Select(type => type.Name);
 
         Assert.Empty(neither);
