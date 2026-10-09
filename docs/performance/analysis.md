@@ -194,8 +194,9 @@ from the array sizes, not measured).
 acted on: the stripe is now chosen from the last 4 characters of the id and the ring grows 4, 16, then its
 capacity (ADR 0027, amended; [results-hold-cost.md](results-hold-cost.md)). The single-thread `Hold` rows fall
 by 33 ns, 47 ns and 45 ns (1, 256 and 4096 traces), the six `FillAndFlushOnError` rows by 7 % to 30 % (14.9 to
-17.1 us to 11.9 to 14.5 us), and the one-trace, eight-thread `Hold` from 289.6 ns to 241.5 ns; every time row
-is inside the 25 % rule, so the direction is reported and the size is not. The hypothesis is not separated
+17.1 us to 11.9 to 14.5 us), and the one-trace, eight-thread `Hold` from 289.6 ns to 241.5 ns. The only time row past the 25 % rule
+(-30 %, `FillAndFlushOnError`, 256 contexts, 8 threads) has an `Error` of 35.2 us on a mean of 11.9 us, so no
+time row is resolved: the direction is reported and the size is not. The hypothesis is not separated
 from run to run drift, but the removed hash is the only change on that path. Allocated bytes per trace with
 10, 16, 17 and 100 events held are 376 B, 376 B, 1200 B and 1200 B against 464 B, 464 B, 744 B and 2104 B: a
 trace of 17 to 32 events costs more than before (744 B to 1200 B) and a trace of 100 less (2104 B to 1200 B).
@@ -395,7 +396,7 @@ benchmark row it needs, and states its result against [baseline.md](baseline.md)
    hold in 231 ns against 711 ns, over 256 traces in 106 ns against 292 ns
    ([results-prebuffer.md](results-prebuffer.md)). Not removed: eight threads on one trace still queue on
    that buffer's own lock; single-thread holds are about 15 to 20 ns slower (unresolved). The stripe is now
-   chosen from the last 4 characters of the id, and the holds measure 33 to 47 ns faster
+   chosen from the last 4 characters of the id, and the holds measure 33 to 47 ns faster (unresolved)
    ([results-hold-cost.md](results-hold-cost.md)).
 5. **Cheaper `Redact`** (section 8). **Done** with a union prefilter (ADR 0001 amended): five patterns on a
    short value that matches none, 355 ns to 91 ns; no change on a long header or a value that matches
