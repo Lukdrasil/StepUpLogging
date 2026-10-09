@@ -8,6 +8,7 @@ measure the library's hot paths in isolation so a change to `src/` can be compar
 - [results-root-gate.md](results-root-gate.md): the dropped-path cost before and after the root enrichment gate (ADR 0026), and where it goes.
 - [results-redaction.md](results-redaction.md): the gated redaction enricher and the union prefilter of `Redact` (ADR 0022, ADR 0001), before and after.
 - [results-prebuffer.md](results-prebuffer.md): the striped LRU and the on-demand ring of the pre-error buffer (ADR 0027), before and after.
+- [results-hold-cost.md](results-hold-cost.md): the stripe chosen from the last 4 characters of the trace id and the 4, 16, capacity ring (ADR 0027 amended), before and after.
 - [results-final.md](results-final.md): the final re-verification: every suite at the last commit against the baseline commit in one session, the request-logging allocation cut, the Disk suite, and the file and OTLP exporter rows.
 - [otlp-collector.yaml](otlp-collector.yaml): the OpenTelemetry Collector configuration the `Exporter` suite sends to.
 
