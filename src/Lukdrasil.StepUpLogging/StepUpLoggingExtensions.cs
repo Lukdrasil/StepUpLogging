@@ -641,7 +641,7 @@ public static class StepUpLoggingExtensions
                                 redactedPath,
                                 statusCode,
                                 sw.Elapsed.TotalMilliseconds,
-                                Activity.Current?.TraceId.ToString(),
+                                null,
                                 redactedQs,
                                 routeParams,
                                 userAgent,
@@ -703,6 +703,8 @@ public static class StepUpLoggingExtensions
                     redactionTargets!.Add(target);
                 }
 
+                Action<string> noteRedaction = NoteRedaction;
+
                 var rawPath = httpContext.Request.Path.Value ?? string.Empty;
                 var path = rawPath.Length > 1 ? rawPath.TrimEnd('/') : rawPath;
                 var redactedPath = compiledPatterns.Redact(path);
@@ -722,30 +724,11 @@ public static class StepUpLoggingExtensions
 
                 if (httpContext.Request.RouteValues?.Count > 0)
                 {
-                    var routeParams = RequestPathRedaction.RedactRouteValues(httpContext.Request.RouteValues, path, redactedPath, compiledPatterns, NoteRedaction);
+                    var routeParams = RequestPathRedaction.RedactRouteValues(httpContext.Request.RouteValues, path, redactedPath, compiledPatterns, noteRedaction);
                     diagnosticContext.Set("RouteParameters", routeParams);
                 }
 
-                var headers = new Dictionary<string, object?>();
-                foreach (var header in httpContext.Request.Headers)
-                {
-                    if (sensitiveHeaders.Contains(header.Key))
-                    {
-                        headers[header.Key] = "[REDACTED]";
-                        NoteRedaction($"header:{header.Key}");
-                    }
-                    else
-                    {
-                        var value = string.Join(", ", header.Value.Where(v => v != null) ?? Array.Empty<string>());
-                        var redactedValue = compiledPatterns.Redact(value);
-                        if (!string.Equals(redactedValue, value, StringComparison.Ordinal))
-                        {
-                            NoteRedaction($"header:{header.Key}");
-                        }
-                        headers[header.Key] = redactedValue;
-                    }
-                }
-                diagnosticContext.Set("Headers", headers);
+                diagnosticContext.Set("Headers", RequestHeaderRedaction.RedactRequestHeaders(httpContext.Request.Headers, sensitiveHeaders, compiledPatterns, noteRedaction));
 
                 if (redactionActivity is not null)
                 {
