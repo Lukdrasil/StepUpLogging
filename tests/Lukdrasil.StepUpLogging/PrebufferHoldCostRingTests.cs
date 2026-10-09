@@ -10,7 +10,6 @@ namespace Lukdrasil.StepUpLogging.Tests;
 /// </summary>
 public class PrebufferHoldCostRingTests
 {
-    private const string Trace = "ring-trace";
     private const int WarmUpTraces = 256;
     private const int MeasuredTraces = 1024;
 
@@ -45,18 +44,9 @@ public class PrebufferHoldCostRingTests
     [InlineData(20, 25)]
     public void Hold_AcrossEachGrowthStep_FlushesTheNewestInOrder(int capacity, int held)
     {
-        Activity.Current = null;
-        var collector = new Collector();
-        using var sink = new PreErrorBufferSink(BypassInto(collector), capacity, maxContexts: 16, minimumLevel: LogEventLevel.Information);
         var oldestKept = Math.Max(1, held - capacity + 1);
 
-        for (var i = 1; i <= held; i++)
-        {
-            sink.Hold(Held(Trace, $"e{i}"));
-        }
-        sink.Emit(Error(Trace));
-
-        Assert.Equal(Enumerable.Range(oldestKept, held - oldestKept + 1).Select(i => $"e{i}"), Texts(collector.Events));
+        Assert.Equal(Enumerable.Range(oldestKept, held - oldestKept + 1).Select(i => $"e{i}"), HoldThenFlush(capacity, held));
     }
 
     private static void HoldEach(PreErrorBufferSink sink, LogEvent[] traces, int held)

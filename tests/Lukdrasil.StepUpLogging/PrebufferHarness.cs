@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using Serilog;
 using Serilog.Core;
 using Serilog.Events;
@@ -14,6 +15,9 @@ internal static class PrebufferHarness
     private const int MaxStripeCandidates = 100_000;
 
     private static readonly MessageTemplateParser Parser = new();
+
+    /// <summary>The trace id the ring tests hold their numbered events on.</summary>
+    public const string RingTrace = "ring-trace";
 
     /// <summary>A bypass logger that writes every flushed event into <paramref name="collector"/>.</summary>
     public static ILogger BypassInto(ILogEventSink collector)
@@ -50,6 +54,28 @@ internal static class PrebufferHarness
 
         Assert.Equal(count, traces.Count);
         return traces;
+    }
+
+    /// <summary>Holds <paramref name="held"/> numbered events on <see cref="RingTrace"/>, emits an Error, and returns the flushed texts.</summary>
+    public static string[] HoldThenFlush(int capacity, int held)
+    {
+        Activity.Current = null;
+        var collector = new Collector();
+        using var sink = new PreErrorBufferSink(BypassInto(collector), capacity, maxContexts: 16, minimumLevel: LogEventLevel.Information);
+
+        HoldNumbered(sink, 1, held);
+        sink.Emit(Error(RingTrace));
+
+        return Texts(collector.Events);
+    }
+
+    /// <summary>Holds the events <c>e{first}</c> to <c>e{last}</c> on <see cref="RingTrace"/>.</summary>
+    public static void HoldNumbered(PreErrorBufferSink sink, int first, int last)
+    {
+        for (var i = first; i <= last; i++)
+        {
+            sink.Hold(Held(RingTrace, $"e{i}"));
+        }
     }
 
     /// <summary>Starts <paramref name="body"/> on a background thread, so a test that fails cannot keep the run alive.</summary>

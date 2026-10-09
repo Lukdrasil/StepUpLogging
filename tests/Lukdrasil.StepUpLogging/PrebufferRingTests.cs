@@ -10,7 +10,7 @@ namespace Lukdrasil.StepUpLogging.Tests;
 /// </summary>
 public class PrebufferRingTests
 {
-    private const string Trace = "ring-trace";
+    private const string Trace = RingTrace;
 
     [Fact]
     public void Hold_FewerEventsThanCapacity_FlushesAllInOrder()
@@ -62,26 +62,6 @@ public class PrebufferRingTests
 
         Assert.True(bytesPerNewTrace < maxBytesPerNewTrace, $"the first hold of a new trace allocated {bytesPerNewTrace} B, expected under {maxBytesPerNewTrace} B");
         Assert.Equal(64, sink.ContextCount);
-    }
-
-    private static string[] HoldThenFlush(int capacity, int held)
-    {
-        Activity.Current = null;
-        var collector = new Collector();
-        using var sink = new PreErrorBufferSink(BypassInto(collector), capacity, maxContexts: 16, minimumLevel: LogEventLevel.Information);
-
-        HoldNumbered(sink, 1, held);
-        sink.Emit(Error(Trace));
-
-        return Texts(collector.Events);
-    }
-
-    private static void HoldNumbered(PreErrorBufferSink sink, int first, int last)
-    {
-        for (var i = first; i <= last; i++)
-        {
-            sink.Hold(Held(Trace, $"e{i}"));
-        }
     }
 
     private static IEnumerable<string> Numbered(int first, int last)
