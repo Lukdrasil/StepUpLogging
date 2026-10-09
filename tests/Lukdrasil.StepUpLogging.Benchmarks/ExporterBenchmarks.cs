@@ -16,6 +16,8 @@ namespace Lukdrasil.StepUpLogging.Benchmarks;
 /// an Error that flushes the pre-error buffer, and requests through the middleware while stepped up.
 /// Each invocation builds a host and disposes it at the end, which flushes the asynchronous output
 /// sinks, so the time includes the wait for the exporter. The host is built outside the timing.
+/// <see cref="EmptyHostDisposed"/> is the part of that time that does not depend on the events: disposing
+/// a host that logged nothing.
 /// </summary>
 [MemoryDiagnoser]
 [BenchmarkCategory("Exporter")]
@@ -85,8 +87,8 @@ public class ExporterBenchmarks
     [GlobalCleanup]
     public void Cleanup() => DeleteLogDirectory();
 
-    /// <summary>Builds the host for the warning and Error scenarios.</summary>
-    [IterationSetup(Targets = [nameof(WarningExported), nameof(ErrorFlush)])]
+    /// <summary>Builds the host for the warning and Error scenarios and the empty one.</summary>
+    [IterationSetup(Targets = [nameof(WarningExported), nameof(ErrorFlush), nameof(EmptyHostDisposed)])]
     public void StartHost() => _host = BenchmarkFixtures.BuildHost(HostSettings(), logFilePath: LogFilePath());
 
     /// <summary>Builds the host for the request scenario, with the middleware in front and logging stepped up; the step-up writes one notice of its own.</summary>
@@ -102,6 +104,10 @@ public class ExporterBenchmarks
         controller.Trigger();
         BenchmarkFixtures.Require(SpinWait.SpinUntil(() => controller.LevelSwitch.MinimumLevel <= LogEventLevel.Information, StepUpWaitMilliseconds), "the controller did not step logging up");
     }
+
+    /// <summary>A host that logged nothing, disposed: the shutdown cost every other row of this class includes once per invocation.</summary>
+    [Benchmark]
+    public void EmptyHostDisposed() => _host.Dispose();
 
     /// <summary>Warnings at the base level, each exported; reported per event.</summary>
     [Benchmark(OperationsPerInvoke = WarningsPerInvoke)]
