@@ -3,14 +3,20 @@ using Microsoft.Extensions.Primitives;
 
 namespace Lukdrasil.StepUpLogging;
 
-// af-stub: reproduces today's header loop (StepUpLoggingExtensions.cs) until the green step.
 internal static class RequestHeaderRedaction
 {
     private const string Redacted = "[REDACTED]";
 
-    /// <summary>Joins the non-null values of a header with <c>", "</c>.</summary>
-    internal static string JoinHeaderValues(StringValues values) =>
-        string.Join(", ", values.Where(v => v != null) ?? Array.Empty<string>()); // af-stub
+    /// <summary>
+    /// Joins the non-null values of a header with <c>", "</c>. A single value is returned as it is, without
+    /// allocating.
+    /// </summary>
+    internal static string JoinHeaderValues(StringValues values) => values.Count switch
+    {
+        0 => string.Empty,
+        1 => values[0] ?? string.Empty,
+        _ => string.Join(", ", values.Where(v => v is not null))
+    };
 
     /// <summary>Redacts every request header, noting each redacted one as <c>header:{Key}</c>.</summary>
     internal static Dictionary<string, object?> RedactRequestHeaders(
@@ -19,24 +25,23 @@ internal static class RequestHeaderRedaction
         CompiledRedactionPatterns patterns,
         Action<string> noteRedaction)
     {
-        var result = new Dictionary<string, object?>(); // af-stub
+        var result = new Dictionary<string, object?>(headers.Count);
         foreach (var header in headers)
         {
             if (sensitiveHeaders.Contains(header.Key))
             {
                 result[header.Key] = Redacted;
                 noteRedaction($"header:{header.Key}");
+                continue;
             }
-            else
+
+            var value = JoinHeaderValues(header.Value);
+            var redactedValue = patterns.Redact(value);
+            if (!string.Equals(redactedValue, value, StringComparison.Ordinal))
             {
-                var value = JoinHeaderValues(header.Value);
-                var redactedValue = patterns.Redact(value);
-                if (!string.Equals(redactedValue, value, StringComparison.Ordinal))
-                {
-                    noteRedaction($"header:{header.Key}");
-                }
-                result[header.Key] = redactedValue;
+                noteRedaction($"header:{header.Key}");
             }
+            result[header.Key] = redactedValue;
         }
         return result;
     }
