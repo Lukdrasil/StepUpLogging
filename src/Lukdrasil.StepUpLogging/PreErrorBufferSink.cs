@@ -31,6 +31,12 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
     private const int MinTracesPerStripe = 64;
     private const int MaxStripes = 16;
     private const int InitialSlots = 4;
+    private const int MidSlots = 16;
+    private const int StripeTailChars = 4;
+    private const uint FnvOffsetBasis = 2166136261u;
+    private const uint FnvPrime = 16777619u;
+    private const uint Fmix32C1 = 0x85EBCA6Bu;
+    private const uint Fmix32C2 = 0xC2B2AE35u;
 
     private readonly ConcurrentDictionary<string, Buffer> _buffers = new();
     private readonly TraceLruStripe[] _stripes = CreateStripes(Math.Max(1, maxContexts));
@@ -50,8 +56,40 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
         return [.. Enumerable.Range(0, stripes).Select(i => i < remainder ? share + 1 : share)];
     }
 
-    /// <summary>Index of the stripe that owns <paramref name="key"/>. Exposed for tests.</summary>
-    internal int StripeOf(string key) => (int)((uint)key.GetHashCode() % (uint)_stripes.Length);
+    /// <summary>
+    /// Index of the stripe that owns <paramref name="key"/>, derived from its last 4 characters and the same in every process.
+    /// Exposed for tests.
+    /// </summary>
+    internal int StripeOf(string key)
+    {
+        if (_stripes.Length == 1)
+        {
+            return 0;
+        }
+
+        var hash = HashTail(key.AsSpan(Math.Max(0, key.Length - StripeTailChars)));
+        return (int)(((ulong)hash * (uint)_stripes.Length) >> 32);
+    }
+
+    private static uint HashTail(ReadOnlySpan<char> tail)
+    {
+        var hash = FnvOffsetBasis;
+        foreach (var c in tail)
+        {
+            hash = (hash ^ c) * FnvPrime;
+        }
+
+        return Fmix32(hash);
+    }
+
+    private static uint Fmix32(uint hash)
+    {
+        hash ^= hash >> 16;
+        hash *= Fmix32C1;
+        hash ^= hash >> 13;
+        hash *= Fmix32C2;
+        return hash ^ (hash >> 16);
+    }
 
     private static TraceLruStripe[] CreateStripes(int maxContexts)
         => Array.ConvertAll(StripeCapacities(maxContexts, StripeCountFor(maxContexts)), capacity => new TraceLruStripe(capacity));
