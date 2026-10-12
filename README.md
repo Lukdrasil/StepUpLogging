@@ -485,6 +485,7 @@ app.MapGet("/stepup/status", (StepUpLoggingController controller) =>
 3. **Memory management**: Uses LRU eviction to prevent unbounded memory growth (configurable limits on buffer size and active contexts)
 4. **Exactly once**: Only held-back events are buffered, meaning events the step-up gate did not export. An event is exported at most once: either immediately at the current level, or by the flush when an error follows. Events from `NeverStepUpCategories` are still held back and flushed on an error.
 5. **Shutdown**: Held-back events still in the buffer when the application shuts down without an error are dropped, not exported.
+6. **Excluded categories**: Events below `Warning` from a `PreErrorBufferExcludeCategories` prefix are never held, so an error does not export them. Other categories of the same trace still flush.
 
 ### Configuration
 
@@ -505,6 +506,27 @@ app.MapGet("/stepup/status", (StepUpLoggingController controller) =>
 | `EnablePreErrorBuffering` | `true` | Enable/disable pre-error buffering |
 | `PreErrorBufferSize` | `100` | Max events to retain per request before oldest are dropped |
 | `PreErrorMaxContexts` | `1024` | Max concurrent request contexts to track; older ones are evicted |
+| `PreErrorBufferExcludeCategories` | `[]` | `SourceContext` prefixes whose events below `Warning` are never buffered (see below) |
+
+**Keep framework categories out of the flush:**
+
+`PreErrorBufferExcludeCategories` lists `SourceContext` prefixes whose events below `Warning` the
+buffer never holds, so an error in their trace does not export them. Use it to keep framework
+categories at `Warning` in `Auto` mode even when a trace fails. Matching follows the same prefix rule
+as `NeverStepUpCategories`, and blank entries are ignored.
+
+```json
+{
+  "SerilogStepUp": {
+    "PreErrorBufferExcludeCategories": [ "Microsoft.AspNetCore.Routing", "Microsoft.AspNetCore.Hosting", "Polly" ]
+  }
+}
+```
+
+- Only the buffer is filtered. An event the current level or a `CategoryFloors` floor lets through
+  is still exported, so Diagnostic mode still exports these categories at `DiagnosticLevel`.
+- A listed category's `Warning` events are still held and flushed, for example at `BaseLevel` `Error`.
+- Application categories in the same trace still flush.
 
 **Enable programmatically:**
 
@@ -1101,6 +1123,7 @@ Per-component BenchmarkDotNet benchmarks (log pipeline, sinks, enrichers, redact
 | `EnablePreErrorBuffering` | `true` | - | Enable/disable pre-error buffering |
 | `PreErrorBufferSize` | `100` | - | Max events per request before oldest are dropped |
 | `PreErrorMaxContexts` | `1024` | - | Max concurrent request contexts; older ones are evicted |
+| `PreErrorBufferExcludeCategories` | `[]` | - | `SourceContext` prefixes whose events below `Warning` are never buffered, so an error flush does not export them (see Pre-Error Buffering) |
 | **OpenTelemetry Instrumentation** |
 | `EnableActivityInstrumentation` | `true` | - | Enable/disable Activity creation (default-enabled, opt-out) |
 | **OpenTelemetry** |
