@@ -226,6 +226,19 @@ public sealed class StepUpLoggingOptions
     public int PreErrorMaxContexts { get; set; } = 1024;
 
     /// <summary>
+    /// <c>SourceContext</c> prefixes whose events below <c>Warning</c> are never held in the pre-error buffer, so an
+    /// <c>Error</c> or <c>Fatal</c> in their trace does not export them. Default: empty.
+    /// </summary>
+    /// <remarks>
+    /// Matching is the one ordinal prefix rule of every category option: equal, or followed by a <c>.</c>. Only the
+    /// buffer is filtered: an event the switch or a <see cref="CategoryFloors"/> floor lets through is still exported,
+    /// so <see cref="StepUpMode.Diagnostic"/> still exports the listed categories at <see cref="DiagnosticLevel"/>, and
+    /// their <c>Warning</c> events are still held and flushed. Other categories of the same trace still flush. Blank
+    /// entries are ignored.
+    /// </remarks>
+    public string[] PreErrorBufferExcludeCategories { get; set; } = [];
+
+    /// <summary>
     /// When true, emit a single request summary log for every HTTP request regardless of the BaseLevel.
     /// The summary is emitted via a bypass Serilog logger that is configured to always accept verbose events.
     /// Default: false (opt-in).
