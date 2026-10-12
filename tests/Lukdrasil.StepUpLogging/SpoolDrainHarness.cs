@@ -24,6 +24,20 @@ internal sealed class FakeAuditReceiver(Func<int, CancellationToken, Task<HttpRe
     public static FakeAuditReceiver Responding(params HttpStatusCode[] statuses) =>
         new((requestIndex, _) => Task.FromResult(new HttpResponseMessage(statuses[Math.Min(requestIndex, statuses.Length - 1)])));
 
+    /// <summary>
+    /// Answers each request with the next of <paramref name="responses"/>, the last one repeating.
+    /// A response is built per request, so no two requests share a disposed one.
+    /// </summary>
+    public static FakeAuditReceiver Answering(params Func<HttpResponseMessage>[] responses) =>
+        new((requestIndex, _) => Task.FromResult(responses[Math.Min(requestIndex, responses.Length - 1)]()));
+
+    /// <summary>A rejection carrying <paramref name="body"/> as <paramref name="mediaType"/>, as an audit endpoint answers one.</summary>
+    public static Func<HttpResponseMessage> Problem(HttpStatusCode status, string body, string mediaType = "application/problem+json") =>
+        () => new HttpResponseMessage(status) { Content = new StringContent(body, System.Text.Encoding.UTF8, mediaType) };
+
+    /// <summary>A plain 200, for the answer that follows a <see cref="Problem"/> in <see cref="Answering"/>.</summary>
+    public static Func<HttpResponseMessage> Stored() => () => new HttpResponseMessage(HttpStatusCode.OK);
+
     /// <summary>Fails every request with <paramref name="failure"/>, after recording what it was sent.</summary>
     public static FakeAuditReceiver Failing(Exception failure) =>
         new((_, _) => Task.FromException<HttpResponseMessage>(failure));
@@ -101,9 +115,14 @@ internal sealed class SpoolDrainHarness : IDisposable
     private readonly TempSpoolDirectory _root = new();
     private readonly HttpClient _client;
     private readonly EncryptedSpoolAuditSink _sink;
+    private readonly IReadOnlyList<IAuditRejectionObserver> _rejectionObservers;
 
-    public SpoolDrainHarness(FakeAuditReceiver receiver, Action<EncryptedSpoolOptions>? configure = null)
+    public SpoolDrainHarness(
+        FakeAuditReceiver receiver,
+        Action<EncryptedSpoolOptions>? configure = null,
+        IReadOnlyList<IAuditRejectionObserver>? rejectionObservers = null)
     {
+        _rejectionObservers = rejectionObservers ?? [];
         SpoolOptions = new EncryptedSpoolOptions
         {
             // A spool below the temporary root, so its dead-letter sibling is thrown away with it.
@@ -159,7 +178,7 @@ internal sealed class SpoolDrainHarness : IDisposable
 
     /// <summary>Another worker over the same spool, endpoint and directories — what a restarted host builds.</summary>
     public DrainWorker StartedOver() =>
-        new(Options.Create(SpoolOptions), new SingleClientHttpClientFactory(_client), DeadLetter, Reachability, Head, Tracker, Time, Logger);
+        new(Options.Create(SpoolOptions), new SingleClientHttpClientFactory(_client), DeadLetter, Reachability, Head, Tracker, Time, _rejectionObservers, Logger);
 
     /// <summary>Spools <paramref name="auditEvent"/> through the sink, exactly as an audited operation does.</summary>
     public async Task<AuditEvent> SpoolAsync(AuditEvent auditEvent)
