@@ -37,7 +37,8 @@ internal static class RejectionProblemCode
 
     /// <summary>
     /// The top-level string <c>code</c> of <paramref name="body"/>, or <see langword="null"/> when the
-    /// body is over <see cref="MaxBodyBytes"/>, malformed, not an object, or has no string code there.
+    /// body is over <see cref="MaxBodyBytes"/>, malformed, not an object, or has no string code there
+    /// that decodes to text.
     /// </summary>
     internal static string? Parse(ReadOnlySpan<byte> body)
     {
@@ -50,8 +51,10 @@ internal static class RejectionProblemCode
         {
             return TopLevelCode(body);
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
         {
+            // InvalidOperationException: a string code that does not decode (a lone surrogate
+            // escape, invalid UTF-8) makes GetString throw instead of the reader.
             return null;
         }
     }
