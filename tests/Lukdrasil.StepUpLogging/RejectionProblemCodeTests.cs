@@ -37,6 +37,18 @@ public class RejectionProblemCodeTests
     public void Parse_MalformedOrNotAnObject_ReturnsNull(string body) => Assert.Null(Code(body));
 
     [Fact]
+    public void Parse_CodeWithALoneEscapedSurrogate_ReturnsNull() =>
+        Assert.Null(Code("""{"code":"\uD800"}"""));
+
+    [Fact]
+    public void Parse_CodeWithInvalidUtf8_ReturnsNull()
+    {
+        byte[] body = [.. "{\"code\":\""u8, 0xFF, .. "\"}"u8];
+
+        Assert.Null(RejectionProblemCode.Parse(body));
+    }
+
+    [Fact]
     public void Parse_EmptyBody_ReturnsNull() => Assert.Null(Code(""));
 
     [Fact]
