@@ -372,21 +372,23 @@ internal sealed class DrainWorker(
     /// <summary>Tells each rejection observer, one after another, about a record rejected on its own.</summary>
     private async Task NotifyRejectedAsync(AuditRejection? rejection, CancellationToken cancellationToken)
     {
-        if (rejection is not { } told)
+        if (rejection is not { } rejected)
         {
             return;
         }
 
         foreach (var observer in _rejectionObservers)
         {
-            await NotifyAsync(observer, told, cancellationToken).ConfigureAwait(false);
+            await NotifyAsync(observer, rejected, cancellationToken).ConfigureAwait(false);
         }
     }
 
     /// <summary>
     /// Calls one observer, bounded by <see cref="EncryptedSpoolOptions.DeliveryTimeout"/> and by the
     /// host stopping. Whatever it throws, or a run past its time, is logged and the cycle carries on:
-    /// an observer informs, and a broken one must not hold up the audit trail behind it.
+    /// an observer informs, and a broken one must not hold up the audit trail behind it. Once
+    /// <paramref name="cancellationToken"/> is cancelled (the host stopping), whatever it throws is
+    /// not caught and reaches the caller.
     /// </summary>
     private async Task NotifyAsync(IAuditRejectionObserver observer, AuditRejection rejection, CancellationToken cancellationToken)
     {
