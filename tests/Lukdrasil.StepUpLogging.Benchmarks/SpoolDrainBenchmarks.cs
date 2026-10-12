@@ -44,6 +44,7 @@ public class SpoolDrainBenchmarks
             new SpoolHead(),
             SpoolBenchmarkSupport.TrackerFor(_options),
             TimeProvider.System,
+            [],
             NullLogger<DrainWorker>.Instance);
     }
 

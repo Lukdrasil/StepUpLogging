@@ -42,12 +42,14 @@ internal sealed class DrainWorker(
     SpoolHead spoolHead,
     SpoolUsageTracker usageTracker,
     TimeProvider timeProvider,
+    IEnumerable<IAuditRejectionObserver> rejectionObservers,
     ILogger<DrainWorker> logger) : BackgroundService
 {
     /// <summary>The name of the <see cref="HttpClient"/> the worker delivers with.</summary>
     internal const string HttpClientName = "Lukdrasil.StepUpLogging.Audit";
 
     private readonly EncryptedSpoolOptions _options = options.Value;
+    private readonly IAuditRejectionObserver[] _rejectionObservers = [.. rejectionObservers]; // af-stub: accepted, not yet used
     private readonly SpoolReader _reader = new(options.Value.SpoolDirectory);
     private readonly Uri _auditEndpoint = new($"{options.Value.EndpointBaseUrl.TrimEnd('/')}/audit");
     private readonly Uri _batchEndpoint = new($"{options.Value.EndpointBaseUrl.TrimEnd('/')}/audit/batch");
