@@ -47,6 +47,13 @@ public static class StepUpLoggingEncryptedSpoolExtensions
     /// is the only retrying layer and <see cref="EncryptedSpoolOptions.DeliveryTimeout"/> the only
     /// timeout (ADR 0020). A custom handler for that client must be added after this call.
     /// </para>
+    /// <para>
+    /// To hear of each record the endpoint rejects on its own (for example to refresh a sealing key
+    /// on <c>422 sealing.unknown_key</c>), register any number of
+    /// <see cref="IAuditRejectionObserver"/> yourself, before or after this call:
+    /// <c>services.AddSingleton&lt;IAuditRejectionObserver, X&gt;()</c>. With none registered,
+    /// <see cref="DrainWorker"/> receives an empty set and behaves as before (ADR 0029).
+    /// </para>
     /// </remarks>
     /// <param name="builder">The host application builder.</param>
     /// <param name="configureOptions">
