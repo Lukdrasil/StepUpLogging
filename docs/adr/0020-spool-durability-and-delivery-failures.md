@@ -129,6 +129,11 @@ application running by losing audit silently. This ADR rejects every one of them
      and `400` are the wrong answers: the first two retry a record that can never be decrypted,
      the last dead-letters one that a key loaded a minute later could have stored. Reading a
      problem+json body to decide was considered and left out.
+   - > **Amended (2026-10-12, issue #71):** the body still decides nothing, but it now informs. For
+     a single record rejected permanently while an `IAuditRejectionObserver` is registered, the
+     worker reads the top-level `code` of an `application/problem+json` body and, after the record
+     is dead-lettered, tells each observer the status and code, so a consumer can refresh its
+     sealing key on `422 sealing.unknown_key`. See ADR 0029.
    - > **Amended (2026-09-30, issue #33):** `DrainWorker` is the only retrying layer on the
      delivery path. The delivery client calls `RemoveAllResilienceHandlers()`, so a resilience
      handler inherited from the consumer's `ConfigureHttpClientDefaults` (the Aspire
