@@ -184,6 +184,22 @@ public class OptionsValidationTests
     }
 
     [Fact]
+    public void PreErrorBufferExcludeCategories_DefaultsToEmpty()
+    {
+        Assert.Empty(new StepUpLoggingOptions().PreErrorBufferExcludeCategories);
+    }
+
+    [Fact]
+    public void PreErrorBufferExcludeCategories_BindsFromConfig()
+    {
+        using var host = BuildHost(
+            ("SerilogStepUp:PreErrorBufferExcludeCategories:0", "Microsoft.AspNetCore.Routing"),
+            ("SerilogStepUp:PreErrorBufferExcludeCategories:1", "Polly"));
+
+        Assert.Equal(["Microsoft.AspNetCore.Routing", "Polly"], ResolveOptions(host).PreErrorBufferExcludeCategories);
+    }
+
+    [Fact]
     public void CategoryFloors_DefaultKeysAreOrdinal()
     {
         var floors = new StepUpLoggingOptions().CategoryFloors;
@@ -302,13 +318,16 @@ public class OptionsValidationTests
             ("SerilogStepUp:AlwaysExportCategories:0", ""),
             ("SerilogStepUp:AlwaysExportCategories:1", "   "),
             ("SerilogStepUp:NeverTriggerCategories:0", ""),
-            ("SerilogStepUp:NeverTriggerCategories:1", "   "));
+            ("SerilogStepUp:NeverTriggerCategories:1", "   "),
+            ("SerilogStepUp:PreErrorBufferExcludeCategories:0", ""),
+            ("SerilogStepUp:PreErrorBufferExcludeCategories:1", "   "));
 
         var opts = ResolveOptions(host);
 
         Assert.Equal(2, opts.DiagnosticExemptCategories.Length);
         Assert.Equal(2, opts.AlwaysExportCategories.Length);
         Assert.Equal(2, opts.NeverTriggerCategories.Length);
+        Assert.Equal(2, opts.PreErrorBufferExcludeCategories.Length);
     }
 
     [Fact]
@@ -320,6 +339,7 @@ public class OptionsValidationTests
             o.DiagnosticExemptCategories = null!;
             o.AlwaysExportCategories = null!;
             o.NeverTriggerCategories = null!;
+            o.PreErrorBufferExcludeCategories = null!;
         });
 
         Assert.Null(ResolveOptions(host).CategoryFloors);
