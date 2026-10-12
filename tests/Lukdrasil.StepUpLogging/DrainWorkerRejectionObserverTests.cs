@@ -155,6 +155,25 @@ public class DrainWorkerRejectionObserverTests
         Assert.Equal(new AuditRejection(422, null), Assert.Single(observer.Rejections));
     }
 
+    [Fact]
+    public async Task RejectionWithUnreadableCode_StillDeadLettersAndNotifiesWithNullCode()
+    {
+        var observer = new RecordingRejectionObserver();
+        using var harness = new SpoolDrainHarness(
+            FakeAuditReceiver.Answering(
+                FakeAuditReceiver.Problem(HttpStatusCode.UnprocessableEntity, """{"code":"\uD800"}"""),
+                FakeAuditReceiver.Stored()),
+            rejectionObservers: [observer]);
+        await SpoolInOrderAsync(harness, 2);
+
+        await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(new AuditRejection(422, null), Assert.Single(observer.Rejections));
+        Assert.Single(harness.DeadLetteredFileNames());
+        Assert.Empty(harness.SpooledFileNames());
+        Assert.Equal(2, harness.Receiver.Received.Count);
+    }
+
     [Theory]
     [InlineData(HttpStatusCode.OK)]
     [InlineData(HttpStatusCode.ServiceUnavailable)]
