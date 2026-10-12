@@ -49,7 +49,7 @@ internal sealed class DrainWorker(
     internal const string HttpClientName = "Lukdrasil.StepUpLogging.Audit";
 
     private readonly EncryptedSpoolOptions _options = options.Value;
-    private readonly IAuditRejectionObserver[] _rejectionObservers = [.. rejectionObservers]; // af-stub: accepted, not yet used
+    private readonly IAuditRejectionObserver[] _rejectionObservers = [.. rejectionObservers];
     private readonly SpoolReader _reader = new(options.Value.SpoolDirectory);
     private readonly Uri _auditEndpoint = new($"{options.Value.EndpointBaseUrl.TrimEnd('/')}/audit");
     private readonly Uri _batchEndpoint = new($"{options.Value.EndpointBaseUrl.TrimEnd('/')}/audit/batch");
@@ -288,7 +288,7 @@ internal sealed class DrainWorker(
 
             case DeliveryOutcome.Rejected:
                 reachability.EndpointAnswered();
-                return await RejectedAsync(client, batch, attempt.Description, cancellationToken).ConfigureAwait(false);
+                return await RejectedAsync(client, batch, attempt, cancellationToken).ConfigureAwait(false);
 
             default:
                 ReportUndelivered(batch[0].FilePath, attempt.Description);
@@ -299,13 +299,15 @@ internal sealed class DrainWorker(
     /// <summary>
     /// A rejected single record is defective and dead-lettered. A rejected batch only says that one
     /// of its records is, not which, so each is delivered on its own and only the one the endpoint
-    /// rejects alone is set aside (ADR 0020 D7).
+    /// rejects alone is set aside (ADR 0020 D7). The rejection observers hear of a single record
+    /// only once it is dead-lettered, so they inform and never change the outcome (ADR 0029).
     /// </summary>
-    private async Task<bool> RejectedAsync(HttpClient client, IReadOnlyList<SpoolEntry> batch, string description, CancellationToken cancellationToken)
+    private async Task<bool> RejectedAsync(HttpClient client, IReadOnlyList<SpoolEntry> batch, DeliveryAttempt attempt, CancellationToken cancellationToken)
     {
         if (batch.Count == 1)
         {
-            DeadLetterAndRelease(batch[0], DeadLetterReason.Rejected, description);
+            DeadLetterAndRelease(batch[0], DeadLetterReason.Rejected, WithProblemCode(attempt));
+            await NotifyRejectedAsync(attempt.Rejection, cancellationToken).ConfigureAwait(false);
             return true;
         }
 
@@ -335,7 +337,8 @@ internal sealed class DrainWorker(
             using var content = new ByteArrayContent(body);
             content.Headers.ContentType = new MediaTypeHeaderValue("application/json", "utf-8");
             using var response = await client.PostAsync(endpoint, content, cancellationToken).ConfigureAwait(false);
-            return Classify(response, endpoint);
+            var attempt = Classify(response, endpoint);
+            return attempt with { Rejection = await RejectionOfAsync(response, attempt, batch.Count, cancellationToken).ConfigureAwait(false) };
         }
         catch (Exception ex) when (ex is (HttpRequestException or TaskCanceledException) && !cancellationToken.IsCancellationRequested)
         {
@@ -343,6 +346,63 @@ internal sealed class DrainWorker(
             // timeout. None of it says anything about the record, so it stays for another attempt;
             // a cancellation of our own token is the host stopping and belongs to the caller.
             return new(DeliveryOutcome.Undelivered, $"the request to the audit endpoint failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// What a rejection of a single record said, for the rejection observers; <see langword="null"/>
+    /// without reading the body unless the record was rejected on its own and someone listens, so
+    /// a stored record or a batch never pays for it (ADR 0029).
+    /// </summary>
+    private async ValueTask<AuditRejection?> RejectionOfAsync(HttpResponseMessage response, DeliveryAttempt attempt, int records, CancellationToken cancellationToken)
+    {
+        // Completes synchronously, without allocating, on every answer that is not one of these.
+        if (attempt.Outcome != DeliveryOutcome.Rejected || records != 1 || _rejectionObservers.Length == 0)
+        {
+            return null;
+        }
+
+        return new AuditRejection((int)response.StatusCode, await RejectionProblemCode.ReadAsync(response.Content, cancellationToken).ConfigureAwait(false));
+    }
+
+    /// <summary>The dead-letter description of a rejection, naming the problem code when one was read.</summary>
+    private static string WithProblemCode(DeliveryAttempt attempt) =>
+        attempt.Rejection?.ProblemCode is { } code ? $"{attempt.Description}, problem code {code}" : attempt.Description;
+
+    /// <summary>Tells each rejection observer, one after another, about a record rejected on its own.</summary>
+    private async Task NotifyRejectedAsync(AuditRejection? rejection, CancellationToken cancellationToken)
+    {
+        if (rejection is not { } told)
+        {
+            return;
+        }
+
+        foreach (var observer in _rejectionObservers)
+        {
+            await NotifyAsync(observer, told, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Calls one observer, bounded by <see cref="EncryptedSpoolOptions.DeliveryTimeout"/> and by the
+    /// host stopping. Whatever it throws, or a run past its time, is logged and the cycle carries on:
+    /// an observer informs, and a broken one must not hold up the audit trail behind it.
+    /// </summary>
+    private async Task NotifyAsync(IAuditRejectionObserver observer, AuditRejection rejection, CancellationToken cancellationToken)
+    {
+        using var timeout = new CancellationTokenSource(_options.DeliveryTimeout, timeProvider);
+        using var window = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
+
+        try
+        {
+            await observer.OnRejectedAsync(rejection, window.Token).AsTask().WaitAsync(window.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            logger.LogWarning(
+                ex,
+                "The audit rejection observer {Observer} failed or ran past {Timeout} on a record rejected with status {StatusCode}. The record is dead-lettered either way, and the drain cycle carries on.",
+                observer.GetType().FullName, _options.DeliveryTimeout, rejection.StatusCode);
         }
     }
 
@@ -455,8 +515,11 @@ internal sealed class DrainWorker(
         return true;
     }
 
-    /// <summary>What the audit endpoint made of one record, and the words for it.</summary>
-    internal readonly record struct DeliveryAttempt(DeliveryOutcome Outcome, string Description);
+    /// <summary>
+    /// What the audit endpoint made of one record, and the words for it; for a single record
+    /// rejected while rejection observers are registered, also what the rejection said.
+    /// </summary>
+    internal readonly record struct DeliveryAttempt(DeliveryOutcome Outcome, string Description, AuditRejection? Rejection = null);
 
     /// <summary>One delivery the plan calls for: a batch of readable records, or a faulted file standing on its own.</summary>
     internal readonly record struct DrainStep(IReadOnlyList<SpoolEntry> Batch, SpoolEntry? Faulted)
