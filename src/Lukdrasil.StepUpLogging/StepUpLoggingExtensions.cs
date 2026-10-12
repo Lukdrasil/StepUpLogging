@@ -317,9 +317,15 @@ public static class StepUpLoggingExtensions
                 ? []
                 : (opts.NeverStepUpCategories ?? []).Where(c => !string.IsNullOrWhiteSpace(c)).ToArray();
 
-            // Pre-error buffer: holds events StepUpSink did not export, at/above StepUpLevel per trace; flushes to bypass logger on Error/Fatal.
+            // Pre-error buffer: holds events StepUpSink did not export, at/above StepUpLevel per trace, except excluded
+            // categories below Warning; flushes to bypass logger on Error/Fatal.
             var preErrorBuffer = opts.EnablePreErrorBuffering
-                ? new PreErrorBufferSink(bypassLogger, opts.PreErrorBufferSize, opts.PreErrorMaxContexts, stepUpController.StepUpLevel)
+                ? new PreErrorBufferSink(
+                    bypassLogger,
+                    opts.PreErrorBufferSize,
+                    opts.PreErrorMaxContexts,
+                    stepUpController.StepUpLevel,
+                    (opts.PreErrorBufferExcludeCategories ?? []).Where(c => !string.IsNullOrWhiteSpace(c)).ToArray())
                 : null;
 
             var floors = (opts.CategoryFloors ?? [])
