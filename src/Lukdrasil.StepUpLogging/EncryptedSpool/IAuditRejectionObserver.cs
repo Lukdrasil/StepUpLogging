@@ -8,9 +8,10 @@ namespace Lukdrasil.StepUpLogging.Audit.EncryptedSpool;
 /// <remarks>
 /// Informs only: the record is already dead-lettered and nothing here can retry or re-seal it, since
 /// the spool holds sealed bytes. Register as a thread-safe singleton; the drain worker is a hosted
-/// singleton, so a scoped registration would be a captive dependency. The call is bounded by
-/// <see cref="EncryptedSpoolOptions.DeliveryTimeout"/>, and an exception it throws is logged and
-/// never stops the drain cycle.
+/// singleton, so a scoped registration would be a captive dependency. The asynchronous part of the
+/// call is bounded by <see cref="EncryptedSpoolOptions.DeliveryTimeout"/>; work done synchronously
+/// before the first await is not, so an implementation must not block. An exception it throws is
+/// logged and does not stop the drain cycle, unless the host is stopping.
 /// </remarks>
 public interface IAuditRejectionObserver
 {
