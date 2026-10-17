@@ -7,84 +7,143 @@
 
 ## Features
 
-✅ **Flexible step-up modes** - `Auto` (production), `AlwaysOn` (dev), `Disabled` (minimal)  
-✅ **Automatic step-up on errors** - Triggers detailed logging when `Error` level logs are detected  
-✅ **Pre-error buffering** - In-memory per-request log buffering, flushed when errors occur  
-✅ **OpenTelemetry-first** - Primary export via OTLP with optional console/file sinks  
-✅ **OpenTelemetry Activities** - Built-in distributed tracing with 6+ instrumentation points (default-enabled)  
-✅ **Minimal overhead** - 18-29% faster than standard Serilog in baseline tests  
-✅ **Request body capture** - Optional capture during step-up with configurable size limits  
-✅ **Sensitive data redaction** - Regex-based redaction for the request path, query strings, route values and request bodies, with an opt-in sweep of application log properties too  
-✅ **OpenTelemetry metrics** - Built-in metrics for monitoring step-up triggers and duration  
-✅ **Manual control** - Expose endpoints to manually trigger or check step-up status  
+✅ **Step-up on errors** - Exports `Warning` and above normally; an `Error` raises the level to `Information` for 3 minutes  
+✅ **Pre-error buffering** - The events of a failing request that were not exported are flushed with its error  
+✅ **Quiet framework logs** - ASP.NET Core, HttpClient, Polly, EF Core and Npgsql progress lines stay at `Warning` by default  
+✅ **OpenTelemetry-first** - OTLP export when a collector is configured, optional console (JSON or one-line text) and file sinks  
+✅ **OpenTelemetry Activities and metrics** - Spans and counters for step-up, buffering and request logging  
+✅ **Request logging** - Request completion events, optional per-request summary and request body capture  
+✅ **Sensitive data redaction** - Sensitive headers always, plus regex redaction of paths, query strings, route values and bodies, and optionally of application log properties  
+✅ **Fails fast on bad configuration** - Invalid values stop the host with the key named; unknown keys are warned at startup  
+✅ **Audit logging** - Optional encrypted, durable audit spool  
 ✅ **.NET 10.0** - Built with modern C# 14 features
 
-## Quick Start
+## Getting started
 
-### Installation
+### 1. Install
 
 ```bash
 dotnet add package Lukdrasil.StepUpLogging
 ```
 
-### Basic Setup
-
-**Option 1: Configuration from appsettings.json (recommended)**
+### 2. Register
 
 ```csharp
 using Lukdrasil.StepUpLogging;
 
 var builder = WebApplication.CreateBuilder(args);
-
-// Automatically loads configuration from appsettings.json "SerilogStepUp" section
 builder.AddStepUpLogging();
 
 var app = builder.Build();
 app.UseStepUpRequestLogging();
+// UseStaticFiles, UseRouting, authentication, endpoints...
 app.Run();
 ```
 
-**Option 2: Programmatic configuration**
+`AddStepUpLogging()` replaces the host's logging with Serilog and reads the `SerilogStepUp` configuration
+section. `UseStepUpRequestLogging()` writes one completion event per request; call it right after
+`builder.Build()`, before `UseStaticFiles`, `UseRouting`, authentication and anything that reads the request
+body or ends the request early, because it sees only the requests that reach it. Log through `ILogger<T>`
+as usual.
 
-```csharp
-using Lukdrasil.StepUpLogging;
+### 3. Set what your deployment needs
 
-var builder = WebApplication.CreateBuilder(args);
+Nothing is required. What you set depends on where the logs go:
 
-builder.AddStepUpLogging(opts =>
-{
-    opts.Mode = StepUpMode.Auto;
-    opts.BaseLevel = "Warning";
-    opts.StepUpLevel = "Debug";
-    opts.EnableConsoleLogging = builder.Environment.IsDevelopment();
-});
+| Deployment | Set | Why |
+|---|---|---|
+| Logs go to an OpenTelemetry collector | `OTEL_EXPORTER_OTLP_ENDPOINT`, and `OTEL_SERVICE_NAME` | The endpoint turns OTLP export on; the service name identifies the app. Aspire sets both. Add `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf` for an HTTP collector and `OTEL_EXPORTER_OTLP_HEADERS` for authentication |
+| Logs are read from the console (container stdout) | `SerilogStepUp:EnableConsoleLogging` = `true` | No output is on by default without a collector. Add `ConsoleFormat` = `Text` for one readable line per event instead of JSON |
+| The app runs behind a reverse proxy you control | `SerilogStepUp:TrustForwardedHeaders` = `true`, with `ForwardedHeadersMiddleware` | Otherwise `ClientIp` is the proxy's address |
+| The app is a reverse proxy or BFF | `SerilogStepUp:TreatServerErrorStatusAsError` = `false` | A 5xx relayed from a backend then does not step the app up |
 
-var app = builder.Build();
-app.UseStepUpRequestLogging();
-app.Run();
+At startup the library writes one line with what it ended up using, for example
+`StepUp logging: Mode Auto, BaseLevel Warning, StepUpLevel Information for 180 s; outputs OTLP http://collector:4317; framework defaults Recommended; request summary off`.
+Check it after the first deployment. `outputs none` means no log leaves the process.
+
+### What you get by default
+
+| Behaviour | Default |
+|---|---|
+| Normal export | `Warning`, `Error` and `Fatal` from every category |
+| On an `Error` or `Fatal` | Every category exports `Information` and above for 180 s. Each further error restarts the 180 s, with no upper limit |
+| Events before an error | Each request's events at `Information` and above that were not exported are held in memory (100 per request, 1024 requests) and exported with the request's error; otherwise dropped |
+| Framework categories | ASP.NET Core hosting, routing, MVC, HTTP results and static files, HttpClient, Polly, EF Core commands and infrastructure, and Npgsql commands export at `Warning` and above even during a step-up, and are not flushed by an error. CORS and the YARP forwarder export at `Warning` but are flushed |
+| OTLP export | On when `OTEL_EXPORTER_OTLP_ENDPOINT` is set, off otherwise |
+| Console and file output | Off |
+| Request completion event | One per request at `Information`, `Warning` for 4xx, `Error` for 5xx and unhandled exceptions; exported like any other event, so normally only from `Warning` |
+| Per-request summary | Off |
+| Request body capture | Off |
+| Excluded paths | `/healthz`, `/metrics`, `/health` |
+| Redaction | `Authorization`, `Proxy-Authorization`, `Cookie`, `X-API-Key`, `X-Auth-Token`, `X-Access-Token` and other credential headers always; no regex patterns |
+| Client IP | The connection's remote address; `X-Forwarded-For` is logged as `ForwardedFor` but not trusted |
+| Enrichment | `Application`, `Environment`, `MachineName`, trace and span ids, structured exception details |
+| Invalid configuration | The host does not start; the error names each failing key and its value. Unknown keys under `SerilogStepUp` are logged as warnings |
+
+### Typical setups
+
+**Production with a collector.** No `SerilogStepUp` settings:
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+OTEL_SERVICE_NAME=orders-api
+OTEL_RESOURCE_ATTRIBUTES=deployment.environment=production
 ```
 
-**Option 3: Mixed (appsettings.json + programmatic override)**
+**Container that logs to stdout only:**
+
+```json
+{ "SerilogStepUp": { "EnableConsoleLogging": true, "ConsoleFormat": "Text" } }
+```
+
+**Local development, everything visible:**
+
+```json
+{
+  "SerilogStepUp": {
+    "Mode": "AlwaysOn",
+    "StepUpLevel": "Debug",
+    "EnableConsoleLogging": true,
+    "ConsoleFormat": "Text"
+  }
+}
+```
+
+Put it in `appsettings.Development.json` so production keeps the defaults.
+
+**Aspire.** Call `AddStepUpLogging()` from `AddServiceDefaults()` after `ConfigureOpenTelemetry()`, and do not also
+call `AddSerilog`. When the OpenTelemetry SDK is already registered, the library leaves the exporter setup to it.
 
 ```csharp
-// appsettings.json is loaded first, then overridden by code
+public static TBuilder AddServiceDefaults<TBuilder>(this TBuilder builder)
+    where TBuilder : IHostApplicationBuilder
+{
+    builder.ConfigureOpenTelemetry();
+    builder.AddDefaultHealthChecks();
+    builder.Services.AddServiceDiscovery();
+    builder.AddStepUpLogging();
+    return builder;
+}
+```
+
+## Changing the defaults
+
+### Where options are set
+
+Options bind from the `SerilogStepUp` section, so `appsettings.json`, `appsettings.{Environment}.json` and
+environment variables all work. An environment variable joins the path with `__`
+(`SerilogStepUp__DurationSeconds=300`, `SerilogStepUp__ExcludePaths__0=/health`) and wins over the JSON files.
+Values set in code win over configuration:
+
+```csharp
 builder.AddStepUpLogging(opts =>
 {
-    // Override only specific settings
-    if (builder.Environment.IsProduction())
-    {
-        opts.Mode = StepUpMode.Auto;
-        opts.EnableConsoleLogging = false;
-    }
-    else
-    {
-        opts.Mode = StepUpMode.AlwaysOn;
-        opts.EnableConsoleLogging = true;
-    }
+    opts.Mode = builder.Environment.IsDevelopment() ? StepUpMode.AlwaysOn : StepUpMode.Auto;
 });
 ```
 
-To set options and extend the Serilog configuration in one call, pass both callbacks:
+A second callback extends the Serilog configuration. It turns off the optimisation that skips enriching events
+nobody exports, so use it only when you need it:
 
 ```csharp
 builder.AddStepUpLogging(
@@ -92,250 +151,102 @@ builder.AddStepUpLogging(
     (services, lc) => lc.Enrich.WithProperty("Region", "eu-west"));
 ```
 
-**Option 4: Aspire ServiceDefaults Integration**
+Levels are written as names: `Verbose`, `Debug`, `Information`, `Warning`, `Error`, `Fatal`. A list option you
+configure replaces its default list, and `[]` empties it.
 
-Call `AddStepUpLogging()` from `AddServiceDefaults()`. It registers Serilog itself, so do not also call `AddSerilog`. When `ConfigureOpenTelemetry()` runs first and registers the OpenTelemetry SDK, `AddStepUpLogging()` leaves the exporter setup to it.
+These settings have no effect:
 
-```csharp
-// In ServiceDefaults/Extensions.cs
-public static TBuilder AddServiceDefaults<TBuilder>(this TBuilder builder)
-    where TBuilder : IHostApplicationBuilder
-{
-    builder.ConfigureOpenTelemetry();
-    builder.AddDefaultHealthChecks();
-    builder.Services.AddServiceDiscovery();
+- `Logging:LogLevel`: Serilog replaces the `Microsoft.Extensions.Logging` providers and their filters. Use
+  `BaseLevel`, `CategoryFloors` and `FrameworkCategoryDefaults`.
+- `Serilog:MinimumLevel:Default`: the root logger always runs at `Verbose` so the buffer and the trigger see every
+  event. `Serilog:MinimumLevel:Override` entries still apply, and drop events before the buffer sees them.
+- `OtlpEndpoint` and other OTLP keys under `SerilogStepUp`: the OTLP settings are the `OTEL_*` environment variables.
 
-    builder.AddStepUpLogging(opts =>
-    {
-        opts.Mode = builder.Environment.IsDevelopment()
-            ? StepUpMode.AlwaysOn
-            : StepUpMode.Auto;
-    });
+### What a change means in production
 
-    return builder;
-}
+**Step-up**
 
-// In your API Program.cs
-var builder = WebApplication.CreateBuilder(args);
-builder.AddServiceDefaults(); // Includes StepUp logging
+| Option | Default | Effect of changing it in production |
+|---|---|---|
+| `Mode` | `Auto` | `Disabled` never steps up: you keep only `Warning` and above plus the events flushed by an error, at the lowest volume. `AlwaysOn` exports `StepUpLevel` all the time and ignores the framework defaults and `NeverStepUpCategories`: volume grows with traffic, so keep it for development. `Diagnostic` exports `DiagnosticLevel` (`Debug`) for `DiagnosticDurationMinutes` (30, at most 120) after each start, then runs as `Auto`; use it for one deployment while investigating |
+| `BaseLevel` | `Warning` | `Information` exports every application `Information` event all the time, a large and steady volume increase. `Error` hides warnings until something fails |
+| `StepUpLevel` | `Information` | `Debug` exports `Debug` from every category during a step-up window, and the buffer then holds `Debug` too, so an incident produces much more data and the buffer uses more memory |
+| `DurationSeconds` | `180` | Longer keeps the detail on after an incident and costs more volume; shorter saves volume but the next error after the window has less context |
+| `MaxContinuousStepUpSeconds` | `0` (no cap) | Set it, at least `DurationSeconds`, when a sustained failure must not keep the detail on for hours. After the cap, triggers are ignored for `StepUpCooldownSeconds` (`300`) |
+| `NeverTriggerCategories` | none | Errors from listed categories still export and flush their request, but do not raise the level for everyone. Use it for a dependency that fails often and loudly |
 
-var app = builder.Build();
-app.UseStepUpRequestLogging(); // Add request logging middleware
-app.Run();
-```
+**Noise control**
 
-### Middleware order
+| Option | Default | Effect of changing it in production |
+|---|---|---|
+| `FrameworkCategoryDefaults` | `Recommended` | `None` brings back framework `Information` lines (request started and finished, endpoint executing, every HttpClient and SQL call) in every step-up window and in every error flush, typically several lines per request. Dashboards built on those lines need it |
+| `CategoryFloors` | none | `"MyApp.Chatty": "Warning"` keeps a category at `Warning` even during a step-up. A floor never goes above `Warning`, so no error is hidden. A key also overrides the framework default it matches |
+| `PreErrorBufferExcludeCategories` | none | Listed categories are never flushed by an error, only exported live |
+| `AlwaysExportCategories` | none | Listed categories export at every level all the time; volume grows with their traffic |
 
-Call `app.UseStepUpRequestLogging()` right after `builder.Build()`, before `UseStaticFiles`, `UseRouting`, authentication and any middleware that reads the request body or ends the request early. It measures and summarises only the requests that reach it, and it must enable body buffering before anything reads the body.
+See [Category Control](#category-control) for how the category options combine.
 
-### Settings that have no effect
+**Outputs**
 
-- `Logging:LogLevel`: Serilog replaces the `Microsoft.Extensions.Logging` providers and their filters. Use `SerilogStepUp:BaseLevel`, `CategoryFloors` and `FrameworkCategoryDefaults` instead.
-- `Serilog:MinimumLevel:Default`: the root logger always runs at `Verbose` so the pre-error buffer and the trigger see every event; `BaseLevel` decides what is exported. `Serilog:MinimumLevel:Override` entries still apply and drop events before the buffer sees them.
-- OTLP endpoint, protocol, headers and resource attributes are not `SerilogStepUp` options. Set `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES`.
+| Option | Default | Effect of changing it in production |
+|---|---|---|
+| `EnableOtlpExporter` | On when `OTEL_EXPORTER_OTLP_ENDPOINT` is set | `true` without the variable exports to `http://localhost:4317`, for a collector sidecar. `false` stops OTLP export even when the variable is set |
+| `EnableConsoleLogging` | `false` | `true` writes every exported event to stdout as well. With OTLP on and a platform that also ships stdout, each event is stored twice |
+| `ConsoleFormat` | `Json` | `Text` writes one readable line per event with the trace id; log processors that parse JSON from stdout lose the structured properties. OTLP and file output stay structured |
+| `ConsoleTextProperties` | `["Jti"]` | Properties written after the message in `Text` format, so identity stays on the console without OTLP |
 
-### Startup report
+The file sink is enabled by the `logFilePath` parameter of `AddStepUpLogging`: daily files, 30 kept.
+
+**Requests**
+
+| Option | Default | Effect of changing it in production |
+|---|---|---|
+| `AlwaysLogRequestSummary` | `false` | `true` exports one summary per request at `RequestSummaryLevel` whatever the level: an access log whose volume equals your traffic |
+| `CaptureRequestBody` | `false` | `true` adds POST, PUT and PATCH bodies, up to `MaxBodyCaptureBytes` characters (16384), while stepped up or when the response is 5xx. Bodies can carry personal data: add `RedactionRegexes` for it. Each request body is buffered in memory |
+| `ExcludePaths` | `/healthz`, `/metrics`, `/health` | A configured list replaces these, so list them again if you still want them excluded |
+| `TrustForwardedHeaders` | `false` | `true` takes `ClientIp` from `X-Forwarded-For`, which any client can forge unless your proxy overwrites it |
+| `TreatServerErrorStatusAsError` | `true` | `false` logs a 5xx without an exception at `Warning`, so it no longer steps up or flushes. Unhandled exceptions are still `Error` |
+
+**Buffer, redaction and enrichment**
+
+| Option | Default | Effect of changing it in production |
+|---|---|---|
+| `EnablePreErrorBuffering` | `true` | `false` saves the buffer memory but an error then arrives without the events that led to it |
+| `PreErrorBufferSize`, `PreErrorMaxContexts` | `100`, `1024` | The memory bound: at most size × contexts held events. Too small loses the oldest events of a long request or the requests of a busy instance |
+| `RedactionRegexes` | none | Each pattern is applied to request paths, query strings, route values, headers and bodies, at a CPU cost per request |
+| `RedactLogEventProperties` | `false` | `true` also applies the patterns to the string properties of every exported application event, at a CPU cost per event |
+| `ServiceVersion`, `ServiceInstanceId` | none | Added to every event when set |
+| `EnrichWithThreadId`, `EnrichWithProcessId`, `EnrichWithCallStack` | `false` | More properties on every event; call stacks are expensive |
+
+Every option, with its default, is listed in [Configuration Options](#configuration-options).
+
+### OpenTelemetry environment variables
+
+| Environment variable | Purpose | Default |
+|---|---|---|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Collector endpoint; setting it turns OTLP export on | none (OTLP export off) |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | `grpc` or `http/protobuf` | `grpc` |
+| `OTEL_EXPORTER_OTLP_HEADERS` | Headers, `key1=value1,key2=value2` | none |
+| `OTEL_SERVICE_NAME` | Service name | `unknown_service:<process name>` |
+| `OTEL_RESOURCE_ATTRIBUTES` | Resource attributes, `key1=value1,key2=value2` | none |
+
+Keys and values in `OTEL_EXPORTER_OTLP_HEADERS` and `OTEL_RESOURCE_ATTRIBUTES` are **percent-decoded** per the
+OpenTelemetry specification, so `Authorization=Basic%20QWxhZGRpbg%3D%3D` reaches the collector as
+`Basic QWxhZGRpbg==`. A literal comma inside a value cannot be written in this format.
+
+### Startup report and validation
 
 When the logger is built, the library writes through its own output, whatever the current level:
 
-- One `Information` line with the effective configuration, for example
-  `StepUp logging: Mode Auto, BaseLevel Warning, StepUpLevel Information for 180 s; outputs OTLP http://collector:4317, Console Text; framework defaults Recommended; request summary off`.
-  The OTLP endpoint is shown as scheme, host and port only.
-- A `Warning` for each key under `SerilogStepUp` that matches no option, such as a misspelled `BaseLvel`
-  or `OtlpEndpoint`. The key is ignored.
+- One `Information` line with the effective configuration. The OTLP endpoint is shown as scheme, host and port only.
+- A `Warning` for each key under `SerilogStepUp` that matches no option, such as a misspelled `BaseLvel` or
+  `OtlpEndpoint`. The key is ignored.
 - A `Warning` for an option set to a value that has no effect: `ConsoleFormat` with `EnableConsoleLogging`
   `false`, or `RedactLogEventProperties` with no `RedactionRegexes`.
 
-An invalid value stops the host at startup with an `OptionsValidationException` that names each failing key and the
-value it got, for example `SerilogStepUp:BaseLevel must be a Serilog level name (Verbose, Debug, Information, Warning, Error, Fatal), got 'Warnign'.`
-Levels must be names, and each `RedactionRegexes` entry must be a valid regular expression.
-
-### Configuration (appsettings.json)
-
-```json
-{
-  "SerilogStepUp": {
-    "Mode": "Auto",
-    "BaseLevel": "Warning",
-    "StepUpLevel": "Information",
-    "DurationSeconds": 180,
-
-    "AlwaysLogRequestSummary": true,
-    "RequestSummaryLevel": "Information",
-
-    "EnableOtlpExporter": true,
-    "EnableConsoleLogging": false,
-    "CaptureRequestBody": true,
-    "MaxBodyCaptureBytes": 16384,
-    "ExcludePaths": ["/health", "/metrics"],
-    "RedactionRegexes": [
-      "password=[^&]*",
-      "authorization:.*"
-    ],
-
-    "EnablePreErrorBuffering": true,
-    "PreErrorBufferSize": 100,
-    "PreErrorMaxContexts": 1024,
-
-    "EnrichWithExceptionDetails": true,
-    "EnrichWithThreadId": true,
-    "EnrichWithProcessId": true,
-    "EnrichWithMachineName": true
-  }
-}
-```
-
-### Production configuration via environment variables
-
-Every `SerilogStepUp` key auto-binds from an environment variable using .NET's default
-configuration provider, which maps configuration key-path segments to environment variable
-names by joining them with a double underscore (`__`). No code change is required — the
-`AddOptions<StepUpLoggingOptions>().Bind(...)` call inside `AddStepUpLogging` picks these up
-automatically, exactly like the `OTEL_*` variables documented below.
-
-This is the standard way to configure the library in Docker / Kubernetes, where you would
-otherwise not ship an `appsettings.json`:
-
-```bash
-SerilogStepUp__DurationSeconds=300
-SerilogStepUp__StepUpLevel=Debug
-SerilogStepUp__EnableConsoleLogging=true
-SerilogStepUp__CaptureRequestBody=true
-```
-
-Nested keys use the same convention (each path segment separated by `__`), e.g.
-`SerilogStepUp__ExcludePaths__0=/health`.
-
-### Request Summary behaviour
-
-When "AlwaysLogRequestSummary" is enabled, the middleware emits a single structured summary event at the configured "RequestSummaryLevel" for every completed HTTP request. The summary contains:
-
-- **HTTP method** - GET, POST, etc.
-- **Request path** - URL path (trailing slashes normalized, redacted based on `RedactionRegexes`)
-- **Response status code** - 200, 404, 500, etc.
-- **Elapsed milliseconds** - Request duration
-- **Trace ID** - Optional trace/correlation id
-- **UserAgent** - Client User-Agent header (for client identification), redacted via `RedactionRegexes`
-- **ClientIp** - Client IP address from `Connection.RemoteIpAddress` by default (see [Security](#security)); when `TrustForwardedHeaders` is enabled, the first `X-Forwarded-For` entry instead
-- **ForwardedFor** - The raw `X-Forwarded-For` header value (redacted), present only when the header is sent
-
-Summary events are marked with the "IsRequestSummary" property and are processed by the library's SummarySink so they are exported independently of the StepUp level switch (base Warning) and the normal step-up flow.
-
-#### Example Request Summary Log
-
-```json
-{
-  "Timestamp": "2025-01-08T12:34:56.789Z",
-  "Level": "Information",
-  "MessageTemplate": "Request finished {Method} {Path} {StatusCode} {ElapsedMs}",
-  "Method": "POST",
-  "Path": "/api/users",
-  "StatusCode": 201,
-  "ElapsedMs": 45.23,
-  "UserAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-  "ClientIp": "198.51.100.100",
-  "ForwardedFor": "203.0.113.42, 198.51.100.100",
-  "IsRequestSummary": true
-}
-```
-
-#### Which requests count as errors
-
-The request-completion event's level is what trips the step-up and flushes the pre-error buffer,
-so it is deliberately narrow:
-
-| Outcome | Level |
-|---|---|
-| Excluded path (`ExcludePaths`) | Verbose |
-| Client aborted the connection (closed tab, reload, dropped connection) | Information |
-| Unhandled exception | Error |
-| Status >= 500, no exception | Error, or Warning when `TreatServerErrorStatusAsError` is `false` |
-| Status >= 400 | Warning |
-| Otherwise | Information |
-
-An aborted request is logged at Information rather than Error because a disconnect is not an
-application failure — otherwise any caller, on an anonymous route included, could flush the buffer
-and step the instance up just by disconnecting. A genuine exception on a request the client also
-aborted is still Error.
-
-Behind a reverse proxy or BFF, set `TreatServerErrorStatusAsError` to `false`: a 5xx relayed from a
-backend then logs at Warning and stays out of the trigger path, while your own unhandled exceptions
-still log at Error.
-
-#### IP Address Detection
-
-By default the library takes `ClientIp` from `HttpContext.Connection.RemoteIpAddress` and
-**does not** trust the `X-Forwarded-For` (XFF) header, because that header is client-supplied
-and spoofable. When XFF is present, its raw value is still logged separately as `ForwardedFor`
-(redacted) for diagnostics.
-
-1. **Default (`TrustForwardedHeaders: false`)** - `ClientIp` = `Connection.RemoteIpAddress`; XFF is ignored for `ClientIp` but surfaced as `ForwardedFor`.
-2. **`TrustForwardedHeaders: true`** - `ClientIp` = first `X-Forwarded-For` entry when present (v2 behavior). Only enable this behind a reverse proxy you control **and** with `ForwardedHeadersMiddleware` configured. See [Security](#security).
-3. **Graceful degradation** - Omits `ClientIp` if detection fails.
-
-To customise where summaries are written, provide a dedicated summary logger in DI when calling AddStepUpLogging, or configure the default sinks; the library enforces a single DI-managed summary logger to avoid unmanaged CreateLogger instances.
-
-
-### OpenTelemetry Configuration
-
-StepUpLogging uses standard OpenTelemetry environment variables for OTLP configuration. OTLP endpoint and protocol are configured exclusively via environment variables and cannot be overridden programmatically.
-
-OTLP export is on only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set, so an app without a collector needs no setting to turn it off. To export to the default `http://localhost:4317` without the variable, for example to a sidecar, set `EnableOtlpExporter` to `true`.
-
-| Environment Variable | Purpose | Default |
-|---|---|---|
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP collector endpoint; setting it turns OTLP export on | none (OTLP export off) |
-| `OTEL_EXPORTER_OTLP_PROTOCOL` | Protocol: `grpc` or `http/protobuf` | `grpc` |
-| `OTEL_EXPORTER_OTLP_HEADERS` | Headers (format: `key1=value1,key2=value2`) | (none) |
-| `OTEL_RESOURCE_ATTRIBUTES` | Resource attributes (format: `key1=value1,key2=value2`) | (none) |
-
-Keys and values in `OTEL_EXPORTER_OTLP_HEADERS` and `OTEL_RESOURCE_ATTRIBUTES` are
-**percent-decoded** per the OTel specification, so an encoded value such as
-`Authorization=Basic%20QWxhZGRpbg%3D%3D` reaches the collector as `Basic QWxhZGRpbg==`. A
-literal comma inside a value is not representable in this format (it delimits pairs).
-
-**Example with environment variables:**
-
-```bash
-# Docker or Kubernetes deployment
-export OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
-export OTEL_EXPORTER_OTLP_PROTOCOL=grpc
-export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer xyz,X-Custom=value"
-export OTEL_RESOURCE_ATTRIBUTES="service.name=MyApi,deployment.environment=production"
-
-dotnet MyApp.dll
-```
-
-### Step-Up Modes
-
-**`Auto` (default - Production)**
-- Logs at `BaseLevel` (Warning) during normal operation
-- Automatically steps up to `StepUpLevel` (Information) when errors occur
-- Returns to `BaseLevel` after `DurationSeconds` (default 180 s, 3 minutes). Each further error restarts the window,
-  so continuous errors keep the step-up on; set `MaxContinuousStepUpSeconds` to cap it.
-
-**`AlwaysOn` (Development)**
-- Always logs at `StepUpLevel` (Information)
-- Useful for local development to see all detailed logs
-- Step-up triggers are ignored (already at max verbosity)
-
-**`Disabled` (Minimal Logging)**
-- Always logs at `BaseLevel` (Warning)
-- Step-up mechanism is completely disabled
-- Error triggers are ignored
-
-**`Diagnostic`** logs at `DiagnosticLevel` for `DiagnosticDurationMinutes` after startup, then runs as `Auto`; see [Diagnostic mode](#diagnostic-mode).
-
-```json
-// Development configuration example
-{
-  "SerilogStepUp": {
-    "Mode": "AlwaysOn",
-    "StepUpLevel": "Debug",
-    "EnableConsoleLogging": true
-  }
-}
-```
+An invalid value stops the host at startup with an `OptionsValidationException` that names each failing key and
+the value it got, for example
+`SerilogStepUp:BaseLevel must be a Serilog level name (Verbose, Debug, Information, Warning, Error, Fatal), got 'Warnign'.`
 
 ## Request Logging
 
@@ -370,6 +281,76 @@ The `UseStepUpRequestLogging()` middleware enriches each request with detailed c
   "RequestBody": "{\"name\": \"John Doe\", \"password\": \"[REDACTED]\"}"
 }
 ```
+
+### Request summary
+
+When "AlwaysLogRequestSummary" is enabled, the middleware emits a single structured summary event at the configured "RequestSummaryLevel" for every completed HTTP request. The summary contains:
+
+- **HTTP method** - GET, POST, etc.
+- **Request path** - URL path (trailing slashes normalized, redacted based on `RedactionRegexes`)
+- **Response status code** - 200, 404, 500, etc.
+- **Elapsed milliseconds** - Request duration
+- **Trace ID** - Optional trace/correlation id
+- **UserAgent** - Client User-Agent header (for client identification), redacted via `RedactionRegexes`
+- **ClientIp** - Client IP address from `Connection.RemoteIpAddress` by default (see [Security](#security)); when `TrustForwardedHeaders` is enabled, the first `X-Forwarded-For` entry instead
+- **ForwardedFor** - The raw `X-Forwarded-For` header value (redacted), present only when the header is sent
+
+Summary events are marked with the "IsRequestSummary" property and are processed by the library's SummarySink so they are exported independently of the StepUp level switch (base Warning) and the normal step-up flow.
+
+### Example Request Summary Log
+
+```json
+{
+  "Timestamp": "2025-01-08T12:34:56.789Z",
+  "Level": "Information",
+  "MessageTemplate": "Request finished {Method} {Path} {StatusCode} {ElapsedMs}",
+  "Method": "POST",
+  "Path": "/api/users",
+  "StatusCode": 201,
+  "ElapsedMs": 45.23,
+  "UserAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+  "ClientIp": "198.51.100.100",
+  "ForwardedFor": "203.0.113.42, 198.51.100.100",
+  "IsRequestSummary": true
+}
+```
+
+### Which requests count as errors
+
+The request-completion event's level is what trips the step-up and flushes the pre-error buffer,
+so it is deliberately narrow:
+
+| Outcome | Level |
+|---|---|
+| Excluded path (`ExcludePaths`) | Verbose |
+| Client aborted the connection (closed tab, reload, dropped connection) | Information |
+| Unhandled exception | Error |
+| Status >= 500, no exception | Error, or Warning when `TreatServerErrorStatusAsError` is `false` |
+| Status >= 400 | Warning |
+| Otherwise | Information |
+
+An aborted request is logged at Information rather than Error because a disconnect is not an
+application failure — otherwise any caller, on an anonymous route included, could flush the buffer
+and step the instance up just by disconnecting. A genuine exception on a request the client also
+aborted is still Error.
+
+Behind a reverse proxy or BFF, set `TreatServerErrorStatusAsError` to `false`: a 5xx relayed from a
+backend then logs at Warning and stays out of the trigger path, while your own unhandled exceptions
+still log at Error.
+
+### IP Address Detection
+
+By default the library takes `ClientIp` from `HttpContext.Connection.RemoteIpAddress` and
+**does not** trust the `X-Forwarded-For` (XFF) header, because that header is client-supplied
+and spoofable. When XFF is present, its raw value is still logged separately as `ForwardedFor`
+(redacted) for diagnostics.
+
+1. **Default (`TrustForwardedHeaders: false`)** - `ClientIp` = `Connection.RemoteIpAddress`; XFF is ignored for `ClientIp` but surfaced as `ForwardedFor`.
+2. **`TrustForwardedHeaders: true`** - `ClientIp` = first `X-Forwarded-For` entry when present (v2 behavior). Only enable this behind a reverse proxy you control **and** with `ForwardedHeadersMiddleware` configured. See [Security](#security).
+3. **Graceful degradation** - Omits `ClientIp` if detection fails.
+
+To customise where summaries are written, provide a dedicated summary logger in DI when calling AddStepUpLogging, or configure the default sinks; the library enforces a single DI-managed summary logger to avoid unmanaged CreateLogger instances.
+
 
 ### Sensitive Header Redaction
 
@@ -1003,79 +984,6 @@ ordinary SSDs, more on network storage, and it lands **on the business path** �
 `AuditAsync`, not a background thread. Audit volume is usually small relative to overall traffic
 (mutating operations, not every request), but account for it: nobody will guess that audit is the
 source of the latency until they measure it.
-
-## Common Scenarios
-
-### Production with Auto Step-Up
-
-```json
-{
-  "SerilogStepUp": {
-    "Mode": "Auto",
-    "BaseLevel": "Warning",
-    "StepUpLevel": "Information",
-    "DurationSeconds": 300,
-    "EnableOtlpExporter": true
-  }
-}
-```
-
-```bash
-export OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
-export OTEL_RESOURCE_ATTRIBUTES="service.name=ProductionAPI,deployment.environment=production"
-```
-
-### Local Development (Always Verbose)
-
-```json
-{
-  "SerilogStepUp": {
-    "Mode": "AlwaysOn",
-    "StepUpLevel": "Debug",
-    "EnableConsoleLogging": true,
-    "EnableOtlpExporter": false,
-    "CaptureRequestBody": true
-  }
-}
-```
-
-### Environment-Specific Configuration
-
-```csharp
-builder.AddStepUpLogging(opts =>
-{
-    opts.Mode = builder.Environment.IsDevelopment() 
-        ? StepUpMode.AlwaysOn 
-        : StepUpMode.Auto;
-    
-    opts.StepUpLevel = builder.Environment.IsDevelopment() ? "Debug" : "Information";
-    opts.EnableConsoleLogging = builder.Environment.IsDevelopment();
-    
-    // Production: use OTLP, Development: use console.
-    // The endpoint and headers come from OTEL_EXPORTER_OTLP_ENDPOINT and OTEL_EXPORTER_OTLP_HEADERS.
-    opts.EnableOtlpExporter = !builder.Environment.IsDevelopment();
-});
-```
-
-### With Authentication Headers
-
-```bash
-# Use environment variables for OTLP authentication
-export OTEL_EXPORTER_OTLP_ENDPOINT=http://secure-collector:4317
-export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer xyz,X-API-Key=secret"
-export OTEL_RESOURCE_ATTRIBUTES="service.name=MyAPI,service.version=1.2.3,deployment.environment=production"
-
-dotnet MyApp.dll
-```
-
-### Multiple Resource Attributes
-
-```bash
-# Use environment variable for multiple resource attributes
-export OTEL_RESOURCE_ATTRIBUTES="service.name=payment-service,service.version=2.1.0,service.namespace=ecommerce,deployment.environment=production,cloud.provider=azure,cloud.region=westeurope,k8s.cluster.name=prod-cluster,k8s.namespace.name=payment"
-
-dotnet MyApp.dll
-```
 
 ## Performance
 
