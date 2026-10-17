@@ -255,6 +255,7 @@ internal static class PathHost
             ["SerilogStepUp:DurationSeconds"] = "300",
             ["SerilogStepUp:EnablePreErrorBuffering"] = "true",
             ["SerilogStepUp:AlwaysLogRequestSummary"] = "true",
+            ["SerilogStepUp:FrameworkCategoryDefaults"] = "None",
             ["Serilog:Using:0"] = typeof(KeyedCaptureSink).Assembly.GetName().Name,
             ["Serilog:WriteTo:0:Name"] = nameof(KeyedCaptureSink.StepUpCapture),
             ["Serilog:WriteTo:0:Args:key"] = captureKey,

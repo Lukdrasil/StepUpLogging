@@ -81,7 +81,7 @@ public class PreErrorBufferExactlyOnceTests
         Action<Serilog.ILogger, StepUpLoggingController> scenario,
         params string[] tokens) =>
         TestHosts.RunInOneTrace(
-            [],
+            new() { ["SerilogStepUp:FrameworkCategoryDefaults"] = "None" },
             null,
             services => scenario(
                 services.GetRequiredService<Serilog.ILogger>(),

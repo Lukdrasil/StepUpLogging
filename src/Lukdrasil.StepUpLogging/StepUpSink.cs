@@ -44,9 +44,9 @@ internal sealed class StepUpSink : ILogEventSink, IDisposable
     {
         if (Refuses(logEvent)) return;
 
-        if (logEvent.Level < ExportMinimum(logEvent))
+        if (logEvent.Level < ExportMinimum(logEvent, out var excludedFromBuffer))
         {
-            _heldBackBuffer?.Hold(logEvent);
+            _heldBackBuffer?.Hold(logEvent, excludedFromBuffer);
             return;
         }
 
@@ -68,14 +68,16 @@ internal sealed class StepUpSink : ILogEventSink, IDisposable
     /// <summary>
     /// The level an event must reach to be exported: <c>max(switch, NeverStepUp pin unless diagnostic, category
     /// floor)</c>. The pin keeps listed categories at BaseLevel, a floor only raises the minimum, neither adds verbosity.
+    /// <paramref name="excludedFromBuffer"/> is true when a framework default keeps the event out of the buffer.
     /// </summary>
-    private LogEventLevel ExportMinimum(LogEvent logEvent)
+    private LogEventLevel ExportMinimum(LogEvent logEvent, out bool excludedFromBuffer)
     {
+        excludedFromBuffer = false;
         var switchLevel = _levelSwitch.MinimumLevel;
         if (!HasCategoryRules() || !CategoryPrefix.TryGetSourceContext(logEvent, out var source)) return switchLevel;
 
         var diagnosticActive = IsDiagnosticActive();
-        return Higher(PinnedMinimum(source, diagnosticActive, switchLevel), FloorFor(source, diagnosticActive));
+        return Higher(PinnedMinimum(source, diagnosticActive, switchLevel), FloorFor(source, diagnosticActive, out excludedFromBuffer));
     }
 
     private bool HasCategoryRules() => _neverStepUpCategories.Length > 0 || _categoryFloors is not null;
@@ -85,10 +87,13 @@ internal sealed class StepUpSink : ILogEventSink, IDisposable
             ? Higher(_baseLevel, switchLevel)
             : switchLevel;
 
-    private LogEventLevel FloorFor(string source, bool diagnosticActive)
-        => _categoryFloors is not null && _categoryFloors.TryGetFloor(source, diagnosticActive, out var floor)
+    private LogEventLevel FloorFor(string source, bool diagnosticActive, out bool excludedFromBuffer)
+    {
+        excludedFromBuffer = false;
+        return _categoryFloors is not null && _categoryFloors.TryGetFloor(source, diagnosticActive, out var floor, out excludedFromBuffer)
             ? floor
             : LogEventLevel.Verbose;
+    }
 
     private bool IsDiagnosticActive() => _isDiagnosticActive?.Invoke() ?? false;
 

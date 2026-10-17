@@ -91,7 +91,7 @@ public class PreErrorBufferExcludeCategoriesTests
     public void NoExcludedCategories_FrameworkInformation_ThenErrorInSameTrace_IsFlushed()
     {
         var counts = Run(
-            [],
+            new() { ["SerilogStepUp:FrameworkCategoryDefaults"] = "None" },
             logger =>
             {
                 logger.ForContext("SourceContext", Routing).Information("{Token}", "EXCLUDE_DEFAULT_ROUTING_INFO_79");
