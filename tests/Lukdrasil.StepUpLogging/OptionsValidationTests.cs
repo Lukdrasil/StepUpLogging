@@ -20,6 +20,16 @@ public class OptionsValidationTests
             () => BuildHost(("SerilogStepUp:BaseLevel", "Warnign")));
     }
 
+    [Theory]
+    [InlineData("Mode")]
+    [InlineData("FrameworkCategoryDefaults")]
+    [InlineData("ConsoleFormat")]
+    public void UndefinedEnumNumber_FailsValidationOnStart(string option)
+    {
+        Assert.Throws<OptionsValidationException>(
+            () => BuildHost(("SerilogStepUp:" + option, "5")));
+    }
+
     [Fact]
     public void NonPositiveDuration_FailsValidationOnStart()
     {
