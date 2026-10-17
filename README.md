@@ -1104,7 +1104,9 @@ Per-component BenchmarkDotNet benchmarks (log pipeline, sinks, enrichers, redact
 
 `Text` writes the time, level, trace id, `SourceContext` and the rendered message, then each
 `ConsoleTextProperties` entry the event has as `Name=value`, with an exception on the following
-lines. Other properties that are not in the message template are not written to the console.
+lines. Other properties that are not in the message template are not written to the console. Line
+breaks inside the message and the values are written as `\r` and `\n`, so a logged value cannot
+forge a console line.
 
 `ConsoleTextProperties` defaults to `["Jti"]`, the token id the request summary carries, so the
 caller's identity stays on the console when OTLP is not available. Add your own identity
@@ -1285,7 +1287,8 @@ application's events and the request summary instead of the framework's progress
   `Microsoft.Hosting.Lifetime` are not listed.
 - A `CategoryFloors` entry overrides the defaults for every category it matches, even when a default
   prefix is longer, and is flushed on an error like any floor. Add it to
-  `PreErrorBufferExcludeCategories` to keep it out of the flush.
+  `PreErrorBufferExcludeCategories` to keep it out of the flush. A broad key such as
+  `"Microsoft": "Warning"` therefore brings the flush back for every `Microsoft.*` default.
 - `AlwaysOn` does not apply the defaults. Diagnostic mode lifts them unless a
   `DiagnosticExemptCategories` entry keeps them; such an entry may name a default prefix.
 

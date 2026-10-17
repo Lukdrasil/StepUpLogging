@@ -44,7 +44,8 @@ public enum ConsoleLogFormat
 
     /// <summary>
     /// One readable line per event: time, level, trace id, <c>SourceContext</c> and the rendered message, with the
-    /// exception on the following lines. Properties not in the message are not written.
+    /// exception on the following lines. Of the properties not in the message, only
+    /// <see cref="StepUpLoggingOptions.ConsoleTextProperties"/> are written. Line breaks in values are escaped.
     /// </summary>
     Text = 1
 }

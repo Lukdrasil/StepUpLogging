@@ -337,7 +337,7 @@ public static class StepUpLoggingExtensions
                 .Where(f => !string.IsNullOrWhiteSpace(f.Key))
                 .ToDictionary(f => f.Key, f => Enum.Parse<LogEventLevel>(f.Value, ignoreCase: true), StringComparer.Ordinal);
             // AlwaysOn skips the framework defaults for the same reason it skips the NeverStepUp list (ADR 0029).
-            var frameworkDefaults = FrameworkDefaultsFor(opts.FrameworkCategoryDefaults, opts.Mode);
+            var frameworkDefaults = opts.Mode == StepUpMode.AlwaysOn ? [] : FrameworkDefaultsFor(opts.FrameworkCategoryDefaults);
             var categoryFloors = floors.Count == 0 && frameworkDefaults.Length == 0
                 ? null
                 : new CategoryFloorMap(floors, (opts.DiagnosticExemptCategories ?? []).Where(c => !string.IsNullOrWhiteSpace(c)).ToArray(), frameworkDefaults);
@@ -441,10 +441,10 @@ public static class StepUpLoggingExtensions
            && (o.DiagnosticExemptCategories ?? [])
                .Where(e => !string.IsNullOrWhiteSpace(e))
                .All(e => (o.CategoryFloors ?? []).Keys.Any(k => CategoryPrefix.Matches(e, k))
-                         || FrameworkDefaultsFor(o.FrameworkCategoryDefaults, StepUpMode.Auto).Any(r => CategoryPrefix.Matches(e, r.Prefix)));
+                         || FrameworkDefaultsFor(o.FrameworkCategoryDefaults).Any(r => CategoryPrefix.Matches(e, r.Prefix)));
 
-    private static FrameworkCategoryRule[] FrameworkDefaultsFor(FrameworkCategoryPreset preset, StepUpMode mode)
-        => preset == FrameworkCategoryPreset.Recommended && mode != StepUpMode.AlwaysOn ? FrameworkCategoryDefaultTable.Recommended : [];
+    private static FrameworkCategoryRule[] FrameworkDefaultsFor(FrameworkCategoryPreset preset)
+        => preset == FrameworkCategoryPreset.Recommended ? FrameworkCategoryDefaultTable.Recommended : [];
 
     private static bool IsValidLevel(string? value)
         => !string.IsNullOrWhiteSpace(value) && Enum.TryParse<LogEventLevel>(value, true, out _);
