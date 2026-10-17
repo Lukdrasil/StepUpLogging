@@ -21,6 +21,7 @@ using Serilog;
 using Serilog.Configuration;
 using Serilog.Core;
 using Serilog.Enrichers.OpenTelemetry;
+using Serilog.Formatting;
 using Serilog.Formatting.Compact;
 using Serilog.Events;
 using Serilog.Sinks.File;
@@ -209,6 +210,7 @@ public static class StepUpLoggingExtensions
     {
         var configSnapshot = new StepUpLoggingOptions();
         builder.Configuration.GetSection(configSectionName).Bind(configSnapshot);
+        configureOptions?.Invoke(configSnapshot);
 
         if (configSnapshot.EnableOtlpExporter && !IsOpenTelemetryRegistered(builder.Services))
         {
@@ -222,11 +224,15 @@ public static class StepUpLoggingExtensions
         builder.Services.AddOptions<StepUpLoggingOptions>()
             .Bind(builder.Configuration.GetSection(configSectionName))
             .Configure(options => configureOptions?.Invoke(options))
-            .PostConfigure(options => options.ExcludePaths ??= ["/healthz", "/metrics", "/health"])
-            .Validate(ValidateOptions, "Invalid SerilogStepUp options: DurationSeconds must be > 0, MaxBodyCaptureBytes must be > 0, MaxContinuousStepUpSeconds must be >= 0 and either 0 (disabled) or >= DurationSeconds, StepUpCooldownSeconds must be >= 0, PreErrorBufferSize and PreErrorMaxContexts must be > 0, and BaseLevel/StepUpLevel/RequestSummaryLevel must be valid Serilog levels. CategoryFloors keys must be non-blank with valid levels no higher than Warning, DiagnosticLevel must be a valid level, DiagnosticDurationMinutes must be 1-120, and each DiagnosticExemptCategories entry must match a CategoryFloors key.")
+            .PostConfigure(options =>
+            {
+                options.ExcludePaths ??= ["/healthz", "/metrics", "/health"];
+                options.NeverStepUpCategories ??= ["Microsoft.EntityFrameworkCore.Database.Command"];
+                options.ConsoleTextProperties ??= ["Jti"];
+            })
             .ValidateOnStart();
         builder.Services.TryAddEnumerable(
-            ServiceDescriptor.Singleton<IValidateOptions<StepUpLoggingOptions>, CategoryFloorCeilingValidator>());
+            ServiceDescriptor.Singleton<IValidateOptions<StepUpLoggingOptions>>(new StepUpLoggingOptionsValidator(configSectionName)));
 
         builder.Services.ConfigureOpenTelemetryMeterProvider(metrics =>
             metrics.AddStepUpLoggingMeters());
@@ -246,10 +252,6 @@ public static class StepUpLoggingExtensions
             var opts = sp.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
             return new StepUpLoggingController(opts, null, Stopwatch.GetTimestamp, sp.GetService<TimeProvider>());
         });
-
-        var staticLoggerSnapshot = new StepUpLoggingOptions();
-        builder.Configuration.GetSection(configSectionName).Bind(staticLoggerSnapshot);
-        configureOptions?.Invoke(staticLoggerSnapshot);
 
         builder.Services.AddSerilog((services, lc) =>
         {
@@ -276,6 +278,7 @@ public static class StepUpLoggingExtensions
             // which in turn depends on this very callback — resolving it inside the callback deadlocks.
             var bypassLogger = CreateBypassLogger(builder, logFilePath, opts, gatedConfig, redactionPatterns);
             try { stepUpController.SetSummaryLogger(bypassLogger); } catch { }
+            StartupReport.Write(bypassLogger, opts, builder.Configuration.GetSection(configSectionName), logFilePath);
 
             // ADR 0007 warn-not-fail: in Auto or Diagnostic mode a StepUpLevel that is not strictly more verbose than
             // BaseLevel (numerically >= it, since a more verbose level is a LOWER LogEventLevel) means a
@@ -331,9 +334,11 @@ public static class StepUpLoggingExtensions
             var floors = (opts.CategoryFloors ?? [])
                 .Where(f => !string.IsNullOrWhiteSpace(f.Key))
                 .ToDictionary(f => f.Key, f => Enum.Parse<LogEventLevel>(f.Value, ignoreCase: true), StringComparer.Ordinal);
-            var categoryFloors = floors.Count == 0
+            // AlwaysOn skips the framework defaults for the same reason it skips the NeverStepUp list (ADR 0029).
+            var frameworkDefaults = opts.Mode == StepUpMode.AlwaysOn ? [] : FrameworkDefaultsFor(opts.FrameworkCategoryDefaults);
+            var categoryFloors = floors.Count == 0 && frameworkDefaults.Length == 0
                 ? null
-                : new CategoryFloorMap(floors, (opts.DiagnosticExemptCategories ?? []).Where(c => !string.IsNullOrWhiteSpace(c)).ToArray());
+                : new CategoryFloorMap(floors, (opts.DiagnosticExemptCategories ?? []).Where(c => !string.IsNullOrWhiteSpace(c)).ToArray(), frameworkDefaults);
 
             lc.WriteTo.Sink(new StepUpSink(
                 stepUpInnerCfg.CreateLogger(),
@@ -367,7 +372,7 @@ public static class StepUpLoggingExtensions
             // enrichment here precedes every sink, so PreErrorBufferSink already buffers redacted
             // events and needs no second pass.
             ApplyRedactionEnricher(lc, opts, redactionPatterns, needsEnrichment);
-        }, preserveStaticLogger: !staticLoggerSnapshot.SetStaticLogger, writeToProviders: false);
+        }, preserveStaticLogger: !configSnapshot.SetStaticLogger, writeToProviders: false);
 
         return builder;
     }
@@ -412,34 +417,8 @@ public static class StepUpLoggingExtensions
         return (root, gated);
     }
 
-    /// <summary>
-    /// Validates that <paramref name="o"/> is coherent: a positive step-up duration and level strings
-    /// that parse to a Serilog <see cref="LogEventLevel"/>. Used by the options pipeline at startup so a
-    /// typo'd level or a non-positive duration surfaces immediately instead of silently falling back.
-    /// </summary>
-    private static bool ValidateOptions(StepUpLoggingOptions o)
-        => o.DurationSeconds > 0
-           && o.MaxBodyCaptureBytes > 0
-           && o.MaxContinuousStepUpSeconds >= 0
-           && o.StepUpCooldownSeconds >= 0
-           && (o.MaxContinuousStepUpSeconds == 0 || o.MaxContinuousStepUpSeconds >= o.DurationSeconds)
-           && o.PreErrorBufferSize > 0
-           && o.PreErrorMaxContexts > 0
-           && IsValidLevel(o.BaseLevel)
-           && IsValidLevel(o.StepUpLevel)
-           && IsValidLevel(o.RequestSummaryLevel)
-           && IsValidLevel(o.DiagnosticLevel)
-           && o.DiagnosticDurationMinutes is >= 1 and <= 120
-           && (o.CategoryFloors ?? []).All(f => !string.IsNullOrWhiteSpace(f.Key) && IsValidFloor(f.Value))
-           && (o.DiagnosticExemptCategories ?? [])
-               .Where(e => !string.IsNullOrWhiteSpace(e))
-               .All(e => (o.CategoryFloors ?? []).Keys.Any(k => CategoryPrefix.Matches(e, k)));
-
-    private static bool IsValidLevel(string? value)
-        => !string.IsNullOrWhiteSpace(value) && Enum.TryParse<LogEventLevel>(value, true, out _);
-
-    internal static bool IsValidFloor(string? value)
-        => IsValidLevel(value) && Enum.Parse<LogEventLevel>(value!, true) <= LogEventLevel.Warning;
+    internal static FrameworkCategoryRule[] FrameworkDefaultsFor(FrameworkCategoryPreset preset)
+        => preset == FrameworkCategoryPreset.Recommended ? FrameworkCategoryDefaultTable.Recommended : [];
 
     /// <summary>
     /// Compiles a redaction pattern with <see cref="RegexOptions.NonBacktracking"/> so matching is
@@ -873,11 +852,12 @@ public static class StepUpLoggingExtensions
             string? firstEntry = null;
             if (httpContext.Request.Headers.TryGetValue("X-Forwarded-For", out var forwardedForHeader))
             {
-                var rawValue = forwardedForHeader.FirstOrDefault();
+                var rawValue = forwardedForHeader.Count > 0 ? forwardedForHeader[0] : null;
                 if (!string.IsNullOrWhiteSpace(rawValue))
                 {
                     forwardedFor = patterns.Redact(rawValue);
-                    var candidate = rawValue.Split(',')[0].Trim();
+                    var comma = rawValue.IndexOf(',');
+                    var candidate = (comma < 0 ? rawValue : rawValue[..comma]).Trim();
                     if (!string.IsNullOrWhiteSpace(candidate))
                     {
                         firstEntry = patterns.Redact(candidate);
@@ -904,7 +884,7 @@ public static class StepUpLoggingExtensions
         {
             if (request.Headers.TryGetValue("User-Agent", out var userAgentValue))
             {
-                var userAgent = userAgentValue.FirstOrDefault();
+                var userAgent = userAgentValue.Count > 0 ? userAgentValue[0] : null;
                 return !string.IsNullOrWhiteSpace(userAgent) ? userAgent : null;
             }
             return null;
@@ -917,12 +897,12 @@ public static class StepUpLoggingExtensions
 
     private static bool IsOpenTelemetryRegistered(IServiceCollection services)
     {
-        // OTel SDK renamed OpenTelemetrySdkHostedService to TelemetryHostedService in v1.15.0;
-        // check both names to support older and newer package versions.
+        // OTel SDK renamed OpenTelemetrySdkHostedService to TelemetryHostedService in v1.15.0 and moved it to the
+        // Implementation namespace; match both names under any OpenTelemetry.Extensions.Hosting namespace.
         return services.Any(sd =>
             sd.ServiceType == typeof(IHostedService) &&
-            (sd.ImplementationType?.FullName == "OpenTelemetry.Extensions.Hosting.OpenTelemetrySdkHostedService"
-             || sd.ImplementationType?.FullName == "OpenTelemetry.Extensions.Hosting.TelemetryHostedService"));
+            sd.ImplementationType is { Namespace: { } ns, Name: "OpenTelemetrySdkHostedService" or "TelemetryHostedService" } &&
+            ns.StartsWith("OpenTelemetry.Extensions.Hosting", StringComparison.Ordinal));
     }
 
     /// <summary>Parse OTEL_EXPORTER_OTLP_HEADERS environment variable (W3C Baggage-style list of percent-encoded key=value pairs, per the OTel spec).</summary>
@@ -991,6 +971,16 @@ public static class StepUpLoggingExtensions
             _ => OtlpProtocol.Grpc,
         };
 
+    /// <summary>
+    /// The console formatter for <paramref name="format"/>: compact JSON, or one line with the trace id, the rendered
+    /// message and the <paramref name="textProperties"/> the event has. The OTLP and file sinks do not use it and stay structured.
+    /// </summary>
+    internal static ITextFormatter CreateConsoleFormatter(ConsoleLogFormat format, string[] textProperties) => format switch
+    {
+        ConsoleLogFormat.Text => new ConsoleTextFormatter([.. textProperties.Where(p => !string.IsNullOrWhiteSpace(p))]),
+        _ => new CompactJsonFormatter(),
+    };
+
     private static void ConfigureOutputSinks(LoggerConfiguration lc,
         IHostApplicationBuilder builder,
         string? logFilePath,
@@ -1022,7 +1012,7 @@ public static class StepUpLoggingExtensions
 
         if (opts.EnableConsoleLogging)
         {
-            lc.WriteTo.Async(a => a.Console(new CompactJsonFormatter()));
+            lc.WriteTo.Async(a => a.Console(CreateConsoleFormatter(opts.ConsoleFormat, opts.ConsoleTextProperties ?? [])));
         }
 
         if (!string.IsNullOrWhiteSpace(logFilePath))
@@ -1047,20 +1037,3 @@ public static class StepUpLoggingExtensions
 /// pipeline's <c>ValidateOnStart</c>, which is what makes the host refuse to start.
 /// </summary>
 internal sealed class AuditLoggingPrerequisites;
-
-/// <summary>
-/// Names each <see cref="StepUpLoggingOptions.CategoryFloors"/> key whose floor is not a valid level
-/// at most <c>Warning</c>, so a floor can never hide an Error; the fixed-message check cannot name it.
-/// </summary>
-internal sealed class CategoryFloorCeilingValidator : IValidateOptions<StepUpLoggingOptions>
-{
-    /// <inheritdoc />
-    public ValidateOptionsResult Validate(string? name, StepUpLoggingOptions options)
-    {
-        var invalid = (options.CategoryFloors ?? [])
-            .Where(f => !StepUpLoggingExtensions.IsValidFloor(f.Value))
-            .Select(f => $"CategoryFloors:{f.Key} must be a valid level no higher than Warning, got '{f.Value}'.")
-            .ToList();
-        return invalid.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(invalid);
-    }
-}

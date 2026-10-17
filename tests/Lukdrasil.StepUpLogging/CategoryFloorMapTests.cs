@@ -13,7 +13,10 @@ public class CategoryFloorMapTests
         new(floors.ToDictionary(f => f.Key, f => f.Floor, StringComparer.Ordinal), exempt);
 
     private static LogEventLevel? FloorOf(CategoryFloorMap map, string sourceContext, bool diagnosticActive = false) =>
-        map.TryGetFloor(sourceContext, diagnosticActive, out var floor) ? floor : null;
+        map.TryGetFloor(sourceContext, diagnosticActive, out var floor, out _) ? floor : null;
+
+    private static CategoryFloorMap MapWithDefaults((string Key, LogEventLevel Floor)[] floors, params FrameworkCategoryRule[] defaults) =>
+        new(floors.ToDictionary(f => f.Key, f => f.Floor, StringComparer.Ordinal), [], defaults);
 
     [Fact]
     public void NoFloors_NoCategoryGetsAFloor()
@@ -121,6 +124,57 @@ public class CategoryFloorMapTests
     }
 
     [Fact]
+    public void FrameworkDefault_AppliesWhenNoUserKeyMatches()
+    {
+        var map = MapWithDefaults([], new FrameworkCategoryRule("Fw", LogEventLevel.Warning, KeptInBuffer: false));
+
+        Assert.True(map.TryGetFloor("Fw.Child", diagnosticActive: false, out var floor, out var excluded));
+        Assert.Equal(LogEventLevel.Warning, floor);
+        Assert.True(excluded);
+        Assert.Null(FloorOf(map, "App.Child"));
+    }
+
+    [Fact]
+    public void FrameworkDefault_KeptInBuffer_IsNotExcluded()
+    {
+        var map = MapWithDefaults([], new FrameworkCategoryRule("Fw", LogEventLevel.Warning, KeptInBuffer: true));
+
+        Assert.True(map.TryGetFloor("Fw", diagnosticActive: false, out _, out var excluded));
+        Assert.False(excluded);
+    }
+
+    [Fact]
+    public void UserKeyShorterThanTheDefaultKey_StillWins_AndIsNotExcluded()
+    {
+        var map = MapWithDefaults([("Fw", LogEventLevel.Information)], new FrameworkCategoryRule("Fw.Http.Client", LogEventLevel.Warning, KeptInBuffer: false));
+
+        Assert.True(map.TryGetFloor("Fw.Http.Client.Handler", diagnosticActive: false, out var floor, out var excluded));
+        Assert.Equal(LogEventLevel.Information, floor);
+        Assert.False(excluded);
+    }
+
+    [Fact]
+    public void MostSpecificFrameworkDefaultDecides()
+    {
+        var map = MapWithDefaults(
+            [],
+            new FrameworkCategoryRule("Fw", LogEventLevel.Warning, KeptInBuffer: false),
+            new FrameworkCategoryRule("Fw.Cors", LogEventLevel.Warning, KeptInBuffer: true));
+
+        Assert.True(map.TryGetFloor("Fw.Cors.Service", diagnosticActive: false, out _, out var excluded));
+        Assert.False(excluded);
+    }
+
+    [Fact]
+    public void Diagnostic_LiftsAFrameworkDefault_UnlessExempt()
+    {
+        var map = new CategoryFloorMap(new Dictionary<string, LogEventLevel>(), ["Fw.Kept"], [new FrameworkCategoryRule("Fw", LogEventLevel.Warning, KeptInBuffer: false)]);
+
+        Assert.Null(FloorOf(map, "Fw.Other", diagnosticActive: true));
+        Assert.Equal(LogEventLevel.Warning, FloorOf(map, "Fw.Kept.Child", diagnosticActive: true));
+    }
+
+    [Fact]
     public void Constructor_NullArguments_Throw()
     {
         Assert.Throws<ArgumentNullException>(() => new CategoryFloorMap(null!, []));
@@ -140,7 +194,7 @@ public class CategoryFloorMapTests
         {
             for (var i = 0; i < 10_000; i++)
             {
-                if (map.TryGetFloor(sources[i % sources.Length], diagnosticActive: (i & 1) == 0, out _)) matched++;
+                if (map.TryGetFloor(sources[i % sources.Length], diagnosticActive: (i & 1) == 0, out _, out _)) matched++;
             }
         }
 

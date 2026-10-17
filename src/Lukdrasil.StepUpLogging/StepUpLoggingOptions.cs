@@ -32,12 +32,49 @@ public enum StepUpMode
     Diagnostic = 3
 }
 
+/// <summary>
+/// The format of the console sink enabled by <see cref="StepUpLoggingOptions.EnableConsoleLogging"/>.
+/// </summary>
+public enum ConsoleLogFormat
+{
+    /// <summary>
+    /// Compact JSON (CLEF), one event per line with every property.
+    /// </summary>
+    Json = 0,
+
+    /// <summary>
+    /// One readable line per event: time, level, trace id, <c>SourceContext</c> and the rendered message, with the
+    /// exception on the following lines. Of the properties not in the message, only
+    /// <see cref="StepUpLoggingOptions.ConsoleTextProperties"/> are written. Line breaks in values are escaped.
+    /// </summary>
+    Text = 1
+}
+
+/// <summary>
+/// Selects the built-in framework category rules applied under <see cref="StepUpLoggingOptions.CategoryFloors"/>.
+/// </summary>
+public enum FrameworkCategoryPreset
+{
+    /// <summary>
+    /// No built-in rules: framework categories behave like application categories.
+    /// </summary>
+    None = 0,
+
+    /// <summary>
+    /// Framework categories whose Information events repeat the request summary or a span (ASP.NET Core hosting,
+    /// routing, MVC, HTTP results, static files, HttpClient handlers, Polly, EF Core commands, Npgsql commands)
+    /// export at <c>Warning</c> and above and are kept out of the pre-error buffer below <c>Warning</c>.
+    /// CORS and the YARP forwarder export at <c>Warning</c> but stay in the buffer, since they explain a failure.
+    /// </summary>
+    Recommended = 1
+}
+
 public sealed class StepUpLoggingOptions
 {
     public StepUpMode Mode { get; set; } = StepUpMode.Auto;
     public string BaseLevel { get; set; } = "Warning";
     public string StepUpLevel { get; set; } = "Information";
-    public int DurationSeconds { get; set; } = 180;
+    public int DurationSeconds { get; set; } = 3;
 
     /// <summary>
     /// Request paths excluded from request logging, matched case-insensitively. An entry ending in <c>*</c>
@@ -158,10 +195,15 @@ public sealed class StepUpLoggingOptions
     public string[] AdditionalSensitiveHeaders { get; set; } = [];
 
     /// <summary>
-    /// Enables OpenTelemetry Protocol (OTLP) exporter for production telemetry export.
-    /// Configure via environment variables: OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_EXPORTER_OTLP_PROTOCOL
+    /// Enables the OpenTelemetry Protocol (OTLP) log exporter and, unless the app registered the OpenTelemetry SDK
+    /// first, the SDK's OTLP exporter. Defaults to <see langword="true"/> when the <c>OTEL_EXPORTER_OTLP_ENDPOINT</c>
+    /// environment variable is set and <see langword="false"/> otherwise; set it to <see langword="true"/> to export to
+    /// the default <c>localhost:4317</c> without the variable. The endpoint, protocol and headers come from
+    /// <c>OTEL_EXPORTER_OTLP_ENDPOINT</c>, <c>OTEL_EXPORTER_OTLP_PROTOCOL</c> and <c>OTEL_EXPORTER_OTLP_HEADERS</c>.
     /// </summary>
-    public bool EnableOtlpExporter { get; set; } = true;
+    public bool EnableOtlpExporter { get; set; } = OtlpEndpointIsSet(Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT"));
+
+    internal static bool OtlpEndpointIsSet(string? endpoint) => !string.IsNullOrWhiteSpace(endpoint);
 
     /// <summary>
     /// Enables ActivitySource instrumentation for distributed tracing (default: true).
@@ -177,9 +219,23 @@ public sealed class StepUpLoggingOptions
 
     /// <summary>
     /// Enables console sink for log output (typically for development/debugging).
-    /// Logs are formatted as compact JSON.
+    /// Logs are formatted as set by <see cref="ConsoleFormat"/>.
     /// </summary>
     public bool EnableConsoleLogging { get; set; } = false;
+
+    /// <summary>
+    /// The console sink's format: <see cref="ConsoleLogFormat.Json"/> or <see cref="ConsoleLogFormat.Text"/>.
+    /// Only the console changes; the OTLP exporter and the file sink stay structured. Default: <see cref="ConsoleLogFormat.Json"/>.
+    /// </summary>
+    public ConsoleLogFormat ConsoleFormat { get; set; } = ConsoleLogFormat.Json;
+
+    /// <summary>
+    /// Properties written after the message in the <see cref="ConsoleLogFormat.Text"/> console format as
+    /// <c>Name=value</c>, when the event has them, so identity such as the token id stays on the console without
+    /// OTLP. <see langword="null"/> means not configured, and the built-in default <c>["Jti"]</c> applies after
+    /// configuration. A configured list replaces the default; blank entries are ignored.
+    /// </summary>
+    public string[]? ConsoleTextProperties { get; set; }
 
     /// <summary>
     /// Enables structured exception details in logs (includes stack traces, inner exceptions, etc.)
@@ -298,13 +354,17 @@ public sealed class StepUpLoggingOptions
     /// Matching is ordinal: a category matches when its <c>SourceContext</c> equals a prefix
     /// exactly, or begins with a prefix immediately followed by a <c>.</c> separator. The list
     /// has no effect in <see cref="StepUpMode.AlwaysOn"/> (nothing steps up there), and the
-    /// pre-error buffer is never filtered by it — buffered events still flush on error. Set
-    /// this to <c>[]</c> to restore pre-3.1.0 behaviour (no category is exempt from step-up).
-    /// The default suppresses the Entity Framework Core SQL command log, which would otherwise
+    /// pre-error buffer is never filtered by it — buffered events still flush on error.
+    /// <see langword="null"/> means not configured, and the built-in default
+    /// <c>["Microsoft.EntityFrameworkCore.Database.Command"]</c> applies after configuration. A configured list,
+    /// from appsettings or code, replaces the default; <c>[]</c> pins nothing (pre-3.1.0 behaviour). With
+    /// <see cref="FrameworkCategoryDefaults"/> <see cref="FrameworkCategoryPreset.Recommended"/> the EF command
+    /// category is already floored at <c>Warning</c>, so the pin matters only with <see cref="FrameworkCategoryPreset.None"/>
+    /// or a <see cref="BaseLevel"/> above <c>Warning</c>. The default suppresses the Entity Framework Core SQL command log, which would otherwise
     /// flood the export during a step-up window — and, unless <see cref="RedactLogEventProperties"/>
     /// is also set, carry unredacted SQL.
     /// </remarks>
-    public string[] NeverStepUpCategories { get; set; } = ["Microsoft.EntityFrameworkCore.Database.Command"];
+    public string[]? NeverStepUpCategories { get; set; }
 
     /// <summary>
     /// <c>SourceContext</c> prefix to level. A floor raises the category's minimum to
@@ -318,6 +378,14 @@ public sealed class StepUpLoggingOptions
     /// must be matched by a <see cref="CategoryFloors"/> key. Default: empty.
     /// </summary>
     public string[] DiagnosticExemptCategories { get; set; } = [];
+
+    /// <summary>
+    /// Built-in floors for framework categories, consulted only when no <see cref="CategoryFloors"/> key matches the
+    /// <c>SourceContext</c>, so a <see cref="CategoryFloors"/> entry overrides a built-in rule, at any level. The rules
+    /// are lifted in <see cref="StepUpMode.Diagnostic"/> unless a <see cref="DiagnosticExemptCategories"/> entry keeps
+    /// them, and not applied in <see cref="StepUpMode.AlwaysOn"/>. Default: <see cref="FrameworkCategoryPreset.Recommended"/>.
+    /// </summary>
+    public FrameworkCategoryPreset FrameworkCategoryDefaults { get; set; } = FrameworkCategoryPreset.Recommended;
 
     /// <summary>
     /// The level the switch sits at during <see cref="StepUpMode.Diagnostic"/>. Default: <c>"Debug"</c>.

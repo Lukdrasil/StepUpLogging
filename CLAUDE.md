@@ -15,8 +15,9 @@ dotnet build src/Lukdrasil.StepUpLogging/Lukdrasil.StepUpLogging.csproj --config
 # Run all tests
 dotnet test --project tests/Lukdrasil.StepUpLogging/Lukdrasil.StepUpLogging.Tests.csproj
 
-# Run a single test (xunit v3 / Microsoft.Testing.Platform filter syntax)
-dotnet test --project tests/Lukdrasil.StepUpLogging/Lukdrasil.StepUpLogging.Tests.csproj --filter "FullyQualifiedName~ClassName.MethodName"
+# Run a single test or class (xunit v3 / Microsoft.Testing.Platform; --filter "FullyQualifiedName~..." runs 0 tests)
+dotnet test --project tests/Lukdrasil.StepUpLogging/Lukdrasil.StepUpLogging.Tests.csproj --filter-method "*ClassName.MethodName"
+dotnet test --project tests/Lukdrasil.StepUpLogging/Lukdrasil.StepUpLogging.Tests.csproj --filter-class "*.ClassName"
 
 # Pack NuGet (output to ./nuget-packages/)
 dotnet pack src/Lukdrasil.StepUpLogging/Lukdrasil.StepUpLogging.csproj --configuration Release --output ./nuget-packages
@@ -33,7 +34,7 @@ dotnet pack src/Lukdrasil.StepUpLogging/Lukdrasil.StepUpLogging.csproj --configu
 | `StepUpLoggingController` | Public. Thread-safe state machine owning the `LoggingLevelSwitch`, a `Timer` for step-down, OTel counters, and a reference to the bypass logger. `Trigger()` raises the level; a timer callback lowers it after `DurationSeconds`. In `Mode=Diagnostic` the switch starts at `DiagnosticLevel` and a `TimeProvider` timer returns it to Auto at `BaseLevel` after `DiagnosticDurationMinutes`; `Trigger()` is a no-op until then. |
 | `StepUpTriggerSink` | Internal Serilog sink. Observes `Error`/`Fatal` events, skips those whose `SourceContext` matches a `NeverTriggerCategories` prefix, and enqueues to a bounded `Channel<bool>` processed by a background `Task` that calls `controller.Trigger()`. Non-blocking so it never stalls the logging pipeline. |
 | `PreErrorBufferSink` | Internal Serilog sink. Maintains a per-context ring buffer keyed by W3C TraceId (`Activity.Current`), buffering only held-back events `StepUpSink` hands it through `Hold` (events it did not export), at/above the resolved `StepUpLevel`, except events below `Warning` from `PreErrorBufferExcludeCategories` prefixes. Dropped without export on dispose. On `Error`/`Fatal`, flushes buffered events to the bypass logger and clears the buffer. LRU eviction bounds memory. |
-| `CategoryFloorMap` | Internal. Resolves the `CategoryFloors` floor of a `SourceContext`, built once at wiring and passed to `StepUpSink`, which exports at `max(switch, NeverStepUp pin, floor)`. The most specific (longest) matching key wins; while diagnostic is active only sources under a `DiagnosticExemptCategories` prefix get a floor. Allocation-free lookup. |
+| `CategoryFloorMap` | Internal. Resolves the floor of a `SourceContext`, built once at wiring and passed to `StepUpSink`, which exports at `max(switch, NeverStepUp pin, floor)`. The `CategoryFloors` entries decide first (most specific key wins); only when none matches do the `FrameworkCategoryDefaults` rules of `FrameworkCategoryDefaultTable` apply (ADR 0029), and a default rule not kept in the buffer makes `StepUpSink` pass `categoryExcluded` to `PreErrorBufferSink.Hold`. While diagnostic is active only sources under a `DiagnosticExemptCategories` prefix get a floor. Allocation-free lookup. |
 | `SummarySink` | Internal Serilog sink. Forwards any event tagged `IsRequestSummary=true` to the bypass logger, so request summaries export at their own level independently of the step-up `LevelSwitch`. |
 | `ActivityContextEnricher` | Adds `ParentSpanId`, `TraceFlags`, `TraceState` from `Activity.Current` — fields not provided by `Serilog.Enrichers.OpenTelemetry`. |
 | `StepUpLoggingExtensions` | Public static class. Exposes `AddStepUpLogging()` and `UseStepUpRequestLogging()`, all three `ActivitySource` instances, `AddStepUpLoggingMeters()`, and `CompiledRedactionPatterns`. All Serilog pipeline wiring happens here. |
@@ -41,6 +42,8 @@ dotnet pack src/Lukdrasil.StepUpLogging/Lukdrasil.StepUpLogging.csproj --configu
 | `EnrichmentGate` | Internal. `Needs(LogEvent)` is true when the level is at or above `min(live LevelSwitch, StepUpLevel, Error)` or the event carries `IsImmediate` or `IsRequestSummary`; `For(...)` returns the predicate the root enrichers run behind (`Enrich.When`), or always-true when the `configure` hook is set or `Serilog:AuditTo` has an entry (ADR 0026). |
 | `CategoryPrefix` | Internal static class. The one `SourceContext` prefix rule for every category option (ADR 0021 D3): ordinal equal, or starts with prefix + `.`. |
 | `StepUpLoggingOptions` | All configuration knobs with defaults. Bound from `"SerilogStepUp"` appsettings section. |
+| `StepUpLoggingOptionsValidator` | Internal `IValidateOptions`. One failure message per invalid option, naming the key and its value; checks enums, level names, ranges, floors, Diagnostic exemptions and that each `RedactionRegexes` entry parses. |
+| `StartupReport` | Internal. Written once through the bypass logger when the logger is built: an Information summary of the effective configuration, a Warning per unknown key under the options section, and a Warning per option set to a value with no effect. |
 
 ### Serilog pipeline (wired in `AddStepUpLoggingInternal`)
 
@@ -74,7 +77,7 @@ Audit writes bypass Serilog entirely (ADR 0016 D1): `IAuditLogger<T>.AuditAsync(
 
 ### OTLP configuration
 
-OTLP endpoint, protocol, and headers are read **from environment variables only** (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_RESOURCE_ATTRIBUTES`). They are not configurable via `StepUpLoggingOptions`.
+OTLP endpoint, protocol, and headers are read **from environment variables only** (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_RESOURCE_ATTRIBUTES`). They are not configurable via `StepUpLoggingOptions`. `EnableOtlpExporter` defaults to whether `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
 
 ### Testing
 

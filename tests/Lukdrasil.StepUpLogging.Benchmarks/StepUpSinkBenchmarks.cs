@@ -23,6 +23,10 @@ public class StepUpSinkBenchmarks
     [Params(false, true)]
     public bool WithCategoryRules { get; set; }
 
+    /// <summary>Whether the floors are the Recommended framework defaults alone (ADR 0029), the out-of-the-box setup, instead of the user floors; the application event matches none of them, the worst case.</summary>
+    [Params(false, true)]
+    public bool WithFrameworkDefaults { get; set; }
+
     /// <summary>Builds the sink over a switch at Warning and checks which of the two events it exports.</summary>
     [GlobalSetup]
     public void Setup()
@@ -34,7 +38,7 @@ public class StepUpSinkBenchmarks
             LogEventLevel.Warning,
             WithCategoryRules ? ["Microsoft.EntityFrameworkCore.Database.Command"] : [],
             heldBackBuffer: null,
-            WithCategoryRules ? new CategoryFloorMap(CategoryFloors(), []) : null);
+            WithCategoryRules ? (WithFrameworkDefaults ? new CategoryFloorMap(new Dictionary<string, LogEventLevel>(), [], FrameworkCategoryDefaultTable.Recommended) : new CategoryFloorMap(CategoryFloors(), [])) : null);
         _belowSwitch = BenchmarkFixtures.HandledEvent(LogEventLevel.Debug, extra: 4);
         _atSwitch = BenchmarkFixtures.HandledEvent(LogEventLevel.Warning, extra: 4);
 
