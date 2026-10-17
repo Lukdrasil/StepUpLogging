@@ -278,6 +278,7 @@ public static class StepUpLoggingExtensions
             // which in turn depends on this very callback — resolving it inside the callback deadlocks.
             var bypassLogger = CreateBypassLogger(builder, logFilePath, opts, gatedConfig, redactionPatterns);
             try { stepUpController.SetSummaryLogger(bypassLogger); } catch { }
+            StartupReport.Write(bypassLogger, opts, builder.Configuration.GetSection(configSectionName), logFilePath);
 
             // ADR 0007 warn-not-fail: in Auto or Diagnostic mode a StepUpLevel that is not strictly more verbose than
             // BaseLevel (numerically >= it, since a more verbose level is a LOWER LogEventLevel) means a
