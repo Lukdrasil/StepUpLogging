@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Xunit;
@@ -40,4 +41,26 @@ public class ConfigureOptionsOverloadTests
         Assert.Equal(7, optionsHost.Services.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value.DurationSeconds);
         Assert.True(configureRan);
     }
+
+    [Fact]
+    public void OtlpExporterDisabledInCode_DoesNotRegisterTheOpenTelemetrySdk()
+    {
+        var builder = Host.CreateApplicationBuilder();
+        builder.AddStepUpLogging(opts => opts.EnableOtlpExporter = false);
+
+        Assert.DoesNotContain(builder.Services, IsOtlpExporterRegistration);
+    }
+
+    [Fact]
+    public void OpenTelemetryRegisteredBeforehand_IsLeftToTheApp()
+    {
+        var builder = Host.CreateApplicationBuilder();
+        builder.Services.AddOpenTelemetry();
+        builder.AddStepUpLogging();
+
+        Assert.DoesNotContain(builder.Services, IsOtlpExporterRegistration);
+    }
+
+    private static bool IsOtlpExporterRegistration(ServiceDescriptor sd)
+        => sd.ServiceType.FullName == "OpenTelemetry.Exporter.UseOtlpExporterRegistration";
 }
