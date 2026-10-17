@@ -195,10 +195,15 @@ public sealed class StepUpLoggingOptions
     public string[] AdditionalSensitiveHeaders { get; set; } = [];
 
     /// <summary>
-    /// Enables OpenTelemetry Protocol (OTLP) exporter for production telemetry export.
-    /// Configure via environment variables: OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_EXPORTER_OTLP_PROTOCOL
+    /// Enables the OpenTelemetry Protocol (OTLP) log exporter and, unless the app registered the OpenTelemetry SDK
+    /// first, the SDK's OTLP exporter. Defaults to <see langword="true"/> when the <c>OTEL_EXPORTER_OTLP_ENDPOINT</c>
+    /// environment variable is set and <see langword="false"/> otherwise; set it to <see langword="true"/> to export to
+    /// the default <c>localhost:4317</c> without the variable. The endpoint, protocol and headers come from
+    /// <c>OTEL_EXPORTER_OTLP_ENDPOINT</c>, <c>OTEL_EXPORTER_OTLP_PROTOCOL</c> and <c>OTEL_EXPORTER_OTLP_HEADERS</c>.
     /// </summary>
-    public bool EnableOtlpExporter { get; set; } = true;
+    public bool EnableOtlpExporter { get; set; } = OtlpEndpointIsSet(Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT"));
+
+    internal static bool OtlpEndpointIsSet(string? endpoint) => !string.IsNullOrWhiteSpace(endpoint);
 
     /// <summary>
     /// Enables ActivitySource instrumentation for distributed tracing (default: true).

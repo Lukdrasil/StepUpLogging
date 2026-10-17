@@ -161,6 +161,16 @@ public class OptionsValidationTests
         Assert.Equal("Warning", opts.BaseLevel);
     }
 
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData("", false)]
+    [InlineData("  ", false)]
+    [InlineData("http://collector:4317", true)]
+    public void EnableOtlpExporter_DefaultsToWhetherAnEndpointIsSet(string? endpoint, bool expected)
+    {
+        Assert.Equal(expected, StepUpLoggingOptions.OtlpEndpointIsSet(endpoint));
+    }
+
     [Fact]
     public void NeverStepUpCategories_DefaultsToEfDatabaseCommand()
     {
