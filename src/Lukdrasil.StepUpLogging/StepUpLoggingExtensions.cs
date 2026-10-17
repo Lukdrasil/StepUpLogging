@@ -228,7 +228,7 @@ public static class StepUpLoggingExtensions
                 options.ExcludePaths ??= ["/healthz", "/metrics", "/health"];
                 options.ConsoleTextProperties ??= ["Jti"];
             })
-            .Validate(ValidateOptions, "Invalid SerilogStepUp options: DurationSeconds must be > 0, MaxBodyCaptureBytes must be > 0, MaxContinuousStepUpSeconds must be >= 0 and either 0 (disabled) or >= DurationSeconds, StepUpCooldownSeconds must be >= 0, PreErrorBufferSize and PreErrorMaxContexts must be > 0, and BaseLevel/StepUpLevel/RequestSummaryLevel must be valid Serilog levels. CategoryFloors keys must be non-blank with valid levels no higher than Warning, DiagnosticLevel must be a valid level, DiagnosticDurationMinutes must be 1-120, and each DiagnosticExemptCategories entry must match a CategoryFloors key or, with FrameworkCategoryDefaults Recommended, a framework default prefix.")
+            .Validate(ValidateOptions, "Invalid SerilogStepUp options: DurationSeconds must be > 0, MaxBodyCaptureBytes must be > 0, MaxContinuousStepUpSeconds must be >= 0 and either 0 (disabled) or >= DurationSeconds, StepUpCooldownSeconds must be >= 0, PreErrorBufferSize and PreErrorMaxContexts must be > 0, BaseLevel/StepUpLevel/RequestSummaryLevel must be valid Serilog levels, and Mode/FrameworkCategoryDefaults/ConsoleFormat must be defined values. CategoryFloors keys must be non-blank with valid levels no higher than Warning, DiagnosticLevel must be a valid level, DiagnosticDurationMinutes must be 1-120, and each DiagnosticExemptCategories entry must match a CategoryFloors key or, with FrameworkCategoryDefaults Recommended, a framework default prefix.")
             .ValidateOnStart();
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IValidateOptions<StepUpLoggingOptions>, CategoryFloorCeilingValidator>());
@@ -425,7 +425,10 @@ public static class StepUpLoggingExtensions
     /// typo'd level or a non-positive duration surfaces immediately instead of silently falling back.
     /// </summary>
     private static bool ValidateOptions(StepUpLoggingOptions o)
-        => o.DurationSeconds > 0
+        => Enum.IsDefined(o.Mode)
+           && Enum.IsDefined(o.FrameworkCategoryDefaults)
+           && Enum.IsDefined(o.ConsoleFormat)
+           && o.DurationSeconds > 0
            && o.MaxBodyCaptureBytes > 0
            && o.MaxContinuousStepUpSeconds >= 0
            && o.StepUpCooldownSeconds >= 0

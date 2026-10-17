@@ -229,7 +229,8 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
 
     /// <summary>
     /// Buffers an event <see cref="StepUpSink"/> did not export, under its trace key. Events below the minimum level,
-    /// Error/Fatal events, bypass-marked events and excluded-category events below Warning are ignored.
+    /// Error/Fatal events and excluded-category events below Warning are ignored. Bypass-marked events never arrive here:
+    /// <see cref="StepUpSink"/> refuses them before holding.
     /// <paramref name="categoryExcluded"/> marks an event a framework default keeps out of the buffer (ADR 0029).
     /// </summary>
     internal void Hold(LogEvent logEvent, bool categoryExcluded = false)
@@ -239,16 +240,12 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
             return;
         }
 
-        if (IsForwardedElsewhere(logEvent) || IsExcluded(logEvent, categoryExcluded))
+        if (IsExcluded(logEvent, categoryExcluded))
             return;
 
         BufferEvent(GetContextKey(logEvent), logEvent);
         BufferedEventsCounter.Add(1);
     }
-
-    // ImmediateSink and SummarySink already forward these events — buffering them would cause a double-emit on flush
-    private static bool IsForwardedElsewhere(LogEvent logEvent)
-        => LogProperties.HasFlag(logEvent, LogProperties.IsImmediate) || LogProperties.HasFlag(logEvent, LogProperties.IsRequestSummary);
 
     private bool IsExcluded(LogEvent logEvent, bool categoryExcluded)
         => logEvent.Level < LogEventLevel.Warning && (categoryExcluded || CategoryPrefix.MatchesAny(logEvent, _excludedCategories));

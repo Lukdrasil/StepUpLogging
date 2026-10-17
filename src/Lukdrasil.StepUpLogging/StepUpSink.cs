@@ -68,6 +68,7 @@ internal sealed class StepUpSink : ILogEventSink, IDisposable
     /// <summary>
     /// The level an event must reach to be exported: <c>max(switch, NeverStepUp pin unless diagnostic, category
     /// floor)</c>. The pin keeps listed categories at BaseLevel, a floor only raises the minimum, neither adds verbosity.
+    /// A floor never passes Warning, so the floor lookup is skipped for Warning and above.
     /// <paramref name="excludedFromBuffer"/> is true when a framework default keeps the event out of the buffer.
     /// </summary>
     private LogEventLevel ExportMinimum(LogEvent logEvent, out bool excludedFromBuffer)
@@ -77,7 +78,8 @@ internal sealed class StepUpSink : ILogEventSink, IDisposable
         if (!HasCategoryRules() || !CategoryPrefix.TryGetSourceContext(logEvent, out var source)) return switchLevel;
 
         var diagnosticActive = IsDiagnosticActive();
-        return Higher(PinnedMinimum(source, diagnosticActive, switchLevel), FloorFor(source, diagnosticActive, out excludedFromBuffer));
+        var pinned = PinnedMinimum(source, diagnosticActive, switchLevel);
+        return logEvent.Level >= LogEventLevel.Warning ? pinned : Higher(pinned, FloorFor(source, diagnosticActive, out excludedFromBuffer));
     }
 
     private bool HasCategoryRules() => _neverStepUpCategories.Length > 0 || _categoryFloors is not null;

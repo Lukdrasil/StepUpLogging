@@ -144,6 +144,25 @@ public class StepUpSinkTests
         Assert.Empty(collector.Events);
     }
 
+    [Theory]
+    [InlineData(LogProperties.IsImmediate)]
+    [InlineData(LogProperties.IsRequestSummary)]
+    public void BypassMarkedEventBelowSwitch_IsNotHeld_SoAnErrorFlushDoesNotExportItTwice(string marker)
+    {
+        var flushed = new CollectingSink();
+        var bypass = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(flushed).CreateLogger();
+        using var buffer = new PreErrorBufferSink(bypass, capacityPerContext: 10, maxContexts: 16, minimumLevel: LogEventLevel.Verbose);
+        var inner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(new CollectingSink()).CreateLogger();
+        using var sink = new StepUpSink(inner, new LoggingLevelSwitch(LogEventLevel.Warning), LogEventLevel.Warning, [], buffer);
+
+        sink.Emit(MakeEvent(LogEventLevel.Information, new LogEventProperty("Name", new ScalarValue("normal"))));
+        sink.Emit(MakeEvent(LogEventLevel.Information, new LogEventProperty("Name", new ScalarValue("marked")), new LogEventProperty(marker, new ScalarValue(true))));
+        buffer.Emit(MakeEvent(LogEventLevel.Error));
+
+        var held = Assert.Single(flushed.Events);
+        Assert.Equal("normal", ((ScalarValue)held.Properties["Name"]).Value);
+    }
+
     [Fact]
     public void StepUpSink_Forwards_EventsAtOrAboveLevelSwitch()
     {
