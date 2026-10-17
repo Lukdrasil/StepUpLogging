@@ -172,11 +172,21 @@ public class OptionsValidationTests
     }
 
     [Fact]
-    public void NeverStepUpCategories_DefaultsToEfDatabaseCommand()
+    public void NeverStepUpCategoriesNotConfigured_ResolvesToEfDatabaseCommand()
     {
-        Assert.Equal(
-            new[] { "Microsoft.EntityFrameworkCore.Database.Command" },
-            new StepUpLoggingOptions().NeverStepUpCategories);
+        Assert.Equal(["Microsoft.EntityFrameworkCore.Database.Command"], ResolveFromJson("", o => o.NeverStepUpCategories!));
+    }
+
+    [Fact]
+    public void NeverStepUpCategoriesConfigured_ReplacesTheDefault()
+    {
+        Assert.Equal(["MyApp.Noisy"], ResolveFromJson(""", "NeverStepUpCategories": ["MyApp.Noisy"]""", o => o.NeverStepUpCategories!));
+    }
+
+    [Fact]
+    public void NeverStepUpCategoriesConfiguredEmpty_PinsNothing()
+    {
+        Assert.Equal([], ResolveFromJson(""", "NeverStepUpCategories": []""", o => o.NeverStepUpCategories!));
     }
 
     private static IHost BuildHostWith(Action<StepUpLoggingOptions> configureOptions, params (string Key, string Value)[] settings)
@@ -393,7 +403,7 @@ public class OptionsValidationTests
     {
         using var host = BuildHost();
 
-        Assert.Equal(["Jti"], ResolveOptions(host).ConsoleTextProperties);
+        Assert.Equal(["Jti"], ResolveOptions(host).ConsoleTextProperties!);
     }
 
     [Fact]
@@ -401,7 +411,7 @@ public class OptionsValidationTests
     {
         using var host = BuildHost(("SerilogStepUp:ConsoleTextProperties:0", "UserId"));
 
-        Assert.Equal(["UserId"], ResolveOptions(host).ConsoleTextProperties);
+        Assert.Equal(["UserId"], ResolveOptions(host).ConsoleTextProperties!);
     }
 
     [Fact]
@@ -463,13 +473,16 @@ public class OptionsValidationTests
     }
 
     private static IEnumerable<string>? ResolveExcludePaths(string sectionJson, Action<StepUpLoggingOptions>? configureOptions = null)
+        => ResolveFromJson(sectionJson, o => o.ExcludePaths, configureOptions);
+
+    private static T ResolveFromJson<T>(string sectionJson, Func<StepUpLoggingOptions, T> select, Action<StepUpLoggingOptions>? configureOptions = null)
     {
         var json = $$"""{ "SerilogStepUp": { "EnableOtlpExporter": false {{sectionJson}} } }""";
         var builder = Host.CreateApplicationBuilder();
         builder.Configuration.AddJsonStream(new MemoryStream(Encoding.UTF8.GetBytes(json)));
         builder.AddStepUpLogging(configureOptions);
         using var host = builder.Build();
-        return host.Services.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value.ExcludePaths;
+        return select(host.Services.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value);
     }
 
     [Fact]

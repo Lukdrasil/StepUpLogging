@@ -227,6 +227,7 @@ public static class StepUpLoggingExtensions
             .PostConfigure(options =>
             {
                 options.ExcludePaths ??= ["/healthz", "/metrics", "/health"];
+                options.NeverStepUpCategories ??= ["Microsoft.EntityFrameworkCore.Database.Command"];
                 options.ConsoleTextProperties ??= ["Jti"];
             })
             .Validate(ValidateOptions, "Invalid SerilogStepUp options: DurationSeconds must be > 0, MaxBodyCaptureBytes must be > 0, MaxContinuousStepUpSeconds must be >= 0 and either 0 (disabled) or >= DurationSeconds, StepUpCooldownSeconds must be >= 0, PreErrorBufferSize and PreErrorMaxContexts must be > 0, BaseLevel/StepUpLevel/RequestSummaryLevel must be valid Serilog levels, and Mode/FrameworkCategoryDefaults/ConsoleFormat must be defined values. CategoryFloors keys must be non-blank with valid levels no higher than Warning, DiagnosticLevel must be a valid level, DiagnosticDurationMinutes must be 1-120, and each DiagnosticExemptCategories entry must match a CategoryFloors key or, with FrameworkCategoryDefaults Recommended, a framework default prefix.")
