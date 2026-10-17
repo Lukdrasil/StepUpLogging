@@ -102,7 +102,9 @@ switch can never disagree about what the base level is.
 - A non-empty default is an observable behaviour change for existing consumers: EF SQL
   disappears from stepped-up exports. This is the point of the change. It ships as a
   **minor** version (2.0.0 → 2.1.0) with release notes and a README note showing how to
-  restore the old behaviour (`"NeverStepUpCategories": []`).
+  restore the old behaviour (`"NeverStepUpCategories": []`). Corrected in 5.4.0: the
+  configuration binder binds nothing for an empty array, so the list is cleared in code
+  (`opts.NeverStepUpCategories = []`).
 - The library reads `SourceContext` for the first time. Events produced without it (raw
   `Serilog.Log.Information(...)` outside `ILogger<T>`) are unaffected.
 - `StepUpSink` gains two constructor parameters (`baseLevel`, `neverStepUpCategories`). It

@@ -20,6 +20,10 @@ Tags before 1.8.0 predate this file.
 - `StepUpSink` skips the category floor lookup for `Warning` and above, since no floor passes `Warning`: an exported `Warning` with the framework defaults drops from 40 ns to 17 ns on the benchmark machine. The pre-error buffer no longer re-checks the request summary and immediate markers that `StepUpSink` already refuses: a single-trace hold drops from 52 ns to 44 ns.
 
 ### Fixed
+- `EnableOtlpExporter = false` set in code (the `AddStepUpLogging(opts => ...)` callback) now also skips registering the OpenTelemetry SDK OTLP exporter. Before, only the appsettings value was read for that decision, so the SDK exporter was registered anyway.
+- An OpenTelemetry SDK registered before `AddStepUpLogging` is detected again with OpenTelemetry 1.15, which moved its hosted service to another namespace, so the library no longer adds a second `UseOtlpExporter` registration to the app's own setup.
+- `BaseLevel`, `StepUpLevel`, `RequestSummaryLevel`, `DiagnosticLevel` and `CategoryFloors` values must be level names. A number such as `"1"` or `"99"`, or a list such as `"Debug,Error"`, now fails options validation on start.
+- The README and examples no longer use options that do not exist (`OtlpEndpoint`, `OtlpProtocol`, `OtlpHeaders`, `OtlpResourceAttributes`, the `LoggerConfiguration.UseStepUpLogging` method, the `APP_VERSION` variable). The README now lists `AlwaysLogRequestSummary`, `RequestSummaryLevel`, `StructuredExceptionDetails` and `ServiceInstanceId`, says where `UseStepUpRequestLogging` goes in the middleware order, and lists settings that have no effect. ADR 0021 no longer says `[]` in appsettings clears `NeverStepUpCategories`.
 - `Mode`, `FrameworkCategoryDefaults` and `ConsoleFormat` set to an undefined number, such as `"5"` from appsettings, now fail options validation on start instead of running as an unknown value.
 - The README said `"NeverStepUpCategories": []` in appsettings clears the list. The configuration binder binds nothing for an empty array, so the default entry stays; the README now says to clear it in code.
 

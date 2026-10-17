@@ -94,29 +94,24 @@ builder.AddStepUpLogging(
 
 **Option 4: Aspire ServiceDefaults Integration**
 
-When using Aspire ServiceDefaults which already configures Serilog, use the `UseStepUpLogging()` extension method on `LoggerConfiguration`:
+Call `AddStepUpLogging()` from `AddServiceDefaults()`. It registers Serilog itself, so do not also call `AddSerilog`. When `ConfigureOpenTelemetry()` runs first and registers the OpenTelemetry SDK, `AddStepUpLogging()` leaves the exporter setup to it.
 
 ```csharp
 // In ServiceDefaults/Extensions.cs
-public static TBuilder AddServiceDefaults<TBuilder>(this TBuilder builder) 
+public static TBuilder AddServiceDefaults<TBuilder>(this TBuilder builder)
     where TBuilder : IHostApplicationBuilder
 {
     builder.ConfigureOpenTelemetry();
     builder.AddDefaultHealthChecks();
     builder.Services.AddServiceDiscovery();
-    
-    // Configure Serilog with StepUp logging
-    builder.Services.AddSerilog((services, lc) =>
+
+    builder.AddStepUpLogging(opts =>
     {
-        lc.ReadFrom.Configuration(builder.Configuration)
-          .UseStepUpLogging(builder, opts =>
-          {
-              opts.Mode = builder.Environment.IsDevelopment() 
-                  ? StepUpMode.AlwaysOn 
-                  : StepUpMode.Auto;
-          });
+        opts.Mode = builder.Environment.IsDevelopment()
+            ? StepUpMode.AlwaysOn
+            : StepUpMode.Auto;
     });
-    
+
     return builder;
 }
 
@@ -128,6 +123,16 @@ var app = builder.Build();
 app.UseStepUpRequestLogging(); // Add request logging middleware
 app.Run();
 ```
+
+### Middleware order
+
+Call `app.UseStepUpRequestLogging()` right after `builder.Build()`, before `UseStaticFiles`, `UseRouting`, authentication and any middleware that reads the request body or ends the request early. It measures and summarises only the requests that reach it, and it must enable body buffering before anything reads the body.
+
+### Settings that have no effect
+
+- `Logging:LogLevel`: Serilog replaces the `Microsoft.Extensions.Logging` providers and their filters. Use `SerilogStepUp:BaseLevel`, `CategoryFloors` and `FrameworkCategoryDefaults` instead.
+- `Serilog:MinimumLevel:Default`: the root logger always runs at `Verbose` so the pre-error buffer and the trigger see every event; `BaseLevel` decides what is exported. `Serilog:MinimumLevel:Override` entries still apply and drop events before the buffer sees them.
+- OTLP endpoint, protocol, headers and resource attributes are not `SerilogStepUp` options. Set `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES`.
 
 ### Configuration (appsettings.json)
 
@@ -993,14 +998,14 @@ source of the latency until they measure it.
     "BaseLevel": "Warning",
     "StepUpLevel": "Information",
     "DurationSeconds": 300,
-    "EnableOtlpExporter": true,
-    "OtlpEndpoint": "http://otel-collector:4317",
-    "OtlpResourceAttributes": {
-      "service.name": "ProductionAPI",
-      "deployment.environment": "production"
-    }
+    "EnableOtlpExporter": true
   }
 }
+```
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+export OTEL_RESOURCE_ATTRIBUTES="service.name=ProductionAPI,deployment.environment=production"
 ```
 
 ### Local Development (Always Verbose)
@@ -1029,16 +1034,9 @@ builder.AddStepUpLogging(opts =>
     opts.StepUpLevel = builder.Environment.IsDevelopment() ? "Debug" : "Information";
     opts.EnableConsoleLogging = builder.Environment.IsDevelopment();
     
-    // Production: use OTLP, Development: use console
+    // Production: use OTLP, Development: use console.
+    // The endpoint and headers come from OTEL_EXPORTER_OTLP_ENDPOINT and OTEL_EXPORTER_OTLP_HEADERS.
     opts.EnableOtlpExporter = !builder.Environment.IsDevelopment();
-    
-    if (builder.Environment.IsProduction())
-    {
-        opts.OtlpEndpoint = Environment.GetEnvironmentVariable("OTEL_ENDPOINT") 
-            ?? "http://otel-collector:4317";
-        opts.OtlpHeaders["Authorization"] = "Bearer " + 
-            Environment.GetEnvironmentVariable("OTEL_TOKEN");
-    }
 });
 ```
 
@@ -1163,12 +1161,15 @@ properties; a configured list replaces the default, so keep `Jti` in it if you s
 | `ConsoleTextProperties` | `["Jti"]` | - | Properties written after the message in the `Text` console format as `Name=value` when the event has them; a configured list replaces the default |
 | **Enrichers** |
 | `EnrichWithExceptionDetails` | `true` | - | Enrich logs with structured exception details |
+| `StructuredExceptionDetails` | `true` | - | Second switch for the same enricher; exception details are added only when both are `true` |
 | `EnrichWithThreadId` | `false` | - | Include thread ID in log events |
 | `EnrichWithProcessId` | `false` | - | Include process ID in log events |
 | `EnrichWithMachineName` | `true` | - | Include machine name in log events |
 | `EnrichWithCallStack` | `false` | - | Include call-stack information using Serilog.Enrichers.CallStack (https://github.com/hokagedami/serilog-stacktrace-enricher) |
 | `EnrichWithEnvironment` | `true` | - | Include environment name (Development/Production) |
 | **Request Logging** |
+| `AlwaysLogRequestSummary` | `false` | - | Export one summary per request at `RequestSummaryLevel`, whatever the current level |
+| `RequestSummaryLevel` | `"Information"` | - | Level of the request summary when `AlwaysLogRequestSummary` is on |
 | `CaptureRequestBody` | `false` | - | Capture POST/PUT/PATCH bodies during step-up |
 | `MaxBodyCaptureBytes` | `16384` | - | Max bytes to capture from request body |
 | `ExcludePaths` | `["/healthz", "/metrics", "/health"]` (applied only when not configured) | - | Paths to exclude from logging. A configured list replaces the defaults, `[]` excludes nothing |
@@ -1180,7 +1181,8 @@ properties; a configured list replaces the default, so keep `Jti` in it if you s
 | **Hosting** |
 | `SetStaticLogger` | `false` | - | When `true`, the built logger is assigned to Serilog's static `Log.Logger` and host dispose calls `Log.CloseAndFlush()` (pre-5.0.0 behavior). By default `Log.Logger` is left unchanged: log through DI `ILogger<T>`. Read once at registration. See [MIGRATION.md](MIGRATION.md#migrating-to-v500). |
 | **Service Identification** |
-| `ServiceVersion` | `null` | `APP_VERSION` | Service version for enrichment |
+| `ServiceVersion` | `null` | - | `ServiceVersion` property on every event; not added when unset |
+| `ServiceInstanceId` | `null` | - | `ServiceInstanceId` property on every event; not added when unset |
 
 ### Categories the step-up never raises (`NeverStepUpCategories`)
 

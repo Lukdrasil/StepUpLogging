@@ -22,16 +22,10 @@ builder.AddStepUpLogging(opts =>
     opts.StepUpLevel = builder.Environment.IsDevelopment() ? "Debug" : "Information";
     opts.DurationSeconds = 180;
 
-    // OpenTelemetry export (primary)
+    // OpenTelemetry export (primary). Endpoint, protocol, headers and resource attributes come from
+    // OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_EXPORTER_OTLP_PROTOCOL, OTEL_EXPORTER_OTLP_HEADERS and OTEL_RESOURCE_ATTRIBUTES.
     opts.EnableOtlpExporter = true;
-    opts.OtlpEndpoint = Environment.GetEnvironmentVariable("OTEL_ENDPOINT");
-    opts.OtlpProtocol = "grpc";
-    opts.OtlpResourceAttributes["service.name"] = "ExampleApi";
-    opts.OtlpResourceAttributes["deployment.environment"] = builder.Environment.EnvironmentName;
-    opts.OtlpResourceAttributes["service.version"] = "1.0.0";
-    
-    // Optional: Add authentication header
-    // opts.OtlpHeaders["Authorization"] = "Bearer " + Environment.GetEnvironmentVariable("OTEL_TOKEN");
+    opts.ServiceVersion = "1.0.0";
 
     // Console logging (for local dev or when OTLP collector is not available)
     opts.EnableConsoleLogging = builder.Environment.IsDevelopment();
@@ -62,8 +56,6 @@ builder.AddStepUpLogging(opts =>
 //     {
 //         opts.Mode = StepUpMode.Auto;
 //         opts.EnableConsoleLogging = false;
-//         opts.OtlpEndpoint = Environment.GetEnvironmentVariable("OTEL_PROD_ENDPOINT") 
-//             ?? opts.OtlpEndpoint;
 //     }
 // });
 
