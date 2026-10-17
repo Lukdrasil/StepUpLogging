@@ -1099,18 +1099,23 @@ Per-component BenchmarkDotNet benchmarks (log pipeline, sinks, enrichers, redact
 
 ```text
 [15:54:07.218 WRN] c4fed5a2d96d1640c013ae014f5d162d PersonalTokens.DataAccess.KeycloakUserTokenIssuer: The PAT user token mint was refused with HTTP 400 and OAuth error invalid_scope: Invalid scopes: audience.
-[15:54:07.221 ERR] c4fed5a2d96d1640c013ae014f5d162d Serilog.AspNetCore.RequestLoggingMiddleware: HTTP POST /api/pat/exchange responded 502 in 36.1778 ms
+[15:54:07.221 ERR] c4fed5a2d96d1640c013ae014f5d162d Serilog.AspNetCore.RequestLoggingMiddleware: HTTP POST /api/pat/exchange responded 502 in 36.1778 ms Jti=4ebece0627d94b5f9f37c969bb17d27f
 ```
 
-`Text` writes the time, level, trace id, `SourceContext` and the rendered message, with an exception
-on the following lines. Properties that are not in the message template are not written to the
-console; search them in the OTLP backend by the trace id.
+`Text` writes the time, level, trace id, `SourceContext` and the rendered message, then each
+`ConsoleTextProperties` entry the event has as `Name=value`, with an exception on the following
+lines. Other properties that are not in the message template are not written to the console.
+
+`ConsoleTextProperties` defaults to `["Jti"]`, the token id the request summary carries, so the
+caller's identity stays on the console when OTLP is not available. Add your own identity
+properties; a configured list replaces the default, so keep `Jti` in it if you still want it.
 
 ```json
 {
   "SerilogStepUp": {
     "EnableConsoleLogging": true,
-    "ConsoleFormat": "Text"
+    "ConsoleFormat": "Text",
+    "ConsoleTextProperties": [ "Jti", "UserId", "ClientId" ]
   }
 }
 ```
@@ -1153,6 +1158,7 @@ console; search them in the OTLP backend by the trace id.
 | **Additional Sinks** |
 | `EnableConsoleLogging` | `false` | - | Enable console output (dev scenarios) |
 | `ConsoleFormat` | `Json` | `SerilogStepUp__ConsoleFormat` | Console format: `Json` (CompactJSON) or `Text` (one line with time, level, trace id, `SourceContext` and message); OTLP and file stay structured |
+| `ConsoleTextProperties` | `["Jti"]` | - | Properties written after the message in the `Text` console format as `Name=value` when the event has them; a configured list replaces the default |
 | **Enrichers** |
 | `EnrichWithExceptionDetails` | `true` | - | Enrich logs with structured exception details |
 | `EnrichWithThreadId` | `false` | - | Include thread ID in log events |
