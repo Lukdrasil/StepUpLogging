@@ -45,8 +45,8 @@ or explain a failure. The floors never pass `Warning`, so no framework `Warning`
 hidden, and the buffer exclusion applies below `Warning` only, as in ADR 0028 D2.
 
 **D2. A scalar preset, not seeded collections.** The configuration binder adds keys to an existing
-dictionary and cannot remove one, and a JSON `{}` or `[]` binds nothing, so a dictionary or array seeded
-with the defaults could not be cleared from appsettings. An enum binds by overwrite, also from an
+dictionary and cannot remove one, and a JSON `{}` or `[]` binds nothing into a collection that already
+holds entries, so a dictionary or array seeded with the defaults could not be cleared from appsettings. An enum binds by overwrite, also from an
 environment variable (`SerilogStepUp__FrameworkCategoryDefaults=None`). The table is internal and the
 options object is not written to; `CategoryFloors` still starts empty.
 
@@ -75,7 +75,12 @@ ADR 0021 shipped a non-empty category default the same way. The change is listed
   framework `Information` lines from normal export too. Dashboards built on them need `None` or a
   `CategoryFloors` entry at `Information`.
 - Each held or exported event with a `SourceContext` that no user key matches scans the 12 default
-  prefixes: about 12 ns per event on the benchmark machine (`StepUpSinkBenchmarks`, 24 ns with three user
-  floors, 36 ns with the defaults alone, no match), with no allocation. Events below the enrichment gate
-  are refused before the lookup.
+  prefixes: about 11 ns per event on the benchmark machine, measured on the lookup alone, 2 ns when a
+  default matches, with no allocation. A merged single table, a first-character prefilter and a
+  per-`SourceContext` cache were measured at 0.7, 1.5 and 9 ns less; none was taken, the cache because
+  it grows with every distinct runtime category. Events below the enrichment gate are refused before
+  the lookup.
+- A broad user key such as `"Microsoft": "Warning"` matches every `Microsoft.*` default, so those
+  categories get the user floor and are flushed on an error again. Narrower user keys, or
+  `PreErrorBufferExcludeCategories`, restore the exclusion.
 - The table may change in a minor release; each change is a changelog entry.

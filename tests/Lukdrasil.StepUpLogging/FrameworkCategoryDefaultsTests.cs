@@ -189,6 +189,26 @@ public class FrameworkCategoryDefaultsTests
         Assert.Equal(0, counts["FCD_DIAG_EXEMPT_ROUTING_DEBUG"]);
     }
 
+    [Fact]
+    public void Diagnostic_ExemptDefaultKey_StillKeepsInformationOutOfTheBuffer()
+    {
+        var counts = Run(
+            new()
+            {
+                ["SerilogStepUp:Mode"] = "Diagnostic",
+                ["SerilogStepUp:DiagnosticLevel"] = "Warning",
+                ["SerilogStepUp:DiagnosticExemptCategories:0"] = "Microsoft.AspNetCore.Routing",
+            },
+            logger =>
+            {
+                logger.ForContext("SourceContext", Routing).Information("{Token}", "FCD_DIAG_EXEMPT_ROUTING_INFO");
+                logger.Error("{Token}", "FCD_ERR");
+            },
+            "FCD_DIAG_EXEMPT_ROUTING_INFO");
+
+        Assert.Equal(0, counts["FCD_DIAG_EXEMPT_ROUTING_INFO"]);
+    }
+
     private static Dictionary<string, int> Run(
         Dictionary<string, string?> settings,
         Action<Serilog.ILogger> scenario,
