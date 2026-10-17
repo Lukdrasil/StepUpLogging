@@ -30,6 +30,7 @@ public class BenchmarkSmokeTests
         "RedactionPerPatternBenchmarks",
         "SideSinkBenchmarks",
         "RequestSummaryBenchmarks",
+        "RequestFieldBenchmarks",
     ];
 
     public static TheoryData<string> SmokeRunClasses => new(SmokeRunClassNames);
