@@ -230,10 +230,9 @@ public static class StepUpLoggingExtensions
                 options.NeverStepUpCategories ??= ["Microsoft.EntityFrameworkCore.Database.Command"];
                 options.ConsoleTextProperties ??= ["Jti"];
             })
-            .Validate(ValidateOptions, "Invalid SerilogStepUp options: DurationSeconds must be > 0, MaxBodyCaptureBytes must be > 0, MaxContinuousStepUpSeconds must be >= 0 and either 0 (disabled) or >= DurationSeconds, StepUpCooldownSeconds must be >= 0, PreErrorBufferSize and PreErrorMaxContexts must be > 0, BaseLevel/StepUpLevel/RequestSummaryLevel must be valid Serilog levels, and Mode/FrameworkCategoryDefaults/ConsoleFormat must be defined values. CategoryFloors keys must be non-blank with valid levels no higher than Warning, DiagnosticLevel must be a valid level, DiagnosticDurationMinutes must be 1-120, and each DiagnosticExemptCategories entry must match a CategoryFloors key or, with FrameworkCategoryDefaults Recommended, a framework default prefix.")
             .ValidateOnStart();
         builder.Services.TryAddEnumerable(
-            ServiceDescriptor.Singleton<IValidateOptions<StepUpLoggingOptions>, CategoryFloorCeilingValidator>());
+            ServiceDescriptor.Singleton<IValidateOptions<StepUpLoggingOptions>>(new StepUpLoggingOptionsValidator(configSectionName)));
 
         builder.Services.ConfigureOpenTelemetryMeterProvider(metrics =>
             metrics.AddStepUpLoggingMeters());
@@ -417,41 +416,8 @@ public static class StepUpLoggingExtensions
         return (root, gated);
     }
 
-    /// <summary>
-    /// Validates that <paramref name="o"/> is coherent: a positive step-up duration and level strings
-    /// that parse to a Serilog <see cref="LogEventLevel"/>. Used by the options pipeline at startup so a
-    /// typo'd level or a non-positive duration surfaces immediately instead of silently falling back.
-    /// </summary>
-    private static bool ValidateOptions(StepUpLoggingOptions o)
-        => Enum.IsDefined(o.Mode)
-           && Enum.IsDefined(o.FrameworkCategoryDefaults)
-           && Enum.IsDefined(o.ConsoleFormat)
-           && o.DurationSeconds > 0
-           && o.MaxBodyCaptureBytes > 0
-           && o.MaxContinuousStepUpSeconds >= 0
-           && o.StepUpCooldownSeconds >= 0
-           && (o.MaxContinuousStepUpSeconds == 0 || o.MaxContinuousStepUpSeconds >= o.DurationSeconds)
-           && o.PreErrorBufferSize > 0
-           && o.PreErrorMaxContexts > 0
-           && IsValidLevel(o.BaseLevel)
-           && IsValidLevel(o.StepUpLevel)
-           && IsValidLevel(o.RequestSummaryLevel)
-           && IsValidLevel(o.DiagnosticLevel)
-           && o.DiagnosticDurationMinutes is >= 1 and <= 120
-           && (o.CategoryFloors ?? []).All(f => !string.IsNullOrWhiteSpace(f.Key) && IsValidFloor(f.Value))
-           && (o.DiagnosticExemptCategories ?? [])
-               .Where(e => !string.IsNullOrWhiteSpace(e))
-               .All(e => (o.CategoryFloors ?? []).Keys.Any(k => CategoryPrefix.Matches(e, k))
-                         || FrameworkDefaultsFor(o.FrameworkCategoryDefaults).Any(r => CategoryPrefix.Matches(e, r.Prefix)));
-
-    private static FrameworkCategoryRule[] FrameworkDefaultsFor(FrameworkCategoryPreset preset)
+    internal static FrameworkCategoryRule[] FrameworkDefaultsFor(FrameworkCategoryPreset preset)
         => preset == FrameworkCategoryPreset.Recommended ? FrameworkCategoryDefaultTable.Recommended : [];
-
-    private static bool IsValidLevel(string? value)
-        => Enum.GetNames<LogEventLevel>().Contains(value, StringComparer.OrdinalIgnoreCase);
-
-    internal static bool IsValidFloor(string? value)
-        => IsValidLevel(value) && Enum.Parse<LogEventLevel>(value!, true) <= LogEventLevel.Warning;
 
     /// <summary>
     /// Compiles a redaction pattern with <see cref="RegexOptions.NonBacktracking"/> so matching is
@@ -1070,20 +1036,3 @@ public static class StepUpLoggingExtensions
 /// pipeline's <c>ValidateOnStart</c>, which is what makes the host refuse to start.
 /// </summary>
 internal sealed class AuditLoggingPrerequisites;
-
-/// <summary>
-/// Names each <see cref="StepUpLoggingOptions.CategoryFloors"/> key whose floor is not a valid level
-/// at most <c>Warning</c>, so a floor can never hide an Error; the fixed-message check cannot name it.
-/// </summary>
-internal sealed class CategoryFloorCeilingValidator : IValidateOptions<StepUpLoggingOptions>
-{
-    /// <inheritdoc />
-    public ValidateOptionsResult Validate(string? name, StepUpLoggingOptions options)
-    {
-        var invalid = (options.CategoryFloors ?? [])
-            .Where(f => !StepUpLoggingExtensions.IsValidFloor(f.Value))
-            .Select(f => $"CategoryFloors:{f.Key} must be a valid level no higher than Warning, got '{f.Value}'.")
-            .ToList();
-        return invalid.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(invalid);
-    }
-}

@@ -40,6 +40,41 @@ public class OptionsValidationTests
             () => BuildHost(("SerilogStepUp:" + option, "5")));
     }
 
+    [Theory]
+    [InlineData("BaseLevel", "Warnign")]
+    [InlineData("Mode", "5")]
+    [InlineData("DurationSeconds", "0")]
+    [InlineData("PreErrorBufferSize", "0")]
+    [InlineData("MaxContinuousStepUpSeconds", "10")]
+    public void InvalidOption_FailsValidationNamingOnlyThatOption(string option, string value)
+    {
+        var ex = Assert.Throws<OptionsValidationException>(
+            () => BuildHost(("SerilogStepUp:" + option, value)));
+
+        var failure = Assert.Single(ex.Failures);
+        Assert.StartsWith("SerilogStepUp:" + option + " ", failure);
+    }
+
+    [Fact]
+    public void TwoInvalidOptions_FailValidationNamingBoth()
+    {
+        var ex = Assert.Throws<OptionsValidationException>(
+            () => BuildHost(("SerilogStepUp:BaseLevel", "Warnign"), ("SerilogStepUp:DurationSeconds", "0")));
+
+        Assert.Equal(2, ex.Failures.Count());
+    }
+
+    [Fact]
+    public void InvalidRedactionRegex_FailsValidationNamingThePattern()
+    {
+        var ex = Assert.Throws<OptionsValidationException>(
+            () => BuildHost(("SerilogStepUp:RedactionRegexes:0", "password=(")));
+
+        var failure = Assert.Single(ex.Failures);
+        Assert.Contains("RedactionRegexes", failure);
+        Assert.Contains("password=(", failure);
+    }
+
     [Fact]
     public void NonPositiveDuration_FailsValidationOnStart()
     {
