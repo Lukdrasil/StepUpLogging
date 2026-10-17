@@ -8,6 +8,18 @@ Tags before 1.8.0 predate this file.
 
 ## [Unreleased]
 
+## [5.4.0] - 2026-10-17
+
+### Added
+- `FrameworkCategoryDefaults` (`Recommended` | `None`, default `Recommended`) and the `FrameworkCategoryPreset` enum. See Changed.
+
+### Changed
+- Framework categories are quiet by default. With `FrameworkCategoryDefaults` `Recommended`, `Microsoft.AspNetCore.Hosting.Diagnostics`, `Microsoft.AspNetCore.Routing`, `Microsoft.AspNetCore.Mvc`, `Microsoft.AspNetCore.Http.HttpResults`, `Microsoft.AspNetCore.StaticFiles`, `System.Net.Http.HttpClient`, `Polly`, `Microsoft.EntityFrameworkCore.Database.Command`, `Microsoft.EntityFrameworkCore.Infrastructure` and `Npgsql.Command` export at `Warning` and above, and their events below `Warning` are no longer held in the pre-error buffer, so an `Error` does not flush them. `Microsoft.AspNetCore.Cors` and `Yarp.ReverseProxy.Forwarder` also export at `Warning` but are still flushed on an error. A failing request now exports the application's events and the request summary instead of the framework's request, endpoint, HTTP client and SQL progress lines, and a step-up window no longer exports framework `Information` for every request. A `CategoryFloors` entry overrides the defaults for every category it matches, even when a default prefix is longer; `None` restores the previous behaviour; `AlwaysOn` does not apply the defaults and Diagnostic mode lifts them unless a `DiagnosticExemptCategories` entry, which may now name a default prefix, keeps them. Consumers with `BaseLevel` `Information` lose these framework `Information` lines from normal export too. The EF Core SQL before an error is no longer flushed by default (amends ADR 0021 D1). The lookup adds about 12 ns per event whose category no user floor matches, with no allocation. See docs/adr/0029-framework-category-defaults.md.
+- The request summary middleware allocates less: the `User-Agent` and `X-Forwarded-For` headers are read without boxing, and the first forwarded entry is cut without splitting the header. `ExtractUserAgent` drops from 24 B to 0 B and `ExtractClientAddresses` from 152 B to 48 B on the benchmark machine. `TraceFlags` uses cached properties for the flags 0 and 1.
+
+### Fixed
+- The README said `"NeverStepUpCategories": []` in appsettings clears the list. The configuration binder binds nothing for an empty array, so the default entry stays; the README now says to clear it in code.
+
 ## [5.3.0] - 2026-10-12
 
 ### Added

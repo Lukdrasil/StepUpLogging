@@ -486,6 +486,7 @@ app.MapGet("/stepup/status", (StepUpLoggingController controller) =>
 4. **Exactly once**: Only held-back events are buffered, meaning events the step-up gate did not export. An event is exported at most once: either immediately at the current level, or by the flush when an error follows. Events from `NeverStepUpCategories` are still held back and flushed on an error.
 5. **Shutdown**: Held-back events still in the buffer when the application shuts down without an error are dropped, not exported.
 6. **Excluded categories**: Events below `Warning` from a `PreErrorBufferExcludeCategories` prefix are never held, so an error does not export them. Other categories of the same trace still flush.
+7. **Framework categories**: With `FrameworkCategoryDefaults` `Recommended` (the default), framework categories such as Hosting, Routing, `HttpClient` and EF Core commands are not held below `Warning` either (see [Framework category defaults](#framework-category-defaults)).
 
 ### Configuration
 
@@ -1116,7 +1117,8 @@ Per-component BenchmarkDotNet benchmarks (log pipeline, sinks, enrichers, redact
 | `DiagnosticDurationMinutes` | `30` | - | How long Diagnostic mode lasts after startup, from 1 to 120 minutes |
 | `NeverStepUpCategories` | `["Microsoft.EntityFrameworkCore.Database.Command"]` | - | `SourceContext` prefixes the step-up never raises above `BaseLevel` (see below) |
 | `CategoryFloors` | `{}` | - | `SourceContext` prefix to minimum level; a matching category exports at `max(switch, floor)`. Floors are capped at `Warning` (see Category floors) |
-| `DiagnosticExemptCategories` | `[]` | - | `CategoryFloors` prefixes that keep their floor during Diagnostic mode; each must be matched by a `CategoryFloors` key |
+| `FrameworkCategoryDefaults` | `Recommended` | `SerilogStepUp__FrameworkCategoryDefaults` | Built-in `Warning` floors for framework categories, applied when no `CategoryFloors` key matches; `None` turns them off (see Framework category defaults) |
+| `DiagnosticExemptCategories` | `[]` | - | Floor prefixes that keep their floor during Diagnostic mode; each must be matched by a `CategoryFloors` key or, with `FrameworkCategoryDefaults` `Recommended`, a framework default prefix |
 | `AlwaysExportCategories` | `[]` | - | `SourceContext` prefixes whose events are exported once, at any level, through the immediate path (see Always-export categories) |
 | `NeverTriggerCategories` | `[]` | - | `SourceContext` prefixes whose `Error`/`Fatal` events never trigger step-up; they still export and flush their trace buffer (see Never-trigger categories) |
 | **Pre-Error Buffering** |
@@ -1178,21 +1180,20 @@ for up to 120 minutes. To keep it quiet during the window, add a `CategoryFloors
 category and a `DiagnosticExemptCategories` entry for it (see [Diagnostic mode](#diagnostic-mode)).
 
 One caveat: the deny-list gates the export path only. The pre-error buffer is deliberately **not**
-filtered — when it flushes on an error it still carries the SQL that led up to that error, and
+filtered by it. With `FrameworkCategoryDefaults` `Recommended` (the default) the EF command category is
+kept out of the buffer anyway (see [Framework category defaults](#framework-category-defaults)). With
+`None`, when the buffer flushes on an error it still carries the SQL that led up to that error, and
 unless you set `RedactLogEventProperties` it carries it **unredacted**: the SQL command text is a
 property of an ordinary log event, not request metadata, so only that flag brings it in scope (see
 [Security](#security)). Treat EF as a channel that can leak secrets: do not log sensitive values
 through it.
 
 To restore the pre-3.1.0 behaviour (step-up raises every category, including EF SQL), set the
-list empty:
+list empty in code. A JSON `[]` does not clear it: the configuration binder binds nothing for an
+empty array, so the default entry stays.
 
-```json
-{
-  "SerilogStepUp": {
-    "NeverStepUpCategories": []
-  }
-}
+```csharp
+builder.AddStepUpLogging(o => o.NeverStepUpCategories = []);
 ```
 
 ## Category Control
@@ -1228,6 +1229,67 @@ stepped up.
 - During Diagnostic mode every floor is lifted except for categories under a
   `DiagnosticExemptCategories` prefix, which keep the floor of their most specific matching key.
   An exempt prefix that no `CategoryFloors` key matches fails startup.
+
+### Framework category defaults
+
+`FrameworkCategoryDefaults` (default `Recommended`) applies built-in floors to framework categories whose
+`Information` events repeat the request summary or a span. Their events below `Warning` are neither
+exported during a step-up window nor flushed by an `Error`, so a failing request exports the
+application's events and the request summary instead of the framework's progress lines.
+
+| Prefix | Floor | Flushed on error |
+|---|---|---|
+| `Microsoft.AspNetCore.Hosting.Diagnostics` | `Warning` | no |
+| `Microsoft.AspNetCore.Routing` | `Warning` | no |
+| `Microsoft.AspNetCore.Mvc` | `Warning` | no |
+| `Microsoft.AspNetCore.Http.HttpResults` | `Warning` | no |
+| `Microsoft.AspNetCore.StaticFiles` | `Warning` | no |
+| `Microsoft.AspNetCore.Cors` | `Warning` | yes |
+| `System.Net.Http.HttpClient` | `Warning` | no |
+| `Polly` | `Warning` | no |
+| `Microsoft.EntityFrameworkCore.Database.Command` | `Warning` | no |
+| `Microsoft.EntityFrameworkCore.Infrastructure` | `Warning` | no |
+| `Npgsql.Command` | `Warning` | no |
+| `Yarp.ReverseProxy.Forwarder` | `Warning` | yes |
+
+- `Warning`, `Error` and `Fatal` events of these categories are exported as before.
+- CORS and the YARP forwarder are still flushed on an error, because a failed CORS check or a
+  forwarding error explains the failure.
+- Authentication, Authorization, Antiforgery, Kestrel, DataProtection, health checks and
+  `Microsoft.Hosting.Lifetime` are not listed.
+- A `CategoryFloors` entry overrides the defaults for every category it matches, even when a default
+  prefix is longer, and is flushed on an error like any floor. Add it to
+  `PreErrorBufferExcludeCategories` to keep it out of the flush.
+- `AlwaysOn` does not apply the defaults. Diagnostic mode lifts them unless a
+  `DiagnosticExemptCategories` entry keeps them; such an entry may name a default prefix.
+
+Bring one category back, or turn the defaults off:
+
+```json
+{
+  "SerilogStepUp": {
+    "CategoryFloors": {
+      "System.Net.Http.HttpClient.Keycloak": "Information"
+    }
+  }
+}
+```
+
+```json
+{
+  "SerilogStepUp": {
+    "FrameworkCategoryDefaults": "None"
+  }
+}
+```
+
+```csharp
+builder.AddStepUpLogging(o => o.FrameworkCategoryDefaults = FrameworkCategoryPreset.None);
+```
+
+The setting replaces seeded defaults on purpose: the configuration binder cannot remove a key from a
+dictionary or an entry from an array, so a default stored in `CategoryFloors` could not be cleared
+from appsettings. See docs/adr/0029-framework-category-defaults.md.
 
 ### Always-export categories
 

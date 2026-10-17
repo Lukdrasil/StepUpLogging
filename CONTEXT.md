@@ -5,6 +5,9 @@ Domain terms of `Lukdrasil.StepUpLogging`.
 - **floor**: a per-prefix minimum level from `CategoryFloors`. It only raises the category's
   minimum to `max(switch, floor)` and never makes the category more verbose. Avoid: override,
   category level.
+- **framework default**: (ADR 0029) a built-in floor rule for a framework category, applied by
+  `FrameworkCategoryDefaults` only when no `CategoryFloors` key matches; it may also keep the category
+  out of the pre-error buffer. Avoid: default floor, system level.
 - **Diagnostic mode**: `Mode = Diagnostic`, entered only at startup. The switch sits at
   `DiagnosticLevel` for `DiagnosticDurationMinutes`, then the controller returns to a normal mode.
   Avoid: debug mode, verbose mode.
