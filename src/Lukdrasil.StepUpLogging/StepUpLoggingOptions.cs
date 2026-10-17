@@ -33,6 +33,23 @@ public enum StepUpMode
 }
 
 /// <summary>
+/// The format of the console sink enabled by <see cref="StepUpLoggingOptions.EnableConsoleLogging"/>.
+/// </summary>
+public enum ConsoleLogFormat
+{
+    /// <summary>
+    /// Compact JSON (CLEF), one event per line with every property.
+    /// </summary>
+    Json = 0,
+
+    /// <summary>
+    /// One readable line per event: time, level, trace id, <c>SourceContext</c> and the rendered message, with the
+    /// exception on the following lines. Properties not in the message are not written.
+    /// </summary>
+    Text = 1
+}
+
+/// <summary>
 /// Selects the built-in framework category rules applied under <see cref="StepUpLoggingOptions.CategoryFloors"/>.
 /// </summary>
 public enum FrameworkCategoryPreset
@@ -196,9 +213,15 @@ public sealed class StepUpLoggingOptions
 
     /// <summary>
     /// Enables console sink for log output (typically for development/debugging).
-    /// Logs are formatted as compact JSON.
+    /// Logs are formatted as set by <see cref="ConsoleFormat"/>.
     /// </summary>
     public bool EnableConsoleLogging { get; set; } = false;
+
+    /// <summary>
+    /// The console sink's format: <see cref="ConsoleLogFormat.Json"/> or <see cref="ConsoleLogFormat.Text"/>.
+    /// Only the console changes; the OTLP exporter and the file sink stay structured. Default: <see cref="ConsoleLogFormat.Json"/>.
+    /// </summary>
+    public ConsoleLogFormat ConsoleFormat { get; set; } = ConsoleLogFormat.Json;
 
     /// <summary>
     /// Enables structured exception details in logs (includes stack traces, inner exceptions, etc.)

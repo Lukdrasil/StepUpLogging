@@ -351,6 +351,22 @@ public class OptionsValidationTests
     }
 
     [Fact]
+    public void ConsoleFormat_BindsTextFromConfig()
+    {
+        using var host = BuildHost(("SerilogStepUp:ConsoleFormat", "Text"));
+
+        Assert.Equal(ConsoleLogFormat.Text, ResolveOptions(host).ConsoleFormat);
+    }
+
+    [Fact]
+    public void ConsoleText_WiresWithoutError()
+    {
+        using var host = BuildHost(("SerilogStepUp:EnableConsoleLogging", "true"), ("SerilogStepUp:ConsoleFormat", "Text"));
+
+        Assert.Equal(ConsoleLogFormat.Text, ResolveOptions(host).ConsoleFormat);
+    }
+
+    [Fact]
     public void BlankCategoryListEntries_ResolveOnStart()
     {
         using var host = BuildHost(
