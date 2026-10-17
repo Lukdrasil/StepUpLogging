@@ -224,7 +224,11 @@ public static class StepUpLoggingExtensions
         builder.Services.AddOptions<StepUpLoggingOptions>()
             .Bind(builder.Configuration.GetSection(configSectionName))
             .Configure(options => configureOptions?.Invoke(options))
-            .PostConfigure(options => options.ExcludePaths ??= ["/healthz", "/metrics", "/health"])
+            .PostConfigure(options =>
+            {
+                options.ExcludePaths ??= ["/healthz", "/metrics", "/health"];
+                options.ConsoleTextProperties ??= ["Jti"];
+            })
             .Validate(ValidateOptions, "Invalid SerilogStepUp options: DurationSeconds must be > 0, MaxBodyCaptureBytes must be > 0, MaxContinuousStepUpSeconds must be >= 0 and either 0 (disabled) or >= DurationSeconds, StepUpCooldownSeconds must be >= 0, PreErrorBufferSize and PreErrorMaxContexts must be > 0, and BaseLevel/StepUpLevel/RequestSummaryLevel must be valid Serilog levels. CategoryFloors keys must be non-blank with valid levels no higher than Warning, DiagnosticLevel must be a valid level, DiagnosticDurationMinutes must be 1-120, and each DiagnosticExemptCategories entry must match a CategoryFloors key or, with FrameworkCategoryDefaults Recommended, a framework default prefix.")
             .ValidateOnStart();
         builder.Services.TryAddEnumerable(
@@ -1006,7 +1010,7 @@ public static class StepUpLoggingExtensions
     /// The console formatter for <paramref name="format"/>: compact JSON, or one line with the trace id and the
     /// rendered message. The OTLP and file sinks do not use it and stay structured.
     /// </summary>
-    internal static ITextFormatter CreateConsoleFormatter(ConsoleLogFormat format) => format switch
+    internal static ITextFormatter CreateConsoleFormatter(ConsoleLogFormat format, string[] textProperties) => format switch
     {
         ConsoleLogFormat.Text => new MessageTemplateTextFormatter(ConsoleTextTemplate),
         _ => new CompactJsonFormatter(),
@@ -1043,7 +1047,7 @@ public static class StepUpLoggingExtensions
 
         if (opts.EnableConsoleLogging)
         {
-            lc.WriteTo.Async(a => a.Console(CreateConsoleFormatter(opts.ConsoleFormat)));
+            lc.WriteTo.Async(a => a.Console(CreateConsoleFormatter(opts.ConsoleFormat, opts.ConsoleTextProperties ?? [])));
         }
 
         if (!string.IsNullOrWhiteSpace(logFilePath))

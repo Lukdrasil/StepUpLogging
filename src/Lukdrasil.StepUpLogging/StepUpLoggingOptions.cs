@@ -224,6 +224,14 @@ public sealed class StepUpLoggingOptions
     public ConsoleLogFormat ConsoleFormat { get; set; } = ConsoleLogFormat.Json;
 
     /// <summary>
+    /// Properties written after the message in the <see cref="ConsoleLogFormat.Text"/> console format as
+    /// <c>Name=value</c>, when the event has them, so identity such as the token id stays on the console without
+    /// OTLP. <see langword="null"/> means not configured, and the built-in default <c>["Jti"]</c> applies after
+    /// configuration. A configured list replaces the default; blank entries are ignored.
+    /// </summary>
+    public string[]? ConsoleTextProperties { get; set; }
+
+    /// <summary>
     /// Enables structured exception details in logs (includes stack traces, inner exceptions, etc.)
     /// </summary>
     public bool StructuredExceptionDetails { get; set; } = true;

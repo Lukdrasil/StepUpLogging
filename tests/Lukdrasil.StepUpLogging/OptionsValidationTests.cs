@@ -359,6 +359,22 @@ public class OptionsValidationTests
     }
 
     [Fact]
+    public void ConsoleTextProperties_NotConfigured_ResolvesToJti()
+    {
+        using var host = BuildHost();
+
+        Assert.Equal(["Jti"], ResolveOptions(host).ConsoleTextProperties);
+    }
+
+    [Fact]
+    public void ConsoleTextProperties_Configured_ReplacesTheDefault()
+    {
+        using var host = BuildHost(("SerilogStepUp:ConsoleTextProperties:0", "UserId"));
+
+        Assert.Equal(["UserId"], ResolveOptions(host).ConsoleTextProperties);
+    }
+
+    [Fact]
     public void ConsoleText_WiresWithoutError()
     {
         using var host = BuildHost(("SerilogStepUp:EnableConsoleLogging", "true"), ("SerilogStepUp:ConsoleFormat", "Text"));
