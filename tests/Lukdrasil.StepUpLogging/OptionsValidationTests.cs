@@ -310,6 +310,47 @@ public class OptionsValidationTests
     }
 
     [Fact]
+    public void ExemptCategoryUnderAFrameworkDefaultKey_ResolvesOnStart()
+    {
+        using var host = BuildHost(("SerilogStepUp:DiagnosticExemptCategories:0", "Microsoft.AspNetCore.Routing"));
+
+        Assert.Equal(["Microsoft.AspNetCore.Routing"], ResolveOptions(host).DiagnosticExemptCategories);
+    }
+
+    [Fact]
+    public void ExemptCategoryUnderAFrameworkDefaultKey_WithPresetNone_FailsValidationOnStart()
+    {
+        Assert.Throws<OptionsValidationException>(
+            () => BuildHost(
+                ("SerilogStepUp:FrameworkCategoryDefaults", "None"),
+                ("SerilogStepUp:DiagnosticExemptCategories:0", "Microsoft.AspNetCore.Routing")));
+    }
+
+    [Fact]
+    public void FrameworkCategoryDefaults_DefaultsToRecommended()
+    {
+        Assert.Equal(FrameworkCategoryPreset.Recommended, new StepUpLoggingOptions().FrameworkCategoryDefaults);
+    }
+
+    [Fact]
+    public void FrameworkCategoryDefaults_BindsNoneFromConfig()
+    {
+        using var host = BuildHost(("SerilogStepUp:FrameworkCategoryDefaults", "None"));
+
+        Assert.Equal(FrameworkCategoryPreset.None, ResolveOptions(host).FrameworkCategoryDefaults);
+    }
+
+    [Fact]
+    public void FrameworkCategoryDefaults_CodeOverridesConfig()
+    {
+        using var host = BuildHostWith(
+            o => o.FrameworkCategoryDefaults = FrameworkCategoryPreset.Recommended,
+            ("SerilogStepUp:FrameworkCategoryDefaults", "None"));
+
+        Assert.Equal(FrameworkCategoryPreset.Recommended, ResolveOptions(host).FrameworkCategoryDefaults);
+    }
+
+    [Fact]
     public void BlankCategoryListEntries_ResolveOnStart()
     {
         using var host = BuildHost(

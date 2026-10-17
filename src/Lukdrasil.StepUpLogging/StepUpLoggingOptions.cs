@@ -32,6 +32,25 @@ public enum StepUpMode
     Diagnostic = 3
 }
 
+/// <summary>
+/// Selects the built-in framework category rules applied under <see cref="StepUpLoggingOptions.CategoryFloors"/>.
+/// </summary>
+public enum FrameworkCategoryPreset
+{
+    /// <summary>
+    /// No built-in rules: framework categories behave like application categories.
+    /// </summary>
+    None = 0,
+
+    /// <summary>
+    /// Framework categories whose Information events repeat the request summary or a span (ASP.NET Core hosting,
+    /// routing, MVC, HTTP results, static files, HttpClient handlers, Polly, EF Core commands, Npgsql commands)
+    /// export at <c>Warning</c> and above and are kept out of the pre-error buffer below <c>Warning</c>.
+    /// CORS and the YARP forwarder export at <c>Warning</c> but stay in the buffer, since they explain a failure.
+    /// </summary>
+    Recommended = 1
+}
+
 public sealed class StepUpLoggingOptions
 {
     public StepUpMode Mode { get; set; } = StepUpMode.Auto;
@@ -318,6 +337,14 @@ public sealed class StepUpLoggingOptions
     /// must be matched by a <see cref="CategoryFloors"/> key. Default: empty.
     /// </summary>
     public string[] DiagnosticExemptCategories { get; set; } = [];
+
+    /// <summary>
+    /// Built-in floors for framework categories, consulted only when no <see cref="CategoryFloors"/> key matches the
+    /// <c>SourceContext</c>, so a <see cref="CategoryFloors"/> entry overrides a built-in rule, at any level. The rules
+    /// are lifted in <see cref="StepUpMode.Diagnostic"/> unless a <see cref="DiagnosticExemptCategories"/> entry keeps
+    /// them, and not applied in <see cref="StepUpMode.AlwaysOn"/>. Default: <see cref="FrameworkCategoryPreset.Recommended"/>.
+    /// </summary>
+    public FrameworkCategoryPreset FrameworkCategoryDefaults { get; set; } = FrameworkCategoryPreset.Recommended;
 
     /// <summary>
     /// The level the switch sits at during <see cref="StepUpMode.Diagnostic"/>. Default: <c>"Debug"</c>.
