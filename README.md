@@ -7,7 +7,7 @@
 
 ## Features
 
-✅ **Step-up on errors** - Exports `Warning` and above normally; an `Error` raises the level to `Information` for 3 minutes  
+✅ **Step-up on errors** - Exports `Warning` and above normally; an `Error` raises the level to `Information` for 3 seconds  
 ✅ **Pre-error buffering** - The events of a failing request that were not exported are flushed with its error  
 ✅ **Quiet framework logs** - ASP.NET Core, HttpClient, Polly, EF Core and Npgsql progress lines stay at `Warning` by default  
 ✅ **OpenTelemetry-first** - OTLP export when a collector is configured, optional console (JSON or one-line text) and file sinks  
@@ -58,7 +58,7 @@ Nothing is required. What you set depends on where the logs go:
 | The app is a reverse proxy or BFF | `SerilogStepUp:TreatServerErrorStatusAsError` = `false` | A 5xx relayed from a backend then does not step the app up |
 
 At startup the library writes one line with what it ended up using, for example
-`StepUp logging: Mode Auto, BaseLevel Warning, StepUpLevel Information for 180 s; outputs OTLP http://collector:4317; framework defaults Recommended; request summary off`.
+`StepUp logging: Mode Auto, BaseLevel Warning, StepUpLevel Information for 3 s; outputs OTLP http://collector:4317; framework defaults Recommended; request summary off`.
 Check it after the first deployment. `outputs none` means no log leaves the process.
 
 ### What you get by default
@@ -66,7 +66,7 @@ Check it after the first deployment. `outputs none` means no log leaves the proc
 | Behaviour | Default |
 |---|---|
 | Normal export | `Warning`, `Error` and `Fatal` from every category |
-| On an `Error` or `Fatal` | Every category exports `Information` and above for 180 s. Each further error restarts the 180 s, with no upper limit |
+| On an `Error` or `Fatal` | Every category exports `Information` and above for 3 s. Each further error restarts the 3 s, with no upper limit |
 | Events before an error | Each request's events at `Information` and above that were not exported are held in memory (100 per request, 1024 requests) and exported with the request's error; otherwise dropped |
 | Framework categories | ASP.NET Core hosting, routing, MVC, HTTP results and static files, HttpClient, Polly, EF Core commands and infrastructure, and Npgsql commands export at `Warning` and above even during a step-up, and are not flushed by an error. CORS and the YARP forwarder export at `Warning` but are flushed |
 | OTLP export | On when `OTEL_EXPORTER_OTLP_ENDPOINT` is set, off otherwise |
@@ -171,7 +171,7 @@ These settings have no effect:
 | `Mode` | `Auto` | `Disabled` never steps up: you keep only `Warning` and above plus the events flushed by an error, at the lowest volume. `AlwaysOn` exports `StepUpLevel` all the time and ignores the framework defaults and `NeverStepUpCategories`: volume grows with traffic, so keep it for development. `Diagnostic` exports `DiagnosticLevel` (`Debug`) for `DiagnosticDurationMinutes` (30, at most 120) after each start, then runs as `Auto`; use it for one deployment while investigating |
 | `BaseLevel` | `Warning` | `Information` exports every application `Information` event all the time, a large and steady volume increase. `Error` hides warnings until something fails |
 | `StepUpLevel` | `Information` | `Debug` exports `Debug` from every category during a step-up window, and the buffer then holds `Debug` too, so an incident produces much more data and the buffer uses more memory |
-| `DurationSeconds` | `180` | Longer keeps the detail on after an incident and costs more volume; shorter saves volume but the next error after the window has less context |
+| `DurationSeconds` | `3` | The default keeps the step-up to the requests in flight when the error happens; the failing request's own earlier events come from the pre-error buffer. Longer, such as `180`, also exports `Information` from every request for that long after an error, so the requests that follow an incident have full detail, at a volume cost that grows with traffic. A sustained failure keeps restarting the window either way |
 | `MaxContinuousStepUpSeconds` | `0` (no cap) | Set it, at least `DurationSeconds`, when a sustained failure must not keep the detail on for hours. After the cap, triggers are ignored for `StepUpCooldownSeconds` (`300`) |
 | `NeverTriggerCategories` | none | Errors from listed categories still export and flush their request, but do not raise the level for everyone. Use it for a dependency that fails often and loudly |
 
@@ -1059,7 +1059,7 @@ properties; a configured list replaces the default, so keep `Jti` in it if you s
 | `Mode` | `Auto` | - | Step-up mode: `Auto`, `AlwaysOn`, `Disabled`, `Diagnostic` |
 | `BaseLevel` | `"Warning"` | - | Normal log level |
 | `StepUpLevel` | `"Information"` | - | Elevated log level during step-up |
-| `DurationSeconds` | `180` | - | How long step-up remains active (Auto mode) |
+| `DurationSeconds` | `3` | - | How long step-up remains active (Auto mode) |
 | `MaxContinuousStepUpSeconds` | `0` (disabled) | - | Upper bound on a single continuous step-up window; forces a step-down and opens a cooldown when exceeded. `0` disables the cap. Must be `0` or `>= DurationSeconds`. |
 | `StepUpCooldownSeconds` | `300` | - | Seconds triggers are ignored after the cap forces a step-down; ignored when the cap is disabled |
 | `DiagnosticLevel` | `"Debug"` | - | Level the switch sits at while Diagnostic mode is active |
