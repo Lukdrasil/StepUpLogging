@@ -11,6 +11,9 @@ namespace Lukdrasil.StepUpLogging;
 /// </summary>
 internal sealed class ActivityContextEnricher : ILogEventEnricher
 {
+    private static readonly LogEventProperty TraceFlagsNone = new("TraceFlags", new ScalarValue("0"));
+    private static readonly LogEventProperty TraceFlagsRecorded = new("TraceFlags", new ScalarValue("1"));
+
     public void Enrich(LogEvent logEvent, ILogEventPropertyFactory propertyFactory)
     {
         var activity = Activity.Current;
@@ -27,8 +30,12 @@ internal sealed class ActivityContextEnricher : ILogEventEnricher
 
         // Add TraceFlags - indicates sampling decisions (Recorded=1, NotRecorded=0)
         // Important for understanding if this activity was sampled for detailed tracing
-        logEvent.AddPropertyIfAbsent(propertyFactory.CreateProperty(
-            "TraceFlags", ((int)activity.ActivityTraceFlags).ToString()));
+        logEvent.AddPropertyIfAbsent(activity.ActivityTraceFlags switch
+        {
+            ActivityTraceFlags.None => TraceFlagsNone,
+            ActivityTraceFlags.Recorded => TraceFlagsRecorded,
+            var flags => propertyFactory.CreateProperty("TraceFlags", ((int)flags).ToString()),
+        });
 
         // Add TraceState if present - vendor-specific trace context
         if (!string.IsNullOrEmpty(activity.TraceStateString))

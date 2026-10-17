@@ -873,11 +873,12 @@ public static class StepUpLoggingExtensions
             string? firstEntry = null;
             if (httpContext.Request.Headers.TryGetValue("X-Forwarded-For", out var forwardedForHeader))
             {
-                var rawValue = forwardedForHeader.FirstOrDefault();
+                var rawValue = forwardedForHeader.Count > 0 ? forwardedForHeader[0] : null;
                 if (!string.IsNullOrWhiteSpace(rawValue))
                 {
                     forwardedFor = patterns.Redact(rawValue);
-                    var candidate = rawValue.Split(',')[0].Trim();
+                    var comma = rawValue.IndexOf(',');
+                    var candidate = (comma < 0 ? rawValue : rawValue[..comma]).Trim();
                     if (!string.IsNullOrWhiteSpace(candidate))
                     {
                         firstEntry = patterns.Redact(candidate);
@@ -904,7 +905,7 @@ public static class StepUpLoggingExtensions
         {
             if (request.Headers.TryGetValue("User-Agent", out var userAgentValue))
             {
-                var userAgent = userAgentValue.FirstOrDefault();
+                var userAgent = userAgentValue.Count > 0 ? userAgentValue[0] : null;
                 return !string.IsNullOrWhiteSpace(userAgent) ? userAgent : null;
             }
             return null;
