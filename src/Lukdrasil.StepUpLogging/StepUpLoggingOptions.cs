@@ -74,7 +74,7 @@ public sealed class StepUpLoggingOptions
     public StepUpMode Mode { get; set; } = StepUpMode.Auto;
     public string BaseLevel { get; set; } = "Warning";
     public string StepUpLevel { get; set; } = "Information";
-    public int DurationSeconds { get; set; } = 180;
+    public int DurationSeconds { get; set; } = 1;
 
     /// <summary>
     /// Request paths excluded from request logging, matched case-insensitively. An entry ending in <c>*</c>

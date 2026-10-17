@@ -45,7 +45,7 @@ public class OptionsValidationTests
     [InlineData("Mode", "5")]
     [InlineData("DurationSeconds", "0")]
     [InlineData("PreErrorBufferSize", "0")]
-    [InlineData("MaxContinuousStepUpSeconds", "10")]
+    [InlineData("MaxContinuousStepUpSeconds", "-1")]
     public void InvalidOption_FailsValidationNamingOnlyThatOption(string option, string value)
     {
         var ex = Assert.Throws<OptionsValidationException>(
@@ -192,7 +192,7 @@ public class OptionsValidationTests
 
         var opts = host.Services.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
 
-        Assert.Equal(180, opts.DurationSeconds);
+        Assert.Equal(1, opts.DurationSeconds);
         Assert.Equal("Warning", opts.BaseLevel);
     }
 

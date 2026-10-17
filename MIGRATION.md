@@ -1,5 +1,18 @@
 # Migrating to v6.0.0
 
+## `DurationSeconds` defaults to 1
+
+**What changed.** The step-up window after an error was 180 s by default and is now 1 s.
+
+**Why.** The pre-error buffer already exports the failing request's own events, so a long window mostly exports
+`Information` from the healthy requests that follow, at a cost that grows with traffic.
+
+**Migrate.** To keep the previous window, set it:
+
+```json
+{ "SerilogStepUp": { "DurationSeconds": 180 } }
+```
+
 ## OTLP export needs `OTEL_EXPORTER_OTLP_ENDPOINT`
 
 **What changed.** `EnableOtlpExporter` used to default to `true`, so without `OTEL_EXPORTER_OTLP_ENDPOINT` the
