@@ -192,7 +192,7 @@ public class OptionsValidationTests
 
         var opts = host.Services.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
 
-        Assert.Equal(1, opts.DurationSeconds);
+        Assert.Equal(3, opts.DurationSeconds);
         Assert.Equal("Warning", opts.BaseLevel);
     }
 
