@@ -223,7 +223,7 @@ public static class StepUpLoggingExtensions
             .Bind(builder.Configuration.GetSection(configSectionName))
             .Configure(options => configureOptions?.Invoke(options))
             .PostConfigure(options => options.ExcludePaths ??= ["/healthz", "/metrics", "/health"])
-            .Validate(ValidateOptions, "Invalid SerilogStepUp options: DurationSeconds must be > 0, MaxBodyCaptureBytes must be > 0, MaxContinuousStepUpSeconds must be >= 0 and either 0 (disabled) or >= DurationSeconds, StepUpCooldownSeconds must be >= 0, PreErrorBufferSize and PreErrorMaxContexts must be > 0, and BaseLevel/StepUpLevel/RequestSummaryLevel must be valid Serilog levels. CategoryFloors keys must be non-blank with valid levels no higher than Warning, DiagnosticLevel must be a valid level, DiagnosticDurationMinutes must be 1-120, and each DiagnosticExemptCategories entry must match a CategoryFloors key.")
+            .Validate(ValidateOptions, "Invalid SerilogStepUp options: DurationSeconds must be > 0, MaxBodyCaptureBytes must be > 0, MaxContinuousStepUpSeconds must be >= 0 and either 0 (disabled) or >= DurationSeconds, StepUpCooldownSeconds must be >= 0, PreErrorBufferSize and PreErrorMaxContexts must be > 0, and BaseLevel/StepUpLevel/RequestSummaryLevel must be valid Serilog levels. CategoryFloors keys must be non-blank with valid levels no higher than Warning, DiagnosticLevel must be a valid level, DiagnosticDurationMinutes must be 1-120, and each DiagnosticExemptCategories entry must match a CategoryFloors key or, with FrameworkCategoryDefaults Recommended, a framework default prefix.")
             .ValidateOnStart();
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IValidateOptions<StepUpLoggingOptions>, CategoryFloorCeilingValidator>());
@@ -331,9 +331,11 @@ public static class StepUpLoggingExtensions
             var floors = (opts.CategoryFloors ?? [])
                 .Where(f => !string.IsNullOrWhiteSpace(f.Key))
                 .ToDictionary(f => f.Key, f => Enum.Parse<LogEventLevel>(f.Value, ignoreCase: true), StringComparer.Ordinal);
-            var categoryFloors = floors.Count == 0
+            // AlwaysOn skips the framework defaults for the same reason it skips the NeverStepUp list (ADR 0029).
+            var frameworkDefaults = FrameworkDefaultsFor(opts.FrameworkCategoryDefaults, opts.Mode);
+            var categoryFloors = floors.Count == 0 && frameworkDefaults.Length == 0
                 ? null
-                : new CategoryFloorMap(floors, (opts.DiagnosticExemptCategories ?? []).Where(c => !string.IsNullOrWhiteSpace(c)).ToArray());
+                : new CategoryFloorMap(floors, (opts.DiagnosticExemptCategories ?? []).Where(c => !string.IsNullOrWhiteSpace(c)).ToArray(), frameworkDefaults);
 
             lc.WriteTo.Sink(new StepUpSink(
                 stepUpInnerCfg.CreateLogger(),
@@ -433,7 +435,11 @@ public static class StepUpLoggingExtensions
            && (o.CategoryFloors ?? []).All(f => !string.IsNullOrWhiteSpace(f.Key) && IsValidFloor(f.Value))
            && (o.DiagnosticExemptCategories ?? [])
                .Where(e => !string.IsNullOrWhiteSpace(e))
-               .All(e => (o.CategoryFloors ?? []).Keys.Any(k => CategoryPrefix.Matches(e, k)));
+               .All(e => (o.CategoryFloors ?? []).Keys.Any(k => CategoryPrefix.Matches(e, k))
+                         || FrameworkDefaultsFor(o.FrameworkCategoryDefaults, StepUpMode.Auto).Any(r => CategoryPrefix.Matches(e, r.Prefix)));
+
+    private static FrameworkCategoryRule[] FrameworkDefaultsFor(FrameworkCategoryPreset preset, StepUpMode mode)
+        => preset == FrameworkCategoryPreset.Recommended && mode != StepUpMode.AlwaysOn ? FrameworkCategoryDefaultTable.Recommended : [];
 
     private static bool IsValidLevel(string? value)
         => !string.IsNullOrWhiteSpace(value) && Enum.TryParse<LogEventLevel>(value, true, out _);
