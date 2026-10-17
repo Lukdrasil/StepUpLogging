@@ -134,6 +134,22 @@ Call `app.UseStepUpRequestLogging()` right after `builder.Build()`, before `UseS
 - `Serilog:MinimumLevel:Default`: the root logger always runs at `Verbose` so the pre-error buffer and the trigger see every event; `BaseLevel` decides what is exported. `Serilog:MinimumLevel:Override` entries still apply and drop events before the buffer sees them.
 - OTLP endpoint, protocol, headers and resource attributes are not `SerilogStepUp` options. Set `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES`.
 
+### Startup report
+
+When the logger is built, the library writes through its own output, whatever the current level:
+
+- One `Information` line with the effective configuration, for example
+  `StepUp logging: Mode Auto, BaseLevel Warning, StepUpLevel Information for 180 s; outputs OTLP http://collector:4317, Console Text; framework defaults Recommended; request summary off`.
+  The OTLP endpoint is shown as scheme, host and port only.
+- A `Warning` for each key under `SerilogStepUp` that matches no option, such as a misspelled `BaseLvel`
+  or `OtlpEndpoint`. The key is ignored.
+- A `Warning` for an option set to a value that has no effect: `ConsoleFormat` with `EnableConsoleLogging`
+  `false`, or `RedactLogEventProperties` with no `RedactionRegexes`.
+
+An invalid value stops the host at startup with an `OptionsValidationException` that names each failing key and the
+value it got, for example `SerilogStepUp:BaseLevel must be a Serilog level name (Verbose, Debug, Information, Warning, Error, Fatal), got 'Warnign'.`
+Levels must be names, and each `RedactionRegexes` entry must be a valid regular expression.
+
 ### Configuration (appsettings.json)
 
 ```json
@@ -262,11 +278,13 @@ To customise where summaries are written, provide a dedicated summary logger in 
 
 ### OpenTelemetry Configuration
 
-StepUpLogging uses standard OpenTelemetry environment variables for OTLP configuration. OTLP endpoint and protocol are configured exclusively via environment variables and cannot be overridden programmatically:
+StepUpLogging uses standard OpenTelemetry environment variables for OTLP configuration. OTLP endpoint and protocol are configured exclusively via environment variables and cannot be overridden programmatically.
+
+OTLP export is on only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set, so an app without a collector needs no setting to turn it off. To export to the default `http://localhost:4317` without the variable, for example to a sidecar, set `EnableOtlpExporter` to `true`.
 
 | Environment Variable | Purpose | Default |
 |---|---|---|
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP collector endpoint | `http://localhost:4317` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP collector endpoint; setting it turns OTLP export on | none (OTLP export off) |
 | `OTEL_EXPORTER_OTLP_PROTOCOL` | Protocol: `grpc` or `http/protobuf` | `grpc` |
 | `OTEL_EXPORTER_OTLP_HEADERS` | Headers (format: `key1=value1,key2=value2`) | (none) |
 | `OTEL_RESOURCE_ATTRIBUTES` | Resource attributes (format: `key1=value1,key2=value2`) | (none) |
@@ -288,14 +306,13 @@ export OTEL_RESOURCE_ATTRIBUTES="service.name=MyApi,deployment.environment=produ
 dotnet MyApp.dll
 ```
 
-For other OTLP options (like additional headers or resource attributes), use environment variables or configure via `appsettings.json`.
-
 ### Step-Up Modes
 
 **`Auto` (default - Production)**
 - Logs at `BaseLevel` (Warning) during normal operation
 - Automatically steps up to `StepUpLevel` (Information) when errors occur
-- Returns to `BaseLevel` after configured duration
+- Returns to `BaseLevel` after `DurationSeconds` (default 180 s, 3 minutes). Each further error restarts the window,
+  so continuous errors keep the step-up on; set `MaxContinuousStepUpSeconds` to cap it.
 
 **`AlwaysOn` (Development)**
 - Always logs at `StepUpLevel` (Information)
@@ -1139,7 +1156,7 @@ properties; a configured list replaces the default, so keep `Jti` in it if you s
 | `StepUpCooldownSeconds` | `300` | - | Seconds triggers are ignored after the cap forces a step-down; ignored when the cap is disabled |
 | `DiagnosticLevel` | `"Debug"` | - | Level the switch sits at while Diagnostic mode is active |
 | `DiagnosticDurationMinutes` | `30` | - | How long Diagnostic mode lasts after startup, from 1 to 120 minutes |
-| `NeverStepUpCategories` | `["Microsoft.EntityFrameworkCore.Database.Command"]` | - | `SourceContext` prefixes the step-up never raises above `BaseLevel` (see below) |
+| `NeverStepUpCategories` | `["Microsoft.EntityFrameworkCore.Database.Command"]` (applied only when not configured) | - | `SourceContext` prefixes the step-up never raises above `BaseLevel` (see below). A configured list replaces the default, `[]` pins nothing |
 | `CategoryFloors` | `{}` | - | `SourceContext` prefix to minimum level; a matching category exports at `max(switch, floor)`. Floors are capped at `Warning` (see Category floors) |
 | `FrameworkCategoryDefaults` | `Recommended` | `SerilogStepUp__FrameworkCategoryDefaults` | Built-in `Warning` floors for framework categories, applied when no `CategoryFloors` key matches; `None` turns them off (see Framework category defaults) |
 | `DiagnosticExemptCategories` | `[]` | - | Floor prefixes that keep their floor during Diagnostic mode; each must be matched by a `CategoryFloors` key or, with `FrameworkCategoryDefaults` `Recommended`, a framework default prefix |
@@ -1153,7 +1170,7 @@ properties; a configured list replaces the default, so keep `Jti` in it if you s
 | **OpenTelemetry Instrumentation** |
 | `EnableActivityInstrumentation` | `true` | - | Enable/disable Activity creation (default-enabled, opt-out) |
 | **OpenTelemetry** |
-| `EnableOtlpExporter` | `true` | - | Export logs to OTLP endpoint |
+| `EnableOtlpExporter` | `true` when `OTEL_EXPORTER_OTLP_ENDPOINT` is set, else `false` | - | Export logs to the OTLP endpoint; `true` without the variable exports to `http://localhost:4317` |
 | (Endpoint/Protocol) | (env only) | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL` | OTLP configuration (environment variables only) |
 | **Additional Sinks** |
 | `EnableConsoleLogging` | `false` | - | Enable console output (dev scenarios) |
@@ -1218,15 +1235,26 @@ property of an ordinary log event, not request metadata, so only that flag bring
 [Security](#security)). Treat EF as a channel that can leak secrets: do not log sensitive values
 through it.
 
-To restore the pre-3.1.0 behaviour (step-up raises every category, including EF SQL), set the
-list empty in code. A JSON `[]` does not clear it: the configuration binder binds nothing for an
-empty array, so the default entry stays.
+A configured list replaces the default entry. To restore the pre-3.1.0 behaviour (step-up raises
+every category, including EF SQL), set it empty:
 
-```csharp
-builder.AddStepUpLogging(o => o.NeverStepUpCategories = []);
+```json
+{ "SerilogStepUp": { "NeverStepUpCategories": [] } }
 ```
 
 ## Category Control
+
+Each category option takes `SourceContext` prefixes and does one thing:
+
+| You want a category to | Option |
+|---|---|
+| export at `Warning` and above even during a step-up | `CategoryFloors` (`"Category": "Warning"`) |
+| keep its `BaseLevel` during a step-up, but still flush before an error | `NeverStepUpCategories` |
+| never be flushed by an error in its trace (below `Warning`) | `PreErrorBufferExcludeCategories` |
+| always export, at any level, whatever the switch | `AlwaysExportCategories` |
+| log errors that do not step the level up | `NeverTriggerCategories` |
+| keep its floor during Diagnostic mode | `DiagnosticExemptCategories` |
+| stay at the library's defaults for framework noise | `FrameworkCategoryDefaults` (`Recommended`, the default) |
 
 ### Category floors
 

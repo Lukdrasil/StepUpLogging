@@ -42,6 +42,8 @@ dotnet pack src/Lukdrasil.StepUpLogging/Lukdrasil.StepUpLogging.csproj --configu
 | `EnrichmentGate` | Internal. `Needs(LogEvent)` is true when the level is at or above `min(live LevelSwitch, StepUpLevel, Error)` or the event carries `IsImmediate` or `IsRequestSummary`; `For(...)` returns the predicate the root enrichers run behind (`Enrich.When`), or always-true when the `configure` hook is set or `Serilog:AuditTo` has an entry (ADR 0026). |
 | `CategoryPrefix` | Internal static class. The one `SourceContext` prefix rule for every category option (ADR 0021 D3): ordinal equal, or starts with prefix + `.`. |
 | `StepUpLoggingOptions` | All configuration knobs with defaults. Bound from `"SerilogStepUp"` appsettings section. |
+| `StepUpLoggingOptionsValidator` | Internal `IValidateOptions`. One failure message per invalid option, naming the key and its value; checks enums, level names, ranges, floors, Diagnostic exemptions and that each `RedactionRegexes` entry parses. |
+| `StartupReport` | Internal. Written once through the bypass logger when the logger is built: an Information summary of the effective configuration, a Warning per unknown key under the options section, and a Warning per option set to a value with no effect. |
 
 ### Serilog pipeline (wired in `AddStepUpLoggingInternal`)
 
@@ -74,7 +76,7 @@ Audit writes bypass Serilog entirely (ADR 0016 D1): `IAuditLogger<T>.AuditAsync(
 
 ### OTLP configuration
 
-OTLP endpoint, protocol, and headers are read **from environment variables only** (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_RESOURCE_ATTRIBUTES`). They are not configurable via `StepUpLoggingOptions`.
+OTLP endpoint, protocol, and headers are read **from environment variables only** (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_RESOURCE_ATTRIBUTES`). They are not configurable via `StepUpLoggingOptions`. `EnableOtlpExporter` defaults to whether `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
 
 ### Testing
 

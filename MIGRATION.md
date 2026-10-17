@@ -1,3 +1,28 @@
+# Upgrading past 5.4.0
+
+## OTLP export needs `OTEL_EXPORTER_OTLP_ENDPOINT`
+
+**What changed.** `EnableOtlpExporter` used to default to `true`, so without `OTEL_EXPORTER_OTLP_ENDPOINT` the
+library exported to `http://localhost:4317`. It now defaults to whether the variable is set.
+
+**Why.** An app that only logs to the console had to know to turn OTLP off, or it kept trying to reach a collector
+that was not there.
+
+**Migrate.** Nothing changes when the variable is set (Aspire sets it). If you export to a collector at the default
+address without the variable, set the variable or the option:
+
+```json
+{ "SerilogStepUp": { "EnableOtlpExporter": true } }
+```
+
+The startup report line lists the outputs in use, so `outputs none` or a missing `OTLP` entry shows the export is off.
+
+## `NeverStepUpCategories` replaces its default
+
+A configured list now replaces the default `Microsoft.EntityFrameworkCore.Database.Command` entry instead of being
+appended to it, and `[]` clears it. Keep the EF entry by listing it with yours. In code the property is `string[]?`
+and `null` inside `configureOptions` unless configuration sets it: assign the whole list.
+
 # Migrating to v5.0.0
 
 v5.0.0 is a **breaking** release with two breaking changes. First, `AddStepUpLogging` no longer
