@@ -23,6 +23,7 @@ using Serilog.Core;
 using Serilog.Enrichers.OpenTelemetry;
 using Serilog.Formatting;
 using Serilog.Formatting.Compact;
+using Serilog.Formatting.Display;
 using Serilog.Events;
 using Serilog.Sinks.File;
 using Serilog.Sinks.OpenTelemetry;
@@ -999,7 +1000,17 @@ public static class StepUpLoggingExtensions
             _ => OtlpProtocol.Grpc,
         };
 
-    internal static ITextFormatter CreateConsoleFormatter(ConsoleLogFormat format) => new CompactJsonFormatter();
+    private const string ConsoleTextTemplate = "[{Timestamp:HH:mm:ss.fff} {Level:u3}] {TraceId} {SourceContext}: {Message:lj}{NewLine}{Exception}";
+
+    /// <summary>
+    /// The console formatter for <paramref name="format"/>: compact JSON, or one line with the trace id and the
+    /// rendered message. The OTLP and file sinks do not use it and stay structured.
+    /// </summary>
+    internal static ITextFormatter CreateConsoleFormatter(ConsoleLogFormat format) => format switch
+    {
+        ConsoleLogFormat.Text => new MessageTemplateTextFormatter(ConsoleTextTemplate),
+        _ => new CompactJsonFormatter(),
+    };
 
     private static void ConfigureOutputSinks(LoggerConfiguration lc,
         IHostApplicationBuilder builder,
