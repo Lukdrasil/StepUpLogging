@@ -354,13 +354,17 @@ public sealed class StepUpLoggingOptions
     /// Matching is ordinal: a category matches when its <c>SourceContext</c> equals a prefix
     /// exactly, or begins with a prefix immediately followed by a <c>.</c> separator. The list
     /// has no effect in <see cref="StepUpMode.AlwaysOn"/> (nothing steps up there), and the
-    /// pre-error buffer is never filtered by it — buffered events still flush on error. Set
-    /// this to <c>[]</c> to restore pre-3.1.0 behaviour (no category is exempt from step-up).
-    /// The default suppresses the Entity Framework Core SQL command log, which would otherwise
+    /// pre-error buffer is never filtered by it — buffered events still flush on error.
+    /// <see langword="null"/> means not configured, and the built-in default
+    /// <c>["Microsoft.EntityFrameworkCore.Database.Command"]</c> applies after configuration. A configured list,
+    /// from appsettings or code, replaces the default; <c>[]</c> pins nothing (pre-3.1.0 behaviour). With
+    /// <see cref="FrameworkCategoryDefaults"/> <see cref="FrameworkCategoryPreset.Recommended"/> the EF command
+    /// category is already floored at <c>Warning</c>, so the pin matters only with <see cref="FrameworkCategoryPreset.None"/>
+    /// or a <see cref="BaseLevel"/> above <c>Warning</c>. The default suppresses the Entity Framework Core SQL command log, which would otherwise
     /// flood the export during a step-up window — and, unless <see cref="RedactLogEventProperties"/>
     /// is also set, carry unredacted SQL.
     /// </remarks>
-    public string[] NeverStepUpCategories { get; set; } = ["Microsoft.EntityFrameworkCore.Database.Command"];
+    public string[]? NeverStepUpCategories { get; set; }
 
     /// <summary>
     /// <c>SourceContext</c> prefix to level. A floor raises the category's minimum to
