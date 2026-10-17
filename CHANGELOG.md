@@ -37,6 +37,11 @@ Tags before 1.8.0 predate this file.
 - `Mode`, `FrameworkCategoryDefaults` and `ConsoleFormat` set to an undefined number, such as `"5"` from appsettings, now fail options validation on start instead of running as an unknown value.
 - The README said `"NeverStepUpCategories": []` in appsettings clears the list. The configuration binder binds nothing for an empty array, so the default entry stays; the README now says to clear it in code.
 
+## [5.4.0] - 2026-10-12
+
+### Added
+- `IAuditRejectionObserver` and `AuditRejection`: register any number of observers as singletons (`services.AddSingleton<IAuditRejectionObserver, X>()`) to be told the status code and the top-level `code` of an `application/problem+json` body (at most 16 KiB, otherwise `null`) of each record the endpoint rejects permanently on its own, after it is dead-lettered. A consumer can refresh its sealing key on `422 sealing.unknown_key`, so the records sealed after the refresh are deliverable; the rejected record stays dead-lettered, since the spool holds sealed bytes only. Each observer is bounded by `DeliveryTimeout`, and a throw or a timeout is logged at Warning without stopping the drain. A rejected batch notifies only for the record rejected alone on redelivery. With an observer registered, the Critical dead-letter line names the problem code. With none registered, the body is not read and nothing changes. Part of #71. See docs/adr/0029-rejection-observer.md.
+
 ## [5.3.0] - 2026-10-12
 
 ### Added
