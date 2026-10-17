@@ -96,6 +96,55 @@ public class ConsoleFormatTests
     }
 
     [Fact]
+    public void Text_NewlinesInPropertyValues_AreEscaped_SoNoLineIsForged()
+    {
+        var logEvent = new LogEvent(
+            DateTimeOffset.UtcNow,
+            LogEventLevel.Information,
+            null,
+            new MessageTemplateParser().Parse("Login for {User}"),
+            [
+                new LogEventProperty("User", new ScalarValue("bob\n[12:00:00.000 ERR] forged")),
+                new LogEventProperty("Jti", new ScalarValue("j-1\r\nforged")),
+            ]);
+
+        var text = Format(ConsoleLogFormat.Text, logEvent, "Jti");
+
+        Assert.EndsWith("Login for bob\\n[12:00:00.000 ERR] forged Jti=j-1\\r\\nforged" + Environment.NewLine, text);
+        Assert.Single(text.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
+    }
+
+    [Fact]
+    public void Text_WithoutTraceIdAndSourceContext_WritesNoGap()
+    {
+        var logEvent = new LogEvent(
+            new DateTimeOffset(2026, 10, 17, 15, 54, 7, 221, TimeSpan.Zero),
+            LogEventLevel.Information,
+            null,
+            new MessageTemplateParser().Parse("Application started"),
+            []);
+
+        var line = Format(ConsoleLogFormat.Text, logEvent);
+
+        Assert.EndsWith(" INF] Application started" + Environment.NewLine, line);
+    }
+
+    [Fact]
+    public void Text_WithSourceContextOnly_WritesItWithoutAGap()
+    {
+        var logEvent = new LogEvent(
+            DateTimeOffset.UtcNow,
+            LogEventLevel.Information,
+            null,
+            new MessageTemplateParser().Parse("Application started"),
+            [new LogEventProperty("SourceContext", new ScalarValue("Microsoft.Hosting.Lifetime"))]);
+
+        var line = Format(ConsoleLogFormat.Text, logEvent);
+
+        Assert.EndsWith(" INF] Microsoft.Hosting.Lifetime: Application started" + Environment.NewLine, line);
+    }
+
+    [Fact]
     public void ConsoleFormat_DefaultsToJson()
     {
         Assert.Equal(ConsoleLogFormat.Json, new StepUpLoggingOptions().ConsoleFormat);
