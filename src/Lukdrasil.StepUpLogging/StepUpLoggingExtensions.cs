@@ -210,6 +210,7 @@ public static class StepUpLoggingExtensions
     {
         var configSnapshot = new StepUpLoggingOptions();
         builder.Configuration.GetSection(configSectionName).Bind(configSnapshot);
+        configureOptions?.Invoke(configSnapshot);
 
         if (configSnapshot.EnableOtlpExporter && !IsOpenTelemetryRegistered(builder.Services))
         {
@@ -251,10 +252,6 @@ public static class StepUpLoggingExtensions
             var opts = sp.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
             return new StepUpLoggingController(opts, null, Stopwatch.GetTimestamp, sp.GetService<TimeProvider>());
         });
-
-        var staticLoggerSnapshot = new StepUpLoggingOptions();
-        builder.Configuration.GetSection(configSectionName).Bind(staticLoggerSnapshot);
-        configureOptions?.Invoke(staticLoggerSnapshot);
 
         builder.Services.AddSerilog((services, lc) =>
         {
@@ -374,7 +371,7 @@ public static class StepUpLoggingExtensions
             // enrichment here precedes every sink, so PreErrorBufferSink already buffers redacted
             // events and needs no second pass.
             ApplyRedactionEnricher(lc, opts, redactionPatterns, needsEnrichment);
-        }, preserveStaticLogger: !staticLoggerSnapshot.SetStaticLogger, writeToProviders: false);
+        }, preserveStaticLogger: !configSnapshot.SetStaticLogger, writeToProviders: false);
 
         return builder;
     }
@@ -450,7 +447,7 @@ public static class StepUpLoggingExtensions
         => preset == FrameworkCategoryPreset.Recommended ? FrameworkCategoryDefaultTable.Recommended : [];
 
     private static bool IsValidLevel(string? value)
-        => !string.IsNullOrWhiteSpace(value) && Enum.TryParse<LogEventLevel>(value, true, out _);
+        => Enum.GetNames<LogEventLevel>().Contains(value, StringComparer.OrdinalIgnoreCase);
 
     internal static bool IsValidFloor(string? value)
         => IsValidLevel(value) && Enum.Parse<LogEventLevel>(value!, true) <= LogEventLevel.Warning;
@@ -932,12 +929,12 @@ public static class StepUpLoggingExtensions
 
     private static bool IsOpenTelemetryRegistered(IServiceCollection services)
     {
-        // OTel SDK renamed OpenTelemetrySdkHostedService to TelemetryHostedService in v1.15.0;
-        // check both names to support older and newer package versions.
+        // OTel SDK renamed OpenTelemetrySdkHostedService to TelemetryHostedService in v1.15.0 and moved it to the
+        // Implementation namespace; match both names under any OpenTelemetry.Extensions.Hosting namespace.
         return services.Any(sd =>
             sd.ServiceType == typeof(IHostedService) &&
-            (sd.ImplementationType?.FullName == "OpenTelemetry.Extensions.Hosting.OpenTelemetrySdkHostedService"
-             || sd.ImplementationType?.FullName == "OpenTelemetry.Extensions.Hosting.TelemetryHostedService"));
+            sd.ImplementationType is { Namespace: { } ns, Name: "OpenTelemetrySdkHostedService" or "TelemetryHostedService" } &&
+            ns.StartsWith("OpenTelemetry.Extensions.Hosting", StringComparison.Ordinal));
     }
 
     /// <summary>Parse OTEL_EXPORTER_OTLP_HEADERS environment variable (W3C Baggage-style list of percent-encoded key=value pairs, per the OTel spec).</summary>

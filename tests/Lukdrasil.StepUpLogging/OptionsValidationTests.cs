@@ -21,6 +21,16 @@ public class OptionsValidationTests
     }
 
     [Theory]
+    [InlineData("99")]
+    [InlineData("1")]
+    [InlineData("Debug,Error")]
+    public void LevelStringThatIsNotALevelName_FailsValidationOnStart(string level)
+    {
+        Assert.Throws<OptionsValidationException>(
+            () => BuildHost(("SerilogStepUp:BaseLevel", level)));
+    }
+
+    [Theory]
     [InlineData("Mode")]
     [InlineData("FrameworkCategoryDefaults")]
     [InlineData("ConsoleFormat")]
