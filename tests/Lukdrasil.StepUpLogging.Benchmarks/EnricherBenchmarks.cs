@@ -17,7 +17,7 @@ public class EnricherBenchmarks
     private RedactionEnricher _redaction = null!;
     private Activity? _activity;
 
-    /// <summary>Whether an <see cref="Activity"/> is current while the enrichers run.</summary>
+    /// <summary>Whether an <see cref="Activity"/> with a remote parent, as for a request carrying <c>traceparent</c>, is current while the enrichers run.</summary>
     [Params(false, true)]
     public bool InActivity { get; set; }
 
@@ -29,14 +29,22 @@ public class EnricherBenchmarks
     [GlobalSetup]
     public void Setup()
     {
-        _activity = InActivity ? BenchmarkFixtures.StartTrace() : null;
+        _activity = InActivity ? StartWithRemoteParent() : null;
         _activityContext = new ActivityContextEnricher();
         _alwaysExport = new AlwaysExportEnricher(["MyApp.Orders"]);
         _redaction = new RedactionEnricher(BenchmarkFixtures.SamplePatterns());
 
         BenchmarkFixtures.Require(ActivityContext().Properties.ContainsKey("TraceFlags") == InActivity, "ActivityContextEnricher does not follow the current activity");
+        BenchmarkFixtures.Require(ActivityContext().Properties.ContainsKey("ParentSpanId") == InActivity, "ActivityContextEnricher did not add the parent span id");
         BenchmarkFixtures.Require(AlwaysExport().Properties.ContainsKey(LogProperties.IsImmediate), "AlwaysExportEnricher did not mark the event");
         BenchmarkFixtures.Require(RedactsASecret(), "RedactionEnricher did not mask a matching property");
+    }
+
+    private static Activity StartWithRemoteParent()
+    {
+        var activity = new Activity("benchmark-request");
+        activity.SetParentId(ActivityTraceId.CreateRandom(), ActivitySpanId.CreateRandom(), ActivityTraceFlags.Recorded);
+        return activity.Start();
     }
 
     /// <summary>Stops the activity the setup started.</summary>
