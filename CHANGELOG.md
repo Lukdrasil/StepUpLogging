@@ -6,7 +6,7 @@ Releases from 1.8.0 onward are recorded here. Entries backfilled from each relea
 `PackageReleaseNotes` and, where those were not updated per release, from the commits between tags.
 Tags before 1.8.0 predate this file.
 
-## [Unreleased]
+## [6.0.0] - 2026-10-17
 
 ### Added
 - A startup report through the library's output, whatever the current level: one `Information` line with the effective mode, levels, step-up duration, outputs (the OTLP endpoint as scheme, host and port only), framework defaults preset and request summary setting; a `Warning` for each key under `SerilogStepUp` that matches no option, such as `OtlpEndpoint`; and a `Warning` for `ConsoleFormat` set with `EnableConsoleLogging` `false` and for `RedactLogEventProperties` with no `RedactionRegexes`.
@@ -15,6 +15,7 @@ Tags before 1.8.0 predate this file.
 - **OTLP export is on only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set.** `EnableOtlpExporter` now defaults to whether the variable is set, so an app without a collector needs no setting to turn it off, and the OpenTelemetry SDK exporter is not registered for it. An app that relied on the default `http://localhost:4317` without the variable, such as one with a collector sidecar, must set `EnableOtlpExporter` to `true` or set the variable. See MIGRATION.md.
 - Options validation names each failing key and the value it got, one message per failure, instead of one fixed message listing every rule. Each `RedactionRegexes` entry is checked at startup, so an invalid pattern stops the host with its key named instead of failing when the logger is built.
 - A configured `NeverStepUpCategories` list replaces the default entry instead of being appended to it, and `[]` in appsettings now clears it. The property is `string[]?` and is `null` inside the `configureOptions` callback unless configuration sets it; the default applies after the callback, as for `ExcludePaths`. With `FrameworkCategoryDefaults` `Recommended` the EF command category is already floored at `Warning`, so this changes the export only with `None` or a `BaseLevel` above `Warning`.
+- The README starts with getting started: install, register, what each deployment must set and what is on by default. A second section lists the options that change the defaults and what each change means in production.
 
 ## [5.4.0] - 2026-10-17
 
