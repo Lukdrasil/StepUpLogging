@@ -23,7 +23,6 @@ using Serilog.Core;
 using Serilog.Enrichers.OpenTelemetry;
 using Serilog.Formatting;
 using Serilog.Formatting.Compact;
-using Serilog.Formatting.Display;
 using Serilog.Events;
 using Serilog.Sinks.File;
 using Serilog.Sinks.OpenTelemetry;
@@ -1004,15 +1003,13 @@ public static class StepUpLoggingExtensions
             _ => OtlpProtocol.Grpc,
         };
 
-    private const string ConsoleTextTemplate = "[{Timestamp:HH:mm:ss.fff} {Level:u3}] {TraceId} {SourceContext}: {Message:lj}{NewLine}{Exception}";
-
     /// <summary>
-    /// The console formatter for <paramref name="format"/>: compact JSON, or one line with the trace id and the
-    /// rendered message. The OTLP and file sinks do not use it and stay structured.
+    /// The console formatter for <paramref name="format"/>: compact JSON, or one line with the trace id, the rendered
+    /// message and the <paramref name="textProperties"/> the event has. The OTLP and file sinks do not use it and stay structured.
     /// </summary>
     internal static ITextFormatter CreateConsoleFormatter(ConsoleLogFormat format, string[] textProperties) => format switch
     {
-        ConsoleLogFormat.Text => new MessageTemplateTextFormatter(ConsoleTextTemplate),
+        ConsoleLogFormat.Text => new ConsoleTextFormatter([.. textProperties.Where(p => !string.IsNullOrWhiteSpace(p))]),
         _ => new CompactJsonFormatter(),
     };
 
