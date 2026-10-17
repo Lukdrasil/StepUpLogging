@@ -1098,8 +1098,8 @@ Per-component BenchmarkDotNet benchmarks (log pipeline, sinks, enrichers, redact
   readable line per event. Only the console changes: OTLP and the file sink stay structured.
 
 ```text
-[15:54:07.218 WRN] c4fed5a2d96d1640c013ae014f5d162d PersonalTokens.DataAccess.KeycloakUserTokenIssuer: The PAT user token mint was refused with HTTP 400 and OAuth error "invalid_scope": "Invalid scopes: audience".
-[15:54:07.221 ERR] c4fed5a2d96d1640c013ae014f5d162d Serilog.AspNetCore.RequestLoggingMiddleware: HTTP "POST" "/api/pat/exchange" responded 502 in 36.1778 ms
+[15:54:07.218 WRN] c4fed5a2d96d1640c013ae014f5d162d PersonalTokens.DataAccess.KeycloakUserTokenIssuer: The PAT user token mint was refused with HTTP 400 and OAuth error invalid_scope: Invalid scopes: audience.
+[15:54:07.221 ERR] c4fed5a2d96d1640c013ae014f5d162d Serilog.AspNetCore.RequestLoggingMiddleware: HTTP POST /api/pat/exchange responded 502 in 36.1778 ms
 ```
 
 `Text` writes the time, level, trace id, `SourceContext` and the rendered message, with an exception
