@@ -1094,7 +1094,26 @@ Per-component BenchmarkDotNet benchmarks (log pipeline, sinks, enrichers, redact
 **Fallback: Console Logging** (Development/Legacy)
 - Enable via `EnableConsoleLogging: true` in configuration
 - Useful for local development or direct log collection
-- Outputs CompactJSON format
+- `ConsoleFormat` selects the format: `Json` (default, CompactJSON with every property) or `Text`, one
+  readable line per event. Only the console changes: OTLP and the file sink stay structured.
+
+```text
+[15:54:07.218 WRN] c4fed5a2d96d1640c013ae014f5d162d PersonalTokens.DataAccess.KeycloakUserTokenIssuer: The PAT user token mint was refused with HTTP 400 and OAuth error "invalid_scope": "Invalid scopes: audience".
+[15:54:07.221 ERR] c4fed5a2d96d1640c013ae014f5d162d Serilog.AspNetCore.RequestLoggingMiddleware: HTTP "POST" "/api/pat/exchange" responded 502 in 36.1778 ms
+```
+
+`Text` writes the time, level, trace id, `SourceContext` and the rendered message, with an exception
+on the following lines. Properties that are not in the message template are not written to the
+console; search them in the OTLP backend by the trace id.
+
+```json
+{
+  "SerilogStepUp": {
+    "EnableConsoleLogging": true,
+    "ConsoleFormat": "Text"
+  }
+}
+```
 
 **Optional: File Sink** (Archival/Compliance)
 - Daily rolling files with 30-day retention
@@ -1133,6 +1152,7 @@ Per-component BenchmarkDotNet benchmarks (log pipeline, sinks, enrichers, redact
 | (Endpoint/Protocol) | (env only) | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL` | OTLP configuration (environment variables only) |
 | **Additional Sinks** |
 | `EnableConsoleLogging` | `false` | - | Enable console output (dev scenarios) |
+| `ConsoleFormat` | `Json` | `SerilogStepUp__ConsoleFormat` | Console format: `Json` (CompactJSON) or `Text` (one line with time, level, trace id, `SourceContext` and message); OTLP and file stay structured |
 | **Enrichers** |
 | `EnrichWithExceptionDetails` | `true` | - | Enrich logs with structured exception details |
 | `EnrichWithThreadId` | `false` | - | Include thread ID in log events |
