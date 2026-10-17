@@ -15,8 +15,9 @@ dotnet build src/Lukdrasil.StepUpLogging/Lukdrasil.StepUpLogging.csproj --config
 # Run all tests
 dotnet test --project tests/Lukdrasil.StepUpLogging/Lukdrasil.StepUpLogging.Tests.csproj
 
-# Run a single test (xunit v3 / Microsoft.Testing.Platform filter syntax)
-dotnet test --project tests/Lukdrasil.StepUpLogging/Lukdrasil.StepUpLogging.Tests.csproj --filter "FullyQualifiedName~ClassName.MethodName"
+# Run a single test or class (xunit v3 / Microsoft.Testing.Platform; --filter "FullyQualifiedName~..." runs 0 tests)
+dotnet test --project tests/Lukdrasil.StepUpLogging/Lukdrasil.StepUpLogging.Tests.csproj --filter-method "*ClassName.MethodName"
+dotnet test --project tests/Lukdrasil.StepUpLogging/Lukdrasil.StepUpLogging.Tests.csproj --filter-class "*.ClassName"
 
 # Pack NuGet (output to ./nuget-packages/)
 dotnet pack src/Lukdrasil.StepUpLogging/Lukdrasil.StepUpLogging.csproj --configuration Release --output ./nuget-packages
