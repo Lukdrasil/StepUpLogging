@@ -21,6 +21,7 @@ using Serilog;
 using Serilog.Configuration;
 using Serilog.Core;
 using Serilog.Enrichers.OpenTelemetry;
+using Serilog.Formatting;
 using Serilog.Formatting.Compact;
 using Serilog.Events;
 using Serilog.Sinks.File;
@@ -998,6 +999,8 @@ public static class StepUpLoggingExtensions
             _ => OtlpProtocol.Grpc,
         };
 
+    internal static ITextFormatter CreateConsoleFormatter(ConsoleLogFormat format) => new CompactJsonFormatter();
+
     private static void ConfigureOutputSinks(LoggerConfiguration lc,
         IHostApplicationBuilder builder,
         string? logFilePath,
@@ -1029,7 +1032,7 @@ public static class StepUpLoggingExtensions
 
         if (opts.EnableConsoleLogging)
         {
-            lc.WriteTo.Async(a => a.Console(new CompactJsonFormatter()));
+            lc.WriteTo.Async(a => a.Console(CreateConsoleFormatter(opts.ConsoleFormat)));
         }
 
         if (!string.IsNullOrWhiteSpace(logFilePath))
