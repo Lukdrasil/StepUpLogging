@@ -1,4 +1,4 @@
-# Upgrading past 5.4.0
+# Migrating to v6.0.0
 
 ## OTLP export needs `OTEL_EXPORTER_OTLP_ENDPOINT`
 
