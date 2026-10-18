@@ -6,7 +6,7 @@ Releases from 1.8.0 onward are recorded here. Entries backfilled from each relea
 `PackageReleaseNotes` and, where those were not updated per release, from the commits between tags.
 Tags before 1.8.0 predate this file.
 
-## [Unreleased]
+## [6.1.0] - 2026-10-18
 
 ### Added
 - `IAuditRejectionObserver` and `AuditRejection`: register any number of observers as singletons (`services.AddSingleton<IAuditRejectionObserver, X>()`) to be told the status code and the top-level `code` of an `application/problem+json` body (at most 16 KiB, otherwise `null`) of each record the endpoint rejects permanently on its own, after it is dead-lettered. A consumer can refresh its sealing key on `422 sealing.unknown_key`, so the records sealed after the refresh are deliverable; the rejected record stays dead-lettered, since the spool holds sealed bytes only. Each observer is bounded by `DeliveryTimeout`, and a throw or a timeout is logged at Warning without stopping the drain. A rejected batch notifies only for the record rejected alone on redelivery. With an observer registered, the Critical dead-letter line names the problem code. With none registered, the body is not read and nothing changes. Part of #71. See docs/adr/0030-rejection-observer.md.
