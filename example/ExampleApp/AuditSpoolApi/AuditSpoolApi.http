@@ -1,0 +1,16 @@
+@AuditSpoolApi_HostAddress = http://localhost:5089
+
+### Audit an order; the drain delivers it to the receiver within DrainInterval
+POST {{AuditSpoolApi_HostAddress}}/orders/42
+
+### The receiver forgets the current sealing key, so the next record is rejected with 422 sealing.unknown_key
+POST {{AuditSpoolApi_HostAddress}}/receiver/forget-key
+
+### Records the receiver stored and the key ids it knows
+GET {{AuditSpoolApi_HostAddress}}/receiver/state
+
+### Rejections the observer was told about and the current sealing key id
+GET {{AuditSpoolApi_HostAddress}}/observer/state
+
+### Log an error, which steps the log level up
+GET {{AuditSpoolApi_HostAddress}}/demo/error
