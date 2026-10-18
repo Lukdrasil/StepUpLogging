@@ -300,7 +300,7 @@ internal sealed class DrainWorker(
     /// A rejected single record is defective and dead-lettered. A rejected batch only says that one
     /// of its records is, not which, so each is delivered on its own and only the one the endpoint
     /// rejects alone is set aside (ADR 0020 D7). The rejection observers hear of a single record
-    /// only once it is dead-lettered, so they inform and never change the outcome (ADR 0029).
+    /// only once it is dead-lettered, so they inform and never change the outcome (ADR 0030).
     /// </summary>
     private async Task<bool> RejectedAsync(HttpClient client, IReadOnlyList<SpoolEntry> batch, DeliveryAttempt attempt, CancellationToken cancellationToken)
     {
@@ -352,7 +352,7 @@ internal sealed class DrainWorker(
     /// <summary>
     /// What a rejection of a single record said, for the rejection observers; <see langword="null"/>
     /// without reading the body unless the record was rejected on its own and someone listens, so
-    /// a stored record or a batch never pays for it (ADR 0029).
+    /// a stored record or a batch never pays for it (ADR 0030).
     /// </summary>
     private async ValueTask<AuditRejection?> RejectionOfAsync(HttpResponseMessage response, DeliveryAttempt attempt, int records, CancellationToken cancellationToken)
     {

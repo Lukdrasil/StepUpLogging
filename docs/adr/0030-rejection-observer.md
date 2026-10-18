@@ -1,4 +1,4 @@
-# ADR 0029 - Rejection observer: inform the consumer of a dead-lettered record
+# ADR 0030 - Rejection observer: inform the consumer of a dead-lettered record
 
 - Status: Accepted
 - Date: 2026-10-12

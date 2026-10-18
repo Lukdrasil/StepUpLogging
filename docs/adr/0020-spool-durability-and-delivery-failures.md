@@ -133,7 +133,7 @@ application running by losing audit silently. This ADR rejects every one of them
      a single record rejected permanently while an `IAuditRejectionObserver` is registered, the
      worker reads the top-level `code` of an `application/problem+json` body and, after the record
      is dead-lettered, tells each observer the status and code, so a consumer can refresh its
-     sealing key on `422 sealing.unknown_key`. See ADR 0029.
+     sealing key on `422 sealing.unknown_key`. See ADR 0030.
    - > **Amended (2026-09-30, issue #33):** `DrainWorker` is the only retrying layer on the
      delivery path. The delivery client calls `RemoveAllResilienceHandlers()`, so a resilience
      handler inherited from the consumer's `ConfigureHttpClientDefaults` (the Aspire

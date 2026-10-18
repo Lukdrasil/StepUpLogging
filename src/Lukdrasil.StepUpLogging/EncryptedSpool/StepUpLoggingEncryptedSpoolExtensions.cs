@@ -52,7 +52,7 @@ public static class StepUpLoggingEncryptedSpoolExtensions
     /// on <c>422 sealing.unknown_key</c>), register any number of
     /// <see cref="IAuditRejectionObserver"/> yourself, before or after this call:
     /// <c>services.AddSingleton&lt;IAuditRejectionObserver, X&gt;()</c>. With none registered,
-    /// <see cref="DrainWorker"/> receives an empty set and behaves as before (ADR 0029).
+    /// <see cref="DrainWorker"/> receives an empty set and behaves as before (ADR 0030).
     /// </para>
     /// </remarks>
     /// <param name="builder">The host application builder.</param>
