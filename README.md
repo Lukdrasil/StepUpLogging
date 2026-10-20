@@ -192,7 +192,8 @@ See [Category Control](#category-control) for how the category options combine.
 |---|---|---|
 | `EnableOtlpExporter` | On when `OTEL_EXPORTER_OTLP_ENDPOINT` is set | `true` without the variable exports to `http://localhost:4317`, for a collector sidecar. `false` stops OTLP export even when the variable is set |
 | `EnableConsoleLogging` | `false` | `true` writes every exported event to stdout as well. With OTLP on and a platform that also ships stdout, each event is stored twice |
-| `ConsoleFormat` | `Json` | `Text` writes one readable line per event with the trace id; log processors that parse JSON from stdout lose the structured properties. OTLP and file output stay structured |
+| `ConsoleFormat` | `Json` | `Text` writes one readable line per event with the keyed trace id; log processors that parse JSON from stdout lose the structured properties. OTLP and file output stay structured |
+| `ConsoleTraceFormat` | `TraceId` | `Traceparent` writes the `Text` line's trace token as a W3C `traceparent=00-<trace id>-<span id>-<flags>` instead of `TraceId=<trace id>`, for pasting into a trace lookup |
 | `ConsoleTextProperties` | `["Jti"]` | Properties written after the message in `Text` format, so identity stays on the console without OTLP |
 
 The file sink is enabled by the `logFilePath` parameter of `AddStepUpLogging`: daily files, 30 kept.
@@ -215,6 +216,7 @@ The file sink is enabled by the `logFilePath` parameter of `AddStepUpLogging`: d
 | `PreErrorBufferSize`, `PreErrorMaxContexts` | `100`, `1024` | The memory bound: at most size × contexts held events. Too small loses the oldest events of a long request or the requests of a busy instance |
 | `RedactionRegexes` | none | Each pattern is applied to request paths, query strings, route values, headers and bodies, at a CPU cost per request |
 | `RedactLogEventProperties` | `false` | `true` also applies the patterns to the string properties of every exported application event, at a CPU cost per event |
+| `RedactionExemptProperties` | none | Listed property names, such as `Jti`, skip the patterns on every event and on the request summary. A secret logged under a listed name is exported in clear; request paths, query strings, headers, route values and bodies are always redacted |
 | `ServiceVersion`, `ServiceInstanceId` | none | Added to every event when set |
 | `EnrichWithThreadId`, `EnrichWithProcessId`, `EnrichWithCallStack` | `false` | More properties on every event; call stacks are expensive |
 
@@ -1021,15 +1023,20 @@ Per-component BenchmarkDotNet benchmarks (log pipeline, sinks, enrichers, redact
   readable line per event. Only the console changes: OTLP and the file sink stay structured.
 
 ```text
-[15:54:07.218 WRN] c4fed5a2d96d1640c013ae014f5d162d PersonalTokens.DataAccess.KeycloakUserTokenIssuer: The PAT user token mint was refused with HTTP 400 and OAuth error invalid_scope: Invalid scopes: audience.
-[15:54:07.221 ERR] c4fed5a2d96d1640c013ae014f5d162d Serilog.AspNetCore.RequestLoggingMiddleware: HTTP POST /api/pat/exchange responded 502 in 36.1778 ms Jti=4ebece0627d94b5f9f37c969bb17d27f
+[15:54:07.218 WRN] TraceId=c4fed5a2d96d1640c013ae014f5d162d PersonalTokens.DataAccess.KeycloakUserTokenIssuer: The PAT user token mint was refused with HTTP 400 and OAuth error invalid_scope: Invalid scopes: audience.
+[15:54:07.221 ERR] TraceId=c4fed5a2d96d1640c013ae014f5d162d Serilog.AspNetCore.RequestLoggingMiddleware: HTTP POST /api/pat/exchange responded 502 in 36.1778 ms Jti=4ebece0627d94b5f9f37c969bb17d27f
 ```
 
-`Text` writes the time, level, trace id, `SourceContext` and the rendered message, then each
+`Text` writes the time, level, trace id as `TraceId=<trace id>`, `SourceContext` and the rendered message, then each
 `ConsoleTextProperties` entry the event has as `Name=value`, with an exception on the following
 lines. Other properties that are not in the message template are not written to the console. Line
 breaks inside the message and the values are written as `\r` and `\n`, so a logged value cannot
 forge a console line.
+
+`ConsoleTraceFormat: Traceparent` writes the trace token as the W3C
+`traceparent=00-c4fed5a2d96d1640c013ae014f5d162d-c692a71cf2b6dbbb-01` instead, so a line can be pasted
+into a trace lookup. The flags come from the event's `TraceFlags` and are `00` when it has none; an
+event without a span id keeps `TraceId=`, and an event without a trace id has no trace token.
 
 `ConsoleTextProperties` defaults to `["Jti"]`, the token id the request summary carries, so the
 caller's identity stays on the console when OTLP is not available. Add your own identity
@@ -1082,7 +1089,8 @@ properties; a configured list replaces the default, so keep `Jti` in it if you s
 | (Endpoint/Protocol) | (env only) | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL` | OTLP configuration (environment variables only) |
 | **Additional Sinks** |
 | `EnableConsoleLogging` | `false` | - | Enable console output (dev scenarios) |
-| `ConsoleFormat` | `Json` | `SerilogStepUp__ConsoleFormat` | Console format: `Json` (CompactJSON) or `Text` (one line with time, level, trace id, `SourceContext` and message); OTLP and file stay structured |
+| `ConsoleFormat` | `Json` | `SerilogStepUp__ConsoleFormat` | Console format: `Json` (CompactJSON) or `Text` (one line with time, level, keyed trace id, `SourceContext` and message); OTLP and file stay structured |
+| `ConsoleTraceFormat` | `TraceId` | `SerilogStepUp__ConsoleTraceFormat` | Trace token of the `Text` console line: `TraceId` (`TraceId=<trace id>`) or `Traceparent` (W3C `traceparent=00-<trace id>-<span id>-<flags>`) |
 | `ConsoleTextProperties` | `["Jti"]` | - | Properties written after the message in the `Text` console format as `Name=value` when the event has them; a configured list replaces the default |
 | **Enrichers** |
 | `EnrichWithExceptionDetails` | `true` | - | Enrich logs with structured exception details |
@@ -1099,6 +1107,7 @@ properties; a configured list replaces the default, so keep `Jti` in it if you s
 | `MaxBodyCaptureBytes` | `16384` | - | Max bytes to capture from request body |
 | `ExcludePaths` | `["/healthz", "/metrics", "/health"]` (applied only when not configured) | - | Paths to exclude from logging. A configured list replaces the defaults, `[]` excludes nothing |
 | `RedactionRegexes` | `[]` | - | Regex patterns for redacting sensitive data. Always applied to request metadata and bodies; also applied to application log properties when `RedactLogEventProperties` is set — see [Security](#security) |
+| `RedactionExemptProperties` | `[]` | `SerilogStepUp__RedactionExemptProperties__0` | Property names (ordinal, case-sensitive) whose values are never redacted: the `RedactLogEventProperties` sweep skips them and `Jti` on the request summary keeps its value when listed. Request inputs are always redacted. See [Security](#security) |
 | `RedactLogEventProperties` | `false` | - | Opt-in: also sweep the string-valued and URI-like (`PathString`, `QueryString`, `HostString`, `Uri`) scalar properties of application log events with `RedactionRegexes`, not just request metadata. See [Security](#security) |
 | `AdditionalSensitiveHeaders` | `[]` | - | Custom header names to redact in request logging |
 | `TrustForwardedHeaders` | `false` | - | When `true`, `ClientIp` is taken from the first `X-Forwarded-For` entry (v2 behavior). Only enable behind a proxy you control with `ForwardedHeadersMiddleware`. See [Security](#security). |
@@ -1380,6 +1389,24 @@ reason for each). And it never sees the four events the library writes straight 
 logger — the request summary, the startup level-ordering warning, and the step-up and step-down
 warnings — which do not pass root
 enrichment. Do not log secrets in interpolated message templates.
+
+`RedactionExemptProperties` lists property names whose values the patterns never touch, for an
+identifier that a broad pattern would otherwise mask: with a UUID pattern, Keycloak's
+`jti` (`onrtac:<uuid>`) would come out as `onrtac:[REDACTED]`. Listing `Jti` keeps it on the
+request summary, the request completion event and, with `RedactLogEventProperties` on, in the
+sweep; the same UUID in the request path or in any other property is still redacted. Names match
+ordinal and case-sensitive, by name only: a secret you log under a listed name is exported in
+clear. The request path, query string, headers, route values and body are always redacted,
+whatever the list holds.
+
+```json
+{
+  "SerilogStepUp": {
+    "RedactionRegexes": [ "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" ],
+    "RedactionExemptProperties": [ "Jti" ]
+  }
+}
+```
 
 The flag has a running cost worth sizing before you enable it. The sweep sits on the root pipeline,
 behind the same enrichment gate as the library's other root enrichers, so it runs on an event some sink
