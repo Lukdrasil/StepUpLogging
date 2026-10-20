@@ -92,6 +92,11 @@ Three facts about the existing pipeline constrain the answer:
    unredacted. Consequence accepted: a consumer wanting an enricher exempt from redaction has no
    escape hatch short of turning the flag off.
 
+   > **Amended (2026-10-20, ADR 0031):** there is now an escape hatch by property name.
+   > `RedactionExemptProperties` lists names the sweep skips, matched like the exclusion set of D6, so
+   > a consumer can keep an identifier such as `Jti` while the flag stays on. It exempts a property,
+   > not an enricher: the same name logged from anywhere else is exempt too.
+
    > **Amended (2026-10-08, ADR 0026):** "enrichers in place by that point" now needs one qualification.
    > The library's own root enrichers run behind an enrichment gate, so on an event no sink will use they
    > do not run. `RedactionEnricher` is not among them: it stays registered last and ungated, so the
@@ -152,6 +157,11 @@ Three facts about the existing pipeline constrain the answer:
    need no entry — they are non-string scalars and the enricher never touches them. Rejected:
    making the set configurable — a third knob for one feature, tuned by nobody until they have been
    bitten.
+
+   > **Amended (2026-10-20, ADR 0031):** the set itself stays fixed, but a consumer may now add names
+   > of its own through `RedactionExemptProperties`. The enricher unions both into one lookup, so the
+   > per-property cost is unchanged. The consumer's names are the consumer's choice; the twelve here
+   > stay exempt whatever the option holds.
 
 7. **No benchmark project and no new metric.** The flag defaults off and the empty-patterns
    short-circuit means zero regex work unless a consumer deliberately opts in; the existing 100 ms

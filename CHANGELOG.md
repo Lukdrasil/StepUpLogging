@@ -6,6 +6,15 @@ Releases from 1.8.0 onward are recorded here. Entries backfilled from each relea
 `PackageReleaseNotes` and, where those were not updated per release, from the commits between tags.
 Tags before 1.8.0 predate this file.
 
+## [Unreleased]
+
+### Added
+- `RedactionExemptProperties` (default empty): property names whose values are never passed through `RedactionRegexes`, matched ordinal and case-sensitive. It applies to the `RedactLogEventProperties` sweep and to `Jti` on the request summary and the request completion event, so with a UUID pattern configured `SerilogStepUp__RedactionExemptProperties__0=Jti` keeps `Jti=onrtac:<uuid>` readable. Request inputs (path, query string, headers, route values, `User-Agent`, `X-Forwarded-For`, body) are always redacted. With the default empty list redaction is unchanged. Part of #87. See docs/adr/0031-redaction-exempt-properties-and-keyed-trace.md.
+- `ConsoleTraceFormat` (`TraceId` | `Traceparent`, default `TraceId`) and the `ConsoleTraceFormat` enum: how the `Text` console line writes the trace context. `Traceparent` writes the W3C `traceparent=00-<trace id>-<span id>-<flags>`, so a line can be pasted into a trace lookup; the flags are `00` when the event has no `TraceFlags`, and an event without a span id falls back to `TraceId=`. Part of #87.
+
+### Changed
+- **`Text` console line layout:** the trace id is written as `TraceId=<32 hex>` instead of a bare 32-hex token after the level, like every other value on the line. A parser of the old column must strip the `TraceId=` prefix. An event without a trace id still gets no trace token. JSON console, OTLP and file output are unchanged.
+
 ## [6.1.0] - 2026-10-18
 
 ### Added
