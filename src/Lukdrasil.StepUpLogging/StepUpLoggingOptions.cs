@@ -133,9 +133,16 @@ public sealed class StepUpLoggingOptions
     public string[] RedactionRegexes { get; set; } = [];
 
     /// <summary>
-    /// Property names whose values are never passed through <see cref="RedactionRegexes"/>.
+    /// Property names whose values are never passed through <see cref="RedactionRegexes"/>, for identifiers such as
+    /// <c>Jti</c> that a broad pattern (a bare UUID, say) would otherwise mask. Names are matched ordinal and
+    /// case-sensitive; blank entries are ignored. Default: empty, so every value is redacted as before.
     /// </summary>
-    public string[] RedactionExemptProperties { get; set; } = null!; // af-stub
+    /// <remarks>
+    /// Applies to the <see cref="RedactLogEventProperties"/> sweep and to <c>Jti</c> on the request summary and the
+    /// request completion event. The request inputs — path, query string, headers, route values, <c>User-Agent</c>,
+    /// <c>X-Forwarded-For</c> and the request body — are always redacted, whatever this list holds (ADR 0031 D1).
+    /// </remarks>
+    public string[] RedactionExemptProperties { get; set; } = [];
 
     /// <summary>
     /// When true, applies <see cref="RedactionRegexes"/> to the string-valued and URI-like
@@ -183,7 +190,8 @@ public sealed class StepUpLoggingOptions
     /// correlation, OTLP resource identity and the <see cref="NeverStepUpCategories"/> deny-list,
     /// which matches on <c>SourceContext</c>. The exclusion is by property NAME: a property of
     /// your own under one of those names wins over the library's stamp and then escapes redaction
-    /// with it.</item>
+    /// with it. <see cref="RedactionExemptProperties"/> is a second hole by name: a property listed there is not
+    /// redacted on any event, whoever stamped it.</item>
     /// <item>Events the library writes straight to the bypass logger — the request summary, the
     /// startup warning about level ordering, and the step-up and step-down warnings — which never
     /// pass root enrichment.</item>

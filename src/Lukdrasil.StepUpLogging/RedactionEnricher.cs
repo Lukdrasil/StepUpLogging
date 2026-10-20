@@ -7,7 +7,7 @@ namespace Lukdrasil.StepUpLogging;
 
 /// <summary>
 /// Applies <see cref="CompiledRedactionPatterns.Redact(string)"/> to the scalar properties of a log
-/// event other than <see cref="ExcludedProperties"/> whose value is a <see cref="string"/> or a
+/// event other than <see cref="ExcludedProperties"/> and the <see cref="CompiledRedactionPatterns.ExemptProperties"/> whose value is a <see cref="string"/> or a
 /// URI-like value (<see cref="PathString"/>, <see cref="QueryString"/>, <see cref="HostString"/>,
 /// <see cref="Uri"/>), so a secret a consumer logs through an application log, not just through
 /// the HTTP request pipeline, is masked before export (ADR 0022 D1). A URI-like value is redacted
@@ -29,13 +29,16 @@ internal sealed class RedactionEnricher(CompiledRedactionPatterns patterns) : IL
     // ponytail: matching by name means a consumer property under one of these names wins over the
     // library's AddPropertyIfAbsent stamp and escapes redaction with it. Accepted in D6 — telling
     // the two apart needs per-event state the enricher deliberately does not carry; the public doc
-    // on StepUpLoggingOptions.RedactLogEventProperties names the hole so it is not silent.
+    // on StepUpLoggingOptions.RedactLogEventProperties names the hole so it is not silent. The
+    // consumer's RedactionExemptProperties are matched by name the same way (ADR 0031 D1).
     private static readonly FrozenSet<string> ExcludedProperties = new[]
     {
         "TraceId", "SpanId", "ParentSpanId", "TraceFlags", "TraceState", "SourceContext",
         "Application", "Environment", "MachineName", "ServiceVersion", "ServiceInstanceId",
         "CallStack",
     }.ToFrozenSet(StringComparer.Ordinal);
+
+    private readonly FrozenSet<string> _skipped = ExcludedProperties.Union(patterns.ExemptProperties).ToFrozenSet(StringComparer.Ordinal);
 
     public void Enrich(LogEvent logEvent, ILogEventPropertyFactory propertyFactory)
     {
@@ -55,7 +58,7 @@ internal sealed class RedactionEnricher(CompiledRedactionPatterns patterns) : IL
     /// <summary>The redacted text of the property, or <see langword="null"/> when it is excluded, not redactable or unchanged.</summary>
     private string? RedactedValue(KeyValuePair<string, LogEventPropertyValue> property)
     {
-        if (ExcludedProperties.Contains(property.Key)) return null;
+        if (_skipped.Contains(property.Key)) return null;
         if (property.Value is not ScalarValue { Value: string or PathString or QueryString or HostString or Uri } scalar) return null;
 
         var original = scalar.Value.ToString()!;

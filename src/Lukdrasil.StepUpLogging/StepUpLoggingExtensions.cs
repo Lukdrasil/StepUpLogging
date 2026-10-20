@@ -228,7 +228,7 @@ public static class StepUpLoggingExtensions
             {
                 options.ExcludePaths ??= ["/healthz", "/metrics", "/health"];
                 options.NeverStepUpCategories ??= ["Microsoft.EntityFrameworkCore.Database.Command"];
-                options.ConsoleTextProperties ??= ["Jti"];
+                options.ConsoleTextProperties ??= [LogProperties.Jti];
             })
             .ValidateOnStart();
         builder.Services.TryAddEnumerable(
@@ -244,7 +244,7 @@ public static class StepUpLoggingExtensions
                 .Where(p => !string.IsNullOrWhiteSpace(p))
                 .Select(CompilePattern)
                 .ToArray();
-            return new CompiledRedactionPatterns(patterns);
+            return new CompiledRedactionPatterns(patterns, opts.RedactionExemptProperties);
         });
 
         builder.Services.AddSingleton<StepUpLoggingController>(sp =>
@@ -619,7 +619,7 @@ public static class StepUpLoggingExtensions
                             var userAgent = rawUserAgent is null ? null : compiledPatterns.Redact(rawUserAgent);
                             var (clientIp, forwardedFor) = ExtractClientAddresses(httpContext, opts.TrustForwardedHeaders, compiledPatterns);
                             var rawJti = httpContext.User?.FindFirst("jti")?.Value;
-                            var jti = rawJti is null ? null : compiledPatterns.Redact(rawJti);
+                            var jti = rawJti is null ? null : compiledPatterns.RedactProperty(LogProperties.Jti, rawJti);
                             var statusCode = failed ? StatusCodes.Status500InternalServerError : (httpContext.Response?.StatusCode ?? 0);
                             stepUpController.EmitRequestSummary(
                                 httpContext.Request.Method,
@@ -726,7 +726,7 @@ public static class StepUpLoggingExtensions
 
                 var jtiClaim = httpContext.User?.FindFirst("jti")?.Value;
                 if (!string.IsNullOrEmpty(jtiClaim))
-                    diagnosticContext.Set("Jti", compiledPatterns.Redact(jtiClaim));
+                    diagnosticContext.Set(LogProperties.Jti, compiledPatterns.RedactProperty(LogProperties.Jti, jtiClaim));
 
                 // The step-up trigger sink is asynchronous, so the request whose Error CAUSES the
                 // step-up is still not stepped-up when this enricher runs at request completion.
