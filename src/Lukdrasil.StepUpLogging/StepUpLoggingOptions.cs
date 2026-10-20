@@ -43,7 +43,8 @@ public enum ConsoleLogFormat
     Json = 0,
 
     /// <summary>
-    /// One readable line per event: time, level, trace id, <c>SourceContext</c> and the rendered message, with the
+    /// One readable line per event: time, level, the trace id as <c>TraceId=</c> or <c>traceparent=</c> (see
+    /// <see cref="StepUpLoggingOptions.ConsoleTraceFormat"/>), <c>SourceContext</c> and the rendered message, with the
     /// exception on the following lines. Of the properties not in the message, only
     /// <see cref="StepUpLoggingOptions.ConsoleTextProperties"/> are written. Line breaks in values are escaped.
     /// </summary>
@@ -53,15 +54,17 @@ public enum ConsoleLogFormat
 /// <summary>
 /// How the <see cref="ConsoleLogFormat.Text"/> console line writes the trace context.
 /// </summary>
-public enum ConsoleTraceFormat // af-stub
+public enum ConsoleTraceFormat
 {
     /// <summary>
-    /// <c>TraceId=&lt;trace id&gt;</c>.
+    /// <c>TraceId=&lt;trace id&gt;</c>, the 32 hex digits of the trace id.
     /// </summary>
     TraceId = 0,
 
     /// <summary>
-    /// The W3C <c>traceparent=00-&lt;trace id&gt;-&lt;span id&gt;-&lt;flags&gt;</c>.
+    /// The W3C <c>traceparent=00-&lt;trace id&gt;-&lt;span id&gt;-&lt;flags&gt;</c>, so a line can be pasted into a trace
+    /// lookup. The flags come from the <c>TraceFlags</c> property as two hex digits, <c>00</c> when it is absent or not
+    /// a number; an event without a span id is written as <c>TraceId=</c>.
     /// </summary>
     Traceparent = 1
 }
@@ -259,9 +262,11 @@ public sealed class StepUpLoggingOptions
     public ConsoleLogFormat ConsoleFormat { get; set; } = ConsoleLogFormat.Json;
 
     /// <summary>
-    /// How the <see cref="ConsoleLogFormat.Text"/> console line writes the trace context.
+    /// How the <see cref="ConsoleLogFormat.Text"/> console line writes the trace context: <see cref="ConsoleTraceFormat.TraceId"/>
+    /// (<c>TraceId=&lt;trace id&gt;</c>) or <see cref="ConsoleTraceFormat.Traceparent"/> (W3C <c>traceparent=</c>). An event
+    /// without a trace id gets no trace token. Default: <see cref="ConsoleTraceFormat.TraceId"/>.
     /// </summary>
-    public ConsoleTraceFormat ConsoleTraceFormat { get; set; } = ConsoleTraceFormat.Traceparent; // af-stub
+    public ConsoleTraceFormat ConsoleTraceFormat { get; set; } = ConsoleTraceFormat.TraceId;
 
     /// <summary>
     /// Properties written after the message in the <see cref="ConsoleLogFormat.Text"/> console format as

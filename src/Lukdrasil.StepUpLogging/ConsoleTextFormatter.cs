@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using Serilog.Events;
 using Serilog.Formatting;
@@ -6,12 +7,13 @@ using Serilog.Formatting.Display;
 namespace Lukdrasil.StepUpLogging;
 
 /// <summary>
-/// The <see cref="ConsoleLogFormat.Text"/> console line: time, level, trace id, <c>SourceContext</c> and the rendered
-/// message, then each listed property the event has as <c>Name=value</c>, then the exception on the following lines.
+/// The <see cref="ConsoleLogFormat.Text"/> console line: time, level, the trace id keyed as <c>TraceId=</c> or as a W3C
+/// <c>traceparent=</c> by <see cref="ConsoleTraceFormat"/>, <c>SourceContext</c> and the rendered message, then each
+/// listed property the event has as <c>Name=value</c>, then the exception on the following lines.
 /// The trace id and <c>SourceContext</c> are left out when absent. Line breaks in the message and the property values
 /// are written as <c>\r</c> and <c>\n</c>, so a logged value cannot forge a console line.
 /// </summary>
-internal sealed class ConsoleTextFormatter(string[] properties) : ITextFormatter
+internal sealed class ConsoleTextFormatter(string[] properties, ConsoleTraceFormat traceFormat) : ITextFormatter
 {
     private static readonly MessageTemplateTextFormatter Header = new("[{Timestamp:HH:mm:ss.fff} {Level:u3}]");
     private static readonly MessageTemplateTextFormatter Message = new("{Message:lj}");
@@ -19,11 +21,7 @@ internal sealed class ConsoleTextFormatter(string[] properties) : ITextFormatter
     public void Format(LogEvent logEvent, TextWriter output)
     {
         Header.Format(logEvent, output);
-        if (logEvent.TraceId is { } traceId)
-        {
-            output.Write(' ');
-            output.Write(traceId.ToHexString());
-        }
+        WriteTrace(logEvent, output);
         if (CategoryPrefix.TryGetSourceContext(logEvent, out var sourceContext))
         {
             output.Write(' ');
@@ -47,6 +45,25 @@ internal sealed class ConsoleTextFormatter(string[] properties) : ITextFormatter
         output.WriteLine();
         if (logEvent.Exception is not null) output.WriteLine(logEvent.Exception);
     }
+
+    private void WriteTrace(LogEvent logEvent, TextWriter output)
+    {
+        if (logEvent.TraceId is not { } traceId) return;
+        if (traceFormat == ConsoleTraceFormat.Traceparent && logEvent.SpanId is { } spanId)
+        {
+            output.Write($" traceparent=00-{traceId.ToHexString()}-{spanId.ToHexString()}-{Flags(logEvent)}");
+            return;
+        }
+        output.Write($" TraceId={traceId.ToHexString()}");
+    }
+
+    /// <summary>The <c>TraceFlags</c> property as two hex digits, <c>00</c> when it is absent or not a byte.</summary>
+    private static string Flags(LogEvent logEvent)
+        => logEvent.Properties.TryGetValue("TraceFlags", out var value)
+           && value is ScalarValue { Value: string text }
+           && byte.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var flags)
+            ? flags.ToString("x2", CultureInfo.InvariantCulture)
+            : "00";
 
     private sealed class LineBreakEscapingWriter(TextWriter inner) : TextWriter
     {
