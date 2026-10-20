@@ -6,7 +6,7 @@ Releases from 1.8.0 onward are recorded here. Entries backfilled from each relea
 `PackageReleaseNotes` and, where those were not updated per release, from the commits between tags.
 Tags before 1.8.0 predate this file.
 
-## [Unreleased]
+## [6.2.0] - 2026-10-20
 
 ### Added
 - `RedactionExemptProperties` (default empty): property names whose values are never passed through `RedactionRegexes`, matched ordinal and case-sensitive. It applies to the `RedactLogEventProperties` sweep and to `Jti` on the request summary and the request completion event, so with a UUID pattern configured `SerilogStepUp__RedactionExemptProperties__0=Jti` keeps `Jti=onrtac:<uuid>` readable. Request inputs (path, query string, headers, route values, `User-Agent`, `X-Forwarded-For`, body) are always redacted. With the default empty list redaction is unchanged. Part of #87. See docs/adr/0031-redaction-exempt-properties-and-keyed-trace.md.
