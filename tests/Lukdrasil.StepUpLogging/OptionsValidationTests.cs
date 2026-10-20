@@ -34,6 +34,7 @@ public class OptionsValidationTests
     [InlineData("Mode")]
     [InlineData("FrameworkCategoryDefaults")]
     [InlineData("ConsoleFormat")]
+    [InlineData("ConsoleTraceFormat")]
     public void UndefinedEnumNumber_FailsValidationOnStart(string option)
     {
         Assert.Throws<OptionsValidationException>(
@@ -431,6 +432,29 @@ public class OptionsValidationTests
         using var host = BuildHost(("SerilogStepUp:ConsoleFormat", "Text"));
 
         Assert.Equal(ConsoleLogFormat.Text, ResolveOptions(host).ConsoleFormat);
+    }
+
+    [Fact]
+    public void ConsoleTraceFormat_DefaultsToTraceId()
+    {
+        Assert.Equal(ConsoleTraceFormat.TraceId, new StepUpLoggingOptions().ConsoleTraceFormat);
+    }
+
+    [Fact]
+    public void RedactionExemptProperties_DefaultsToEmpty()
+    {
+        var exempt = new StepUpLoggingOptions().RedactionExemptProperties;
+
+        Assert.NotNull(exempt);
+        Assert.Empty(exempt);
+    }
+
+    [Fact]
+    public void RedactionExemptProperties_Configured_ReachesCompiledRedactionPatterns()
+    {
+        using var host = BuildHost(("SerilogStepUp:RedactionExemptProperties:0", "Jti"));
+
+        Assert.Equal(["Jti"], host.Services.GetRequiredService<CompiledRedactionPatterns>().ExemptProperties);
     }
 
     [Fact]

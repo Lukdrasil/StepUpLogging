@@ -975,7 +975,7 @@ public static class StepUpLoggingExtensions
     /// The console formatter for <paramref name="format"/>: compact JSON, or one line with the trace id, the rendered
     /// message and the <paramref name="textProperties"/> the event has. The OTLP and file sinks do not use it and stay structured.
     /// </summary>
-    internal static ITextFormatter CreateConsoleFormatter(ConsoleLogFormat format, string[] textProperties) => format switch
+    internal static ITextFormatter CreateConsoleFormatter(ConsoleLogFormat format, string[] textProperties, ConsoleTraceFormat traceFormat) => format switch // af-stub
     {
         ConsoleLogFormat.Text => new ConsoleTextFormatter([.. textProperties.Where(p => !string.IsNullOrWhiteSpace(p))]),
         _ => new CompactJsonFormatter(),
@@ -1012,7 +1012,7 @@ public static class StepUpLoggingExtensions
 
         if (opts.EnableConsoleLogging)
         {
-            lc.WriteTo.Async(a => a.Console(CreateConsoleFormatter(opts.ConsoleFormat, opts.ConsoleTextProperties ?? [])));
+            lc.WriteTo.Async(a => a.Console(CreateConsoleFormatter(opts.ConsoleFormat, opts.ConsoleTextProperties ?? [], opts.ConsoleTraceFormat)));
         }
 
         if (!string.IsNullOrWhiteSpace(logFilePath))

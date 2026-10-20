@@ -11,9 +11,12 @@ public class ConsoleFormatTests
     private static readonly ActivityTraceId TraceId = ActivityTraceId.CreateFromString("c4fed5a2d96d1640c013ae014f5d162d");
 
     private static string Format(ConsoleLogFormat format, LogEvent logEvent, params string[] textProperties)
+        => Format(format, ConsoleTraceFormat.TraceId, logEvent, textProperties);
+
+    private static string Format(ConsoleLogFormat format, ConsoleTraceFormat traceFormat, LogEvent logEvent, params string[] textProperties)
     {
         using var output = new StringWriter();
-        StepUpLoggingExtensions.CreateConsoleFormatter(format, textProperties).Format(logEvent, output);
+        StepUpLoggingExtensions.CreateConsoleFormatter(format, textProperties, traceFormat).Format(logEvent, output);
         return output.ToString();
     }
 
@@ -47,7 +50,7 @@ public class ConsoleFormatTests
         var line = Format(ConsoleLogFormat.Text, Event());
 
         Assert.EndsWith(Environment.NewLine, line);
-        Assert.Contains(" ERR] c4fed5a2d96d1640c013ae014f5d162d MyApp.Orders: Order 42 failed for alice", line);
+        Assert.Contains(" ERR] TraceId=c4fed5a2d96d1640c013ae014f5d162d MyApp.Orders: Order 42 failed for alice", line);
         Assert.DoesNotContain("not-in-the-message", line);
         Assert.DoesNotContain("{", line);
     }
@@ -142,6 +145,87 @@ public class ConsoleFormatTests
         var line = Format(ConsoleLogFormat.Text, logEvent);
 
         Assert.EndsWith(" INF] Microsoft.Hosting.Lifetime: Application started" + Environment.NewLine, line);
+    }
+
+    [Fact]
+    public void Text_Traceparent_WritesW3CTokenWithFlags()
+    {
+        var line = Format(ConsoleLogFormat.Text, ConsoleTraceFormat.Traceparent, Event(null, new LogEventProperty("TraceFlags", new ScalarValue("1"))));
+
+        Assert.Contains(" ERR] traceparent=00-c4fed5a2d96d1640c013ae014f5d162d-c692a71cf2b6dbbb-01 MyApp.Orders:", line);
+    }
+
+    [Fact]
+    public void Text_Traceparent_WithoutTraceFlags_Writes00()
+    {
+        var line = Format(ConsoleLogFormat.Text, ConsoleTraceFormat.Traceparent, Event());
+
+        Assert.Contains(" ERR] traceparent=00-c4fed5a2d96d1640c013ae014f5d162d-c692a71cf2b6dbbb-00 MyApp.Orders:", line);
+    }
+
+    [Fact]
+    public void Text_Traceparent_WithUnparseableTraceFlags_Writes00()
+    {
+        var line = Format(ConsoleLogFormat.Text, ConsoleTraceFormat.Traceparent, Event(null, new LogEventProperty("TraceFlags", new ScalarValue("x"))));
+
+        Assert.Contains(" ERR] traceparent=00-c4fed5a2d96d1640c013ae014f5d162d-c692a71cf2b6dbbb-00 MyApp.Orders:", line);
+    }
+
+    [Fact]
+    public void Text_Traceparent_WithoutSpanId_FallsBackToTraceId()
+    {
+        var logEvent = new LogEvent(
+            new DateTimeOffset(2026, 10, 17, 15, 54, 7, 221, TimeSpan.Zero),
+            LogEventLevel.Information,
+            null,
+            new MessageTemplateParser().Parse("Application started"),
+            [],
+            TraceId,
+            default);
+
+        var line = Format(ConsoleLogFormat.Text, ConsoleTraceFormat.Traceparent, logEvent);
+
+        Assert.EndsWith(" INF] TraceId=c4fed5a2d96d1640c013ae014f5d162d Application started" + Environment.NewLine, line);
+        Assert.DoesNotContain("traceparent=", line);
+    }
+
+    [Fact]
+    public void Text_Traceparent_WithoutTraceId_WritesNoTraceToken()
+    {
+        var logEvent = new LogEvent(
+            new DateTimeOffset(2026, 10, 17, 15, 54, 7, 221, TimeSpan.Zero),
+            LogEventLevel.Information,
+            null,
+            new MessageTemplateParser().Parse("Application started"),
+            []);
+
+        var line = Format(ConsoleLogFormat.Text, ConsoleTraceFormat.Traceparent, logEvent);
+
+        Assert.EndsWith(" INF] Application started" + Environment.NewLine, line);
+        Assert.DoesNotContain("TraceId=", line);
+        Assert.DoesNotContain("traceparent=", line);
+    }
+
+    [Fact]
+    public void Text_Traceparent_FlagsFromActivityContextEnricher()
+    {
+        using var activity = new Activity("Request");
+        activity.SetIdFormat(ActivityIdFormat.W3C);
+        activity.Start();
+        activity.ActivityTraceFlags = ActivityTraceFlags.Recorded;
+        var logEvent = new LogEvent(
+            DateTimeOffset.UtcNow,
+            LogEventLevel.Information,
+            null,
+            new MessageTemplateParser().Parse("Application started"),
+            [],
+            activity.TraceId,
+            activity.SpanId);
+        new ActivityContextEnricher().Enrich(logEvent, new SimpleLogEventPropertyFactory());
+
+        var line = Format(ConsoleLogFormat.Text, ConsoleTraceFormat.Traceparent, logEvent);
+
+        Assert.EndsWith($" INF] traceparent=00-{activity.TraceId.ToHexString()}-{activity.SpanId.ToHexString()}-01 Application started" + Environment.NewLine, line);
     }
 
     [Fact]

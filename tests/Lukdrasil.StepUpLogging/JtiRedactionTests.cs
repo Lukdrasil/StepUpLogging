@@ -33,9 +33,17 @@ public class JtiRedactionTests
         public void Emit(LogEvent logEvent) => Events.Add(logEvent);
     }
 
-    private static async Task<IHost> BuildServerAsync(Serilog.ILogger logger, string jtiClaim)
+    private const string Uuid = "3f2b8c1e-9a4d-4e6f-8b7a-1c2d3e4f5a6b";
+    private const string UuidPattern = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
+
+    private static async Task<IHost> BuildServerAsync(Serilog.ILogger logger, string jtiClaim, string[]? exempt = null, bool alwaysLogRequestSummary = false)
     {
-        var opts = new StepUpLoggingOptions { RedactionRegexes = new[] { "secret-[A-Za-z0-9]+" } };
+        var opts = new StepUpLoggingOptions
+        {
+            RedactionRegexes = new[] { "secret-[A-Za-z0-9]+", UuidPattern },
+            RedactionExemptProperties = exempt ?? [],
+            AlwaysLogRequestSummary = alwaysLogRequestSummary,
+        };
 
         var host = new HostBuilder()
             .ConfigureWebHost(web => web
@@ -48,7 +56,7 @@ public class JtiRedactionTests
                     var patterns = opts.RedactionRegexes
                         .Select(p => new Regex(p, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100)))
                         .ToArray();
-                    services.AddSingleton(new CompiledRedactionPatterns(patterns));
+                    services.AddSingleton(new CompiledRedactionPatterns(patterns, opts.RedactionExemptProperties));
                     services.AddSingleton(new DiagnosticContext(logger));
                 })
                 .Configure(app =>
@@ -96,6 +104,61 @@ public class JtiRedactionTests
             Assert.NotNull(jti);
             Assert.Contains("[REDACTED]", jti);
             Assert.DoesNotContain("secret-jti999", jti);
+        }
+        finally
+        {
+            Log.Logger = previous;
+            logger.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task Jti_Exempt_IsKept_OnEnrichDiagnosticContextPath()
+    {
+        var capture = new CaptureSink();
+        var logger = new LoggerConfiguration().WriteTo.Sink(capture).CreateLogger();
+        var previous = Log.Logger;
+        Log.Logger = logger;
+        try
+        {
+            using var host = await BuildServerAsync(logger, "onrtac:" + Uuid, ["Jti"]);
+            using var client = host.GetTestClient();
+
+            var response = await client.GetAsync("/" + Uuid, TestContext.Current.CancellationToken);
+            response.EnsureSuccessStatusCode();
+            await Task.Delay(50, TestContext.Current.CancellationToken);
+
+            var evt = FindRequestFinishedEvent(capture);
+            Assert.NotNull(evt);
+            Assert.Equal("onrtac:" + Uuid, ((ScalarValue)evt!.Properties["Jti"]).Value);
+            Assert.Contains("[REDACTED]", (string)((ScalarValue)evt.Properties["RequestPath"]).Value!);
+        }
+        finally
+        {
+            Log.Logger = previous;
+            logger.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task Jti_Exempt_IsKept_OnRequestSummary()
+    {
+        var capture = new CaptureSink();
+        var logger = new LoggerConfiguration().WriteTo.Sink(capture).CreateLogger();
+        var previous = Log.Logger;
+        Log.Logger = logger;
+        try
+        {
+            using var host = await BuildServerAsync(logger, "onrtac:" + Uuid, ["Jti"], alwaysLogRequestSummary: true);
+            using var client = host.GetTestClient();
+
+            var response = await client.GetAsync("/" + Uuid, TestContext.Current.CancellationToken);
+            response.EnsureSuccessStatusCode();
+            await Task.Delay(50, TestContext.Current.CancellationToken);
+
+            var summary = Assert.Single(capture.Events, e => e.Properties.ContainsKey(LogProperties.IsRequestSummary));
+            Assert.Equal("onrtac:" + Uuid, ((ScalarValue)summary.Properties["Jti"]).Value);
+            Assert.Contains("[REDACTED]", (string)((ScalarValue)summary.Properties["Path"]).Value!);
         }
         finally
         {
