@@ -204,7 +204,7 @@ public sealed class StepUpLoggingController : IDisposable
             // first, then the optional fields from the outermost context to the innermost.
             var summary = CreateSummaryEvent(level, logger, method, path, statusCode, elapsedMs);
             AddIfPresent(summary, "ForwardedFor", forwardedFor);
-            AddIfPresent(summary, "Jti", jti);
+            AddIfPresent(summary, LogProperties.Jti, jti);
             AddIfPresent(summary, "ClientIp", clientIp);
             AddIfPresent(summary, "UserAgent", userAgent);
             AddRouteParameters(summary, logger, routeParameters);
