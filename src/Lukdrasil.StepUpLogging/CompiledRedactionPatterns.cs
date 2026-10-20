@@ -18,10 +18,11 @@ internal sealed class CompiledRedactionPatterns
 
     private readonly Regex? _union;
 
-    internal CompiledRedactionPatterns(Regex[] patterns, IEnumerable<string>? exemptProperties = null) // af-stub
+    internal CompiledRedactionPatterns(Regex[] patterns, IEnumerable<string>? exemptProperties = null)
     {
         Patterns = patterns;
         _union = BuildUnion(patterns);
+        ExemptProperties = (exemptProperties ?? []).Where(p => !string.IsNullOrWhiteSpace(p)).ToFrozenSet(StringComparer.Ordinal);
     }
 
     internal Regex[] Patterns { get; }
@@ -29,9 +30,14 @@ internal sealed class CompiledRedactionPatterns
     /// <summary>Whether a union prefilter was built for the patterns.</summary>
     internal bool HasPrefilter => _union is not null;
 
-    internal FrozenSet<string> ExemptProperties { get; } = FrozenSet<string>.Empty; // af-stub
+    /// <summary>
+    /// The property names whose values are never redacted (<see cref="StepUpLoggingOptions.RedactionExemptProperties"/>,
+    /// ADR 0031 D1): matched ordinal and case-sensitive, blank entries dropped.
+    /// </summary>
+    internal FrozenSet<string> ExemptProperties { get; }
 
-    internal string RedactProperty(string name, string value) => throw new NotImplementedException(); // af-stub
+    /// <summary>The value of the property <paramref name="name"/>, unchanged when the name is exempt, else redacted.</summary>
+    internal string RedactProperty(string name, string value) => ExemptProperties.Contains(name) ? value : Redact(value);
 
     internal string Redact(string input)
     {
