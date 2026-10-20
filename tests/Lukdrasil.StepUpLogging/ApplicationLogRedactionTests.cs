@@ -123,6 +123,34 @@ public class ApplicationLogRedactionTests
         Assert.Equal(guid, ((ScalarValue)logEvent.Properties[excludedName]).Value);
     }
 
+    private const string Uuid = "3f2b8c1e-9a4d-4e6f-8b7a-1c2d3e4f5a6b";
+    private const string UuidPattern = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
+
+    [Fact]
+    public void Enrich_ExemptProperty_IsNotSwept_OtherPropertyIs()
+    {
+        var enricher = new RedactionEnricher(new CompiledRedactionPatterns([Compile(UuidPattern)], ["Jti"]));
+        var logEvent = MakeEvent(
+            new LogEventProperty("Jti", new ScalarValue("onrtac:" + Uuid)),
+            new LogEventProperty("UserId", new ScalarValue(Uuid)));
+
+        enricher.Enrich(logEvent, new SimpleLogEventPropertyFactory());
+
+        Assert.Equal("onrtac:" + Uuid, ((ScalarValue)logEvent.Properties["Jti"]).Value);
+        Assert.Equal("[REDACTED]", ((ScalarValue)logEvent.Properties["UserId"]).Value);
+    }
+
+    [Fact]
+    public void Enrich_EmptyExemptList_RedactsAsBefore()
+    {
+        var enricher = new RedactionEnricher(new CompiledRedactionPatterns([Compile(UuidPattern)], []));
+        var logEvent = MakeEvent(new LogEventProperty("Jti", new ScalarValue("onrtac:" + Uuid)));
+
+        enricher.Enrich(logEvent, new SimpleLogEventPropertyFactory());
+
+        Assert.Equal("onrtac:[REDACTED]", ((ScalarValue)logEvent.Properties["Jti"]).Value);
+    }
+
     [Fact]
     public void Enrich_UnchangedValue_DoesNotCreateReplacementProperty()
     {

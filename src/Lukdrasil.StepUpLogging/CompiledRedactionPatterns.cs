@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Text.RegularExpressions;
 
 namespace Lukdrasil.StepUpLogging;
@@ -17,7 +18,7 @@ internal sealed class CompiledRedactionPatterns
 
     private readonly Regex? _union;
 
-    internal CompiledRedactionPatterns(Regex[] patterns)
+    internal CompiledRedactionPatterns(Regex[] patterns, IEnumerable<string>? exemptProperties = null) // af-stub
     {
         Patterns = patterns;
         _union = BuildUnion(patterns);
@@ -27,6 +28,10 @@ internal sealed class CompiledRedactionPatterns
 
     /// <summary>Whether a union prefilter was built for the patterns.</summary>
     internal bool HasPrefilter => _union is not null;
+
+    internal FrozenSet<string> ExemptProperties { get; } = FrozenSet<string>.Empty; // af-stub
+
+    internal string RedactProperty(string name, string value) => throw new NotImplementedException(); // af-stub
 
     internal string Redact(string input)
     {

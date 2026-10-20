@@ -100,6 +100,41 @@ namespace Lukdrasil.StepUpLogging.Tests
             Assert.Equal("my [REDACTED] here", result);
         }
 
+        private const string Uuid = "3f2b8c1e-9a4d-4e6f-8b7a-1c2d3e4f5a6b";
+        private const string UuidPattern = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
+
+        [Fact]
+        public void RedactProperty_ExemptName_ReturnsValueUnchanged()
+        {
+            var patterns = new CompiledRedactionPatterns([Compile(UuidPattern)], ["Jti"]);
+
+            Assert.Equal("onrtac:" + Uuid, patterns.RedactProperty("Jti", "onrtac:" + Uuid));
+        }
+
+        [Fact]
+        public void RedactProperty_OtherName_IsRedacted()
+        {
+            var patterns = new CompiledRedactionPatterns([Compile(UuidPattern)], ["Jti"]);
+
+            Assert.Equal("[REDACTED]", patterns.RedactProperty("UserId", Uuid));
+        }
+
+        [Fact]
+        public void RedactProperty_NameDiffersInCase_IsRedacted()
+        {
+            var patterns = new CompiledRedactionPatterns([Compile(UuidPattern)], ["Jti"]);
+
+            Assert.Equal("onrtac:[REDACTED]", patterns.RedactProperty("jti", "onrtac:" + Uuid));
+        }
+
+        [Fact]
+        public void ExemptProperties_DropsBlankEntries()
+        {
+            var patterns = new CompiledRedactionPatterns([Compile(UuidPattern)], ["Jti", " ", ""]);
+
+            Assert.Equal(["Jti"], patterns.ExemptProperties);
+        }
+
         [Fact]
         public void Redact_ReturnsSameInstance_WhenNoPatternMatches()
         {

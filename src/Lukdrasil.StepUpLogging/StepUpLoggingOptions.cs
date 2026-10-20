@@ -51,6 +51,22 @@ public enum ConsoleLogFormat
 }
 
 /// <summary>
+/// How the <see cref="ConsoleLogFormat.Text"/> console line writes the trace context.
+/// </summary>
+public enum ConsoleTraceFormat // af-stub
+{
+    /// <summary>
+    /// <c>TraceId=&lt;trace id&gt;</c>.
+    /// </summary>
+    TraceId = 0,
+
+    /// <summary>
+    /// The W3C <c>traceparent=00-&lt;trace id&gt;-&lt;span id&gt;-&lt;flags&gt;</c>.
+    /// </summary>
+    Traceparent = 1
+}
+
+/// <summary>
 /// Selects the built-in framework category rules applied under <see cref="StepUpLoggingOptions.CategoryFloors"/>.
 /// </summary>
 public enum FrameworkCategoryPreset
@@ -115,6 +131,11 @@ public sealed class StepUpLoggingOptions
     /// no property. Do not log secrets in interpolated message templates.
     /// </remarks>
     public string[] RedactionRegexes { get; set; } = [];
+
+    /// <summary>
+    /// Property names whose values are never passed through <see cref="RedactionRegexes"/>.
+    /// </summary>
+    public string[] RedactionExemptProperties { get; set; } = null!; // af-stub
 
     /// <summary>
     /// When true, applies <see cref="RedactionRegexes"/> to the string-valued and URI-like
@@ -228,6 +249,11 @@ public sealed class StepUpLoggingOptions
     /// Only the console changes; the OTLP exporter and the file sink stay structured. Default: <see cref="ConsoleLogFormat.Json"/>.
     /// </summary>
     public ConsoleLogFormat ConsoleFormat { get; set; } = ConsoleLogFormat.Json;
+
+    /// <summary>
+    /// How the <see cref="ConsoleLogFormat.Text"/> console line writes the trace context.
+    /// </summary>
+    public ConsoleTraceFormat ConsoleTraceFormat { get; set; } = ConsoleTraceFormat.Traceparent; // af-stub
 
     /// <summary>
     /// Properties written after the message in the <see cref="ConsoleLogFormat.Text"/> console format as
