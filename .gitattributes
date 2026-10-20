@@ -1,15 +1,15 @@
 * text=auto
 
-README.md -text
-src/Lukdrasil.StepUpLogging/AuditLogger.cs -text
-src/Lukdrasil.StepUpLogging/Lukdrasil.StepUpLogging.csproj -text
-src/Lukdrasil.StepUpLogging/PreErrorBufferSink.cs -text
-src/Lukdrasil.StepUpLogging/StepUpLoggingController.cs -text
-src/Lukdrasil.StepUpLogging/SummarySink.cs -text
-tests/Lukdrasil.StepUpLogging/ActivityContextEnricherTests.cs -text
-tests/Lukdrasil.StepUpLogging/AuditLoggingRegistrationTests.cs -text
-tests/Lukdrasil.StepUpLogging/PreErrorBufferSinkTests.cs -text
-tests/Lukdrasil.StepUpLogging/StepUpLoggingControllerTests.cs -text
-tests/Lukdrasil.StepUpLogging/StepUpTriggerSinkTests.cs -text
-tests/Lukdrasil.StepUpLogging/SummarySinkTests.cs -text
-tests/Lukdrasil.StepUpLogging/UseStepUpRequestLoggingMiddlewareTests.cs -text
+README.md -text whitespace=cr-at-eol
+src/Lukdrasil.StepUpLogging/AuditLogger.cs -text whitespace=cr-at-eol
+src/Lukdrasil.StepUpLogging/Lukdrasil.StepUpLogging.csproj -text whitespace=cr-at-eol
+src/Lukdrasil.StepUpLogging/PreErrorBufferSink.cs -text whitespace=cr-at-eol
+src/Lukdrasil.StepUpLogging/StepUpLoggingController.cs -text whitespace=cr-at-eol
+src/Lukdrasil.StepUpLogging/SummarySink.cs -text whitespace=cr-at-eol
+tests/Lukdrasil.StepUpLogging/ActivityContextEnricherTests.cs -text whitespace=cr-at-eol
+tests/Lukdrasil.StepUpLogging/AuditLoggingRegistrationTests.cs -text whitespace=cr-at-eol
+tests/Lukdrasil.StepUpLogging/PreErrorBufferSinkTests.cs -text whitespace=cr-at-eol
+tests/Lukdrasil.StepUpLogging/StepUpLoggingControllerTests.cs -text whitespace=cr-at-eol
+tests/Lukdrasil.StepUpLogging/StepUpTriggerSinkTests.cs -text whitespace=cr-at-eol
+tests/Lukdrasil.StepUpLogging/SummarySinkTests.cs -text whitespace=cr-at-eol
+tests/Lukdrasil.StepUpLogging/UseStepUpRequestLoggingMiddlewareTests.cs -text whitespace=cr-at-eol
