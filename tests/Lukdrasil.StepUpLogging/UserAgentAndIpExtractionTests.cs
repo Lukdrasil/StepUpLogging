@@ -40,10 +40,10 @@ namespace Lukdrasil.StepUpLogging.Tests
             }
         }
 
-        private static async Task<IHost> CreateTestServerAsync(CaptureSink captureSink, bool trustForwardedHeaders = false, string? jtiClaim = null, string[]? redactionRegexes = null)
+        private static async Task<IHost> CreateTestServerAsync(CaptureSink captureSink, bool trustForwardedHeaders = false, string? jtiClaim = null, string[]? redactionRegexes = null, RequestSummaryDetail requestSummaryDetail = RequestSummaryDetail.Full)
         {
             var summaryLogger = new LoggerConfiguration().WriteTo.Sink(captureSink).CreateLogger();
-            var opts = new StepUpLoggingOptions { AlwaysLogRequestSummary = true, RequestSummaryLevel = "Information", TrustForwardedHeaders = trustForwardedHeaders, RedactionRegexes = redactionRegexes ?? new[] { "secret-[A-Za-z0-9]+" } };
+            var opts = new StepUpLoggingOptions { AlwaysLogRequestSummary = true, RequestSummaryLevel = "Information", TrustForwardedHeaders = trustForwardedHeaders, RedactionRegexes = redactionRegexes ?? new[] { "secret-[A-Za-z0-9]+" }, RequestSummaryDetail = requestSummaryDetail };
 
             var host = new HostBuilder()
                 .ConfigureWebHost(web => web
@@ -114,6 +114,20 @@ namespace Lukdrasil.StepUpLogging.Tests
             Assert.NotNull(userAgent);
             Assert.Contains("[REDACTED]", userAgent);
             Assert.DoesNotContain("secret-abc123", userAgent);
+        }
+
+        [Fact(DisplayName = "EmitRequestSummary_CompactDetail_OmitsProtocolAndQueryString")]
+        public async Task EmitRequestSummary_CompactDetail_OmitsProtocolAndQueryString()
+        {
+            var capture = new CaptureSink();
+            using var host = await CreateTestServerAsync(capture, requestSummaryDetail: RequestSummaryDetail.Compact);
+            var client = host.GetTestClient();
+
+            await client.GetAsync("http://localhost/test?page=2", TestContext.Current.CancellationToken);
+
+            Assert.NotNull(capture.LastEvent);
+            Assert.False(capture.LastEvent!.Properties.ContainsKey("Protocol"));
+            Assert.False(capture.LastEvent.Properties.ContainsKey("QueryString"));
         }
 
         [Fact(DisplayName = "EmitRequestSummary_RendersNone_WhenUserAgentMissing")]

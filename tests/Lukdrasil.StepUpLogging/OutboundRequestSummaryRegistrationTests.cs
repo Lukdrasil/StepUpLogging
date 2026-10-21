@@ -45,7 +45,7 @@ public class OutboundRequestSummaryRegistrationTests
         };
     }
 
-    private static IHost Build(bool alwaysLogOutbound, Action<HostApplicationBuilder>? configure = null)
+    private static IHost Build(bool alwaysLogOutbound, Action<HostApplicationBuilder>? configure = null, RequestSummaryDetail detail = RequestSummaryDetail.Full)
     {
         var builder = Host.CreateApplicationBuilder();
         builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
@@ -53,7 +53,11 @@ public class OutboundRequestSummaryRegistrationTests
             ["SerilogStepUp:EnableOtlpExporter"] = "false",
             ["SerilogStepUp:EnablePreErrorBuffering"] = "false",
         });
-        builder.AddStepUpLogging(o => o.AlwaysLogOutboundRequestSummary = alwaysLogOutbound);
+        builder.AddStepUpLogging(o =>
+        {
+            o.AlwaysLogOutboundRequestSummary = alwaysLogOutbound;
+            o.RequestSummaryDetail = detail;
+        });
         configure?.Invoke(builder);
         return builder.Build();
     }
@@ -156,6 +160,24 @@ public class OutboundRequestSummaryRegistrationTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var summary = Assert.Single(sink.Events, e => e.Properties.ContainsKey("IsRequestSummary"));
         Assert.Equal(200, ((ScalarValue)summary.Properties["StatusCode"]).Value);
+    }
+
+    [Fact]
+    public async Task FlagOn_CompactDetail_FactoryClientSummaryHasNoProtocol()
+    {
+        using var host = Build(
+            alwaysLogOutbound: true,
+            b => b.Services.AddHttpClient(ClientName).ConfigurePrimaryHttpMessageHandler(() => new StubHandler(() => new HttpResponseMessage(HttpStatusCode.OK))),
+            RequestSummaryDetail.Compact);
+        using var client = host.Services.GetRequiredService<IHttpClientFactory>().CreateClient(ClientName);
+        var sink = new CaptureSink();
+        host.Services.GetRequiredService<StepUpLoggingController>()
+            .SetSummaryLogger(new LoggerConfiguration().WriteTo.Sink(sink).CreateLogger());
+
+        using var response = await client.GetAsync("http://billing.test/a", TestContext.Current.CancellationToken);
+
+        var summary = Assert.Single(sink.Events, e => e.Properties.ContainsKey("IsRequestSummary"));
+        Assert.False(summary.Properties.ContainsKey("Protocol"));
     }
 
     [Theory]
