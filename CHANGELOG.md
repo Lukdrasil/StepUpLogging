@@ -6,6 +6,11 @@ Releases from 1.8.0 onward are recorded here. Entries backfilled from each relea
 `PackageReleaseNotes` and, where those were not updated per release, from the commits between tags.
 Tags before 1.8.0 predate this file.
 
+## [6.3.2] - 2026-10-21
+
+### Changed
+- `ConsoleTextProperties` defaults to `["Jti", "Method", "Path", "StatusCode", "ElapsedMs"]` instead of `["Jti"]`, so the `Text` console line of a request summary carries its fields as keys: `Message="Outbound GET /v1/items 200 1.9265 ms Unknown MyApp/1.0" Jti=<id> Method=GET Path=/v1/items StatusCode=200 ElapsedMs=1.9265`, filterable by `StatusCode=` or `Path=`. The values stay in `Message` too. Other events that carry these properties, such as ASP.NET Core hosting events, also write them. A configured list still replaces the default. JSON console, OTLP and file output are unchanged.
+
 ## [6.3.1] - 2026-10-21
 
 ### Changed
