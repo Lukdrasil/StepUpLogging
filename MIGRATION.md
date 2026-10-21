@@ -92,6 +92,8 @@ exclusion off (issue #32).
 { "SerilogStepUp": { "ExcludePaths": [ "/healthz", "/metrics", "/health", "/your/path" ] } }
 ```
 
+To add paths and keep the defaults, set `AdditionalExcludePaths` instead of restating them.
+
 **In code.** The property is now `string[]?` and is `null` inside `configureOptions` unless
 configuration sets it, because the defaults are applied after the callback runs. Assign the whole
 list, and do not read the old value to append to it:
