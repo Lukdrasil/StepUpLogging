@@ -6,7 +6,7 @@ Releases from 1.8.0 onward are recorded here. Entries backfilled from each relea
 `PackageReleaseNotes` and, where those were not updated per release, from the commits between tags.
 Tags before 1.8.0 predate this file.
 
-## [Unreleased]
+## [6.3.0] - 2026-10-21
 
 ### Added
 - `AdditionalExcludePaths` (default none): paths appended to the effective `ExcludePaths`, matched the same way (case-insensitive, a trailing `*` matches a prefix). When `ExcludePaths` is not configured the built-in defaults (`/healthz`, `/metrics`, `/health`) stay, so `SerilogStepUp__AdditionalExcludePaths__0=/.well-known/*` replaces the four variables that restating the defaults needed. `ExcludePaths` keeps its meaning: a configured list still replaces the defaults. Fixes #90.
