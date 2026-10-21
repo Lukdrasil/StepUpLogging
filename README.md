@@ -195,7 +195,7 @@ See [Category Control](#category-control) for how the category options combine.
 | `EnableConsoleLogging` | `false` | `true` writes every exported event to stdout as well. With OTLP on and a platform that also ships stdout, each event is stored twice |
 | `ConsoleFormat` | `Json` | `Text` writes one readable line per event with the keyed trace id; log processors that parse JSON from stdout lose the structured properties. OTLP and file output stay structured |
 | `ConsoleTraceFormat` | `TraceId` | `Traceparent` writes the `Text` line's trace token as a W3C `traceparent=00-<trace id>-<span id>-<flags>` instead of `TraceId=<trace id>`, for pasting into a trace lookup |
-| `ConsoleTextProperties` | `["Jti"]` | Properties written after the message in `Text` format, so identity stays on the console without OTLP |
+| `ConsoleTextProperties` | `["Jti", "Method", "Path", "StatusCode", "ElapsedMs"]` | Properties written after the message in `Text` format, so identity and the request summary fields stay on the console without OTLP |
 
 The file sink is enabled by the `logFilePath` parameter of `AddStepUpLogging`: daily files, 30 kept.
 
@@ -1100,9 +1100,11 @@ value cannot forge a key or a console line, and Loki `| logfmt` or Vector `parse
 into a trace lookup. The flags come from the event's `TraceFlags` and are `00` when it has none; an
 event without a span id keeps `TraceId=`, and an event without a trace id has no trace token.
 
-`ConsoleTextProperties` defaults to `["Jti"]`, the token id the request summary carries, so the
-caller's identity stays on the console when OTLP is not available. Add your own identity
-properties; a configured list replaces the default, so keep `Jti` in it if you still want it.
+`ConsoleTextProperties` defaults to `["Jti", "Method", "Path", "StatusCode", "ElapsedMs"]`: the token id the request summary
+carries, so the caller's identity stays on the console when OTLP is not available, and the summary's
+fields as their own keys, so a line can be filtered by `StatusCode=` or `Path=` although the same values
+are also in `Message`. Add your own identity properties; a configured list replaces the default, so keep
+the entries you still want in it.
 
 ```json
 {
@@ -1153,7 +1155,7 @@ properties; a configured list replaces the default, so keep `Jti` in it if you s
 | `EnableConsoleLogging` | `false` | - | Enable console output (dev scenarios) |
 | `ConsoleFormat` | `Json` | `SerilogStepUp__ConsoleFormat` | Console format: `Json` (CompactJSON) or `Text` (one logfmt line with `Timestamp`, `Level`, `TraceId`, `SourceContext`, `Message` and `Exception`); OTLP and file stay structured |
 | `ConsoleTraceFormat` | `TraceId` | `SerilogStepUp__ConsoleTraceFormat` | Trace token of the `Text` console line: `TraceId` (`TraceId=<trace id>`) or `Traceparent` (W3C `traceparent=00-<trace id>-<span id>-<flags>`) |
-| `ConsoleTextProperties` | `["Jti"]` | - | Properties written after the message in the `Text` console format as `Name=value` when the event has them; a configured list replaces the default |
+| `ConsoleTextProperties` | `["Jti", "Method", "Path", "StatusCode", "ElapsedMs"]` | - | Properties written after the message in the `Text` console format as `Name=value` when the event has them; a configured list replaces the default |
 | **Enrichers** |
 | `EnrichWithExceptionDetails` | `true` | - | Enrich logs with structured exception details |
 | `StructuredExceptionDetails` | `true` | - | Second switch for the same enricher; exception details are added only when both are `true` |

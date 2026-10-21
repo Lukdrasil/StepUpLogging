@@ -460,11 +460,11 @@ public class OptionsValidationTests
     }
 
     [Fact]
-    public void ConsoleTextProperties_NotConfigured_ResolvesToJti()
+    public void ConsoleTextProperties_NotConfigured_ResolvesToJtiAndTheSummaryFields()
     {
         using var host = BuildHost();
 
-        Assert.Equal(["Jti"], ResolveOptions(host).ConsoleTextProperties!);
+        Assert.Equal(["Jti", "Method", "Path", "StatusCode", "ElapsedMs"], ResolveOptions(host).ConsoleTextProperties!);
     }
 
     [Fact]

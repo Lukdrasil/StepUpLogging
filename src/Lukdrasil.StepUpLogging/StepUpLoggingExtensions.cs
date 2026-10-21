@@ -233,7 +233,7 @@ public static class StepUpLoggingExtensions
                     options.ExcludePaths = [.. options.ExcludePaths, .. extra];
                 }
                 options.NeverStepUpCategories ??= ["Microsoft.EntityFrameworkCore.Database.Command"];
-                options.ConsoleTextProperties ??= [LogProperties.Jti];
+                options.ConsoleTextProperties ??= [LogProperties.Jti, "Method", "Path", "StatusCode", "ElapsedMs"];
             })
             .ValidateOnStart();
         builder.Services.TryAddEnumerable(
