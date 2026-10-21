@@ -69,16 +69,24 @@ public enum ConsoleTraceFormat
     Traceparent = 1
 }
 
-// af-stub
 /// <summary>
-/// Which fields the request summary carries.
+/// Which fields the inbound and outbound request summary carries. The message template is the same in both modes.
 /// </summary>
 public enum RequestSummaryDetail
 {
-    /// <summary>Every field.</summary>
+    /// <summary>
+    /// Every field: the <see cref="Compact"/> fields plus, inbound, <c>Protocol</c>, <c>Scheme</c>, <c>Host</c>, the
+    /// request and response content lengths, <c>IsAuthenticated</c>, <c>AuthScheme</c>, <c>EndpointName</c>,
+    /// <c>QueryString</c>, <c>RouteParameters</c> and <c>ForwardedFor</c>; outbound, <c>Protocol</c>, the content
+    /// lengths and <c>ExceptionType</c>.
+    /// </summary>
     Full = 0,
 
-    /// <summary>The compact field set.</summary>
+    /// <summary>
+    /// The template properties (<c>Direction</c>, <c>Method</c>, <c>Path</c>, <c>StatusCode</c>, <c>ElapsedMs</c>,
+    /// <c>ClientKind</c>, <c>UserAgent</c>) plus, inbound, <c>Route</c>, <c>Aborted</c>, <c>ClientId</c>,
+    /// <c>ClientIp</c> and <c>Jti</c>; outbound, <c>HttpClientName</c> and <c>Host</c>.
+    /// </summary>
     Compact = 1
 }
 
@@ -215,7 +223,7 @@ public sealed class StepUpLoggingOptions
     /// your own under one of those names wins over the library's stamp and then escapes redaction
     /// with it. <see cref="RedactionExemptProperties"/> is a second hole by name: a property listed there is not
     /// redacted on any event, whoever stamped it.</item>
-    /// <item>Events the library writes straight to the bypass logger — the request summary, the
+    /// <item>Events the library writes straight to the bypass logger — the inbound and outbound request summary, the
     /// startup warning about level ordering, and the step-up and step-down warnings — which never
     /// pass root enrichment.</item>
     /// </list>
@@ -365,15 +373,20 @@ public sealed class StepUpLoggingOptions
     /// </summary>
     public string RequestSummaryLevel { get; set; } = "Information";
 
-    // af-stub
     /// <summary>
-    /// Which fields the request summary carries. Default: <see cref="RequestSummaryDetail.Full"/>.
+    /// Which fields the inbound and outbound request summary carries. Default: <see cref="RequestSummaryDetail.Full"/>,
+    /// every field. <see cref="RequestSummaryDetail.Compact"/> keeps the template properties and the fields that
+    /// identify the caller; the message template is the same in both modes.
     /// </summary>
     public RequestSummaryDetail RequestSummaryDetail { get; set; } = RequestSummaryDetail.Full;
 
-    // af-stub
     /// <summary>
-    /// When true, write a request summary for every outgoing <c>IHttpClientFactory</c> call. Default: false.
+    /// When true, write a request summary with <c>Direction</c> <c>Outbound</c> for every call through an
+    /// <c>IHttpClientFactory</c> client, outermost in its handler chain so a retried call is summarized once. The
+    /// library's own audit client and the OTLP exporter clients (<c>OtlpTraceExporter</c>, <c>OtlpMetricExporter</c>,
+    /// <c>OtlpLogExporter</c>) are excluded; an <c>HttpClient</c> created with <c>new HttpClient()</c> is not covered.
+    /// Default: false (opt-in).
+    /// Read once at registration from the configuration section and <c>configureOptions</c>.
     /// </summary>
     public bool AlwaysLogOutboundRequestSummary { get; set; } = false;
 

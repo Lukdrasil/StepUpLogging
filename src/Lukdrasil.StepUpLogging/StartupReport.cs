@@ -22,11 +22,21 @@ internal static class StartupReport
         .Select(p => p.Name)
         .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
+    private static readonly (string Option, string Reason, Func<StepUpLoggingOptions, bool> Applies)[] UnusedOptionRules =
+    [
+        (nameof(StepUpLoggingOptions.ConsoleFormat), "EnableConsoleLogging is false",
+            opts => opts.ConsoleFormat != ConsoleLogFormat.Json && !opts.EnableConsoleLogging),
+        (nameof(StepUpLoggingOptions.RedactLogEventProperties), "RedactionRegexes is empty",
+            opts => opts.RedactLogEventProperties && !(opts.RedactionRegexes ?? []).Any(p => !string.IsNullOrWhiteSpace(p))),
+        (nameof(StepUpLoggingOptions.RequestSummaryDetail), "AlwaysLogRequestSummary and AlwaysLogOutboundRequestSummary are false",
+            opts => opts.RequestSummaryDetail == RequestSummaryDetail.Compact && !opts.AlwaysLogRequestSummary && !opts.AlwaysLogOutboundRequestSummary),
+    ];
+
     internal static void Write(Serilog.ILogger logger, StepUpLoggingOptions opts, IConfigurationSection section, string? logFilePath)
     {
         logger.Information(SummaryTemplate,
             opts.Mode.ToString(), opts.BaseLevel, opts.StepUpLevel, opts.DurationSeconds, Outputs(opts, logFilePath),
-            opts.FrameworkCategoryDefaults.ToString(), opts.AlwaysLogRequestSummary ? $"every request at {opts.RequestSummaryLevel}" : "off");
+            opts.FrameworkCategoryDefaults.ToString(), RequestSummaryText(opts));
 
         foreach (var key in UnknownKeys(section))
         {
@@ -43,17 +53,16 @@ internal static class StartupReport
         => section.GetChildren().Where(c => !OptionNames.Contains(c.Key)).Select(c => c.Path);
 
     private static IEnumerable<(string Option, string Reason)> UnusedOptions(StepUpLoggingOptions opts)
-    {
-        if (opts.ConsoleFormat != ConsoleLogFormat.Json && !opts.EnableConsoleLogging)
-        {
-            yield return (nameof(StepUpLoggingOptions.ConsoleFormat), "EnableConsoleLogging is false");
-        }
+        => UnusedOptionRules.Where(rule => rule.Applies(opts)).Select(rule => (rule.Option, rule.Reason));
 
-        if (opts.RedactLogEventProperties && !(opts.RedactionRegexes ?? []).Any(p => !string.IsNullOrWhiteSpace(p)))
+    private static string RequestSummaryText(StepUpLoggingOptions opts)
+        => (opts.AlwaysLogRequestSummary, opts.AlwaysLogOutboundRequestSummary) switch
         {
-            yield return (nameof(StepUpLoggingOptions.RedactLogEventProperties), "RedactionRegexes is empty");
-        }
-    }
+            (false, false) => "off",
+            (true, false) => $"inbound at {opts.RequestSummaryLevel}, {opts.RequestSummaryDetail}",
+            (false, true) => $"outbound at {opts.RequestSummaryLevel}, {opts.RequestSummaryDetail}",
+            (true, true) => $"inbound and outbound at {opts.RequestSummaryLevel}, {opts.RequestSummaryDetail}",
+        };
 
     private static string Outputs(StepUpLoggingOptions opts, string? logFilePath)
     {

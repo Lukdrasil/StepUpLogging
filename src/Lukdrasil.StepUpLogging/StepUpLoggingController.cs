@@ -6,7 +6,6 @@ using System.Collections.Generic;
 using Serilog;
 using Serilog.Core;
 using Serilog.Events;
-using Serilog.Parsing;
 
 namespace Lukdrasil.StepUpLogging;
 
@@ -17,14 +16,6 @@ namespace Lukdrasil.StepUpLogging;
 /// </summary>
 public sealed class StepUpLoggingController : IDisposable
 {
-    private const int RequestSummaryTemplateProperties = 4;
-
-    private static readonly LogEventProperty IsRequestSummaryProperty =
-        new(LogProperties.IsRequestSummary, new ScalarValue(true));
-
-    private static readonly MessageTemplate RequestSummaryTemplate =
-        new MessageTemplateParser().Parse("Request finished {Method} {Path} {StatusCode} {ElapsedMs}");
-
     private readonly object _gate = new();
     private readonly StepUpMode _mode;
     private readonly LogEventLevel _baseLevel;
@@ -76,6 +67,7 @@ public sealed class StepUpLoggingController : IDisposable
     internal bool IsDiagnosticActive => Volatile.Read(ref _diagnosticActive);
 
     private readonly LogEventLevel _requestSummaryLevel;
+    private readonly RequestSummaryDetail _requestSummaryDetail;
     private Serilog.ILogger? _summaryLogger;
 
     public StepUpLoggingController(StepUpLoggingOptions options)
@@ -119,6 +111,7 @@ public sealed class StepUpLoggingController : IDisposable
         _enableActivityInstrumentation = options.EnableActivityInstrumentation;
         _summaryLogger = summaryLogger;
         _requestSummaryLevel = Parse(options.RequestSummaryLevel, LogEventLevel.Information);
+        _requestSummaryDetail = options.RequestSummaryDetail;
         DiagnosticLevel = Parse(options.DiagnosticLevel, LogEventLevel.Debug);
 
         // Initialize level based on mode
@@ -167,13 +160,21 @@ public sealed class StepUpLoggingController : IDisposable
     }
 
     /// <summary>
-    /// Emit a structured request summary using the configured summary logger (bypass) if available.
+    /// Emit a structured inbound request summary using the configured summary logger (bypass) if available.
     /// </summary>
     /// <remarks>
+    /// The summary is written with the template <c>{Direction} {Method} {Path} {StatusCode} {ElapsedMs} ms {ClientKind} {UserAgent}</c>:
+    /// <c>Direction</c> is <c>Inbound</c>, <c>ClientKind</c> is classified from <paramref name="userAgent"/>, and a
+    /// missing or blank <paramref name="userAgent"/> is written as <c>(none)</c>. With
+    /// <see cref="StepUpLoggingOptions.RequestSummaryDetail"/> set to <see cref="RequestSummaryDetail.Compact"/>,
+    /// <paramref name="queryString"/>, <paramref name="routeParameters"/> and <paramref name="forwardedFor"/> are not
+    /// written (ADR 0032).
+    /// <para>
     /// Route values are converted per value with the logger's scalar conversion. A <c>ToMaximumCollectionCount</c>
     /// below the number of route values, or a destructuring depth limit, on a consumer-supplied summary logger is not
     /// applied to <c>RouteParameters</c>. The library's own bypass logger has no such settings, so the default
     /// pipeline is unchanged. See ADR 0009.
+    /// </para>
     /// </remarks>
     /// <param name="method">HTTP method of the request.</param>
     /// <param name="path">Normalized request path.</param>
@@ -187,6 +188,11 @@ public sealed class StepUpLoggingController : IDisposable
     /// <param name="jti">Redacted token identifier claim, when present.</param>
     /// <param name="forwardedFor">Redacted raw <c>X-Forwarded-For</c> header, when present. Client-supplied and untrusted.</param>
     public void EmitRequestSummary(string method, string path, int statusCode, double elapsedMs, string? traceId = null, string? queryString = null, IReadOnlyDictionary<string, object?>? routeParameters = null, string? userAgent = null, string? clientIp = null, string? jti = null, string? forwardedFor = null)
+        => EmitRequestSummary(InboundRequestSummary.FromArguments(
+            method, path, statusCode, elapsedMs, queryString, routeParameters, userAgent, clientIp, jti, forwardedFor, _requestSummaryDetail));
+
+    /// <summary>Writes <paramref name="summary"/> through the summary logger at the request summary level.</summary>
+    internal void EmitRequestSummary(RequestSummary summary)
     {
         try
         {
@@ -200,89 +206,12 @@ public sealed class StepUpLoggingController : IDisposable
                 return;
             }
 
-            // Built once, in the order the former ForContext chain produced: the template properties
-            // first, then the optional fields from the outermost context to the innermost.
-            var summary = CreateSummaryEvent(level, logger, method, path, statusCode, elapsedMs);
-            AddIfPresent(summary, "ForwardedFor", forwardedFor);
-            AddIfPresent(summary, LogProperties.Jti, jti);
-            AddIfPresent(summary, "ClientIp", clientIp);
-            AddIfPresent(summary, "UserAgent", userAgent);
-            AddRouteParameters(summary, logger, routeParameters);
-            AddIfPresent(summary, "QueryString", queryString);
-            summary.AddPropertyIfAbsent(IsRequestSummaryProperty);
-            logger.Write(summary);
+            logger.Write(summary.ToLogEvent(level, logger));
         }
         catch
         {
             // Swallow to avoid affecting request pipeline
         }
-    }
-
-    private static LogEvent CreateSummaryEvent(LogEventLevel level, Serilog.ILogger logger, string method, string path, int statusCode, double elapsedMs)
-    {
-        var templateProperties = new List<LogEventProperty>(RequestSummaryTemplateProperties);
-        AddBound(templateProperties, logger, "Method", method);
-        AddBound(templateProperties, logger, "Path", path);
-        AddBound(templateProperties, logger, "StatusCode", statusCode);
-        AddBound(templateProperties, logger, "ElapsedMs", elapsedMs);
-        var activity = Activity.Current;
-        return activity is null
-            ? new LogEvent(DateTimeOffset.Now, level, null, RequestSummaryTemplate, templateProperties)
-            : new LogEvent(DateTimeOffset.Now, level, null, RequestSummaryTemplate, templateProperties, activity.TraceId, activity.SpanId);
-    }
-
-    private static void AddBound(List<LogEventProperty> properties, Serilog.ILogger logger, string name, object? value)
-    {
-        if (logger.BindProperty(name, value, false, out var property))
-        {
-            properties.Add(property);
-        }
-    }
-
-    private static void AddIfPresent(LogEvent summary, string name, string? value)
-    {
-        if (!string.IsNullOrEmpty(value))
-        {
-            summary.AddPropertyIfAbsent(SummaryValueFactory.Instance, name, value);
-        }
-    }
-
-    private static void AddRouteParameters(LogEvent summary, Serilog.ILogger logger, IReadOnlyDictionary<string, object?>? routeParameters)
-    {
-        if (routeParameters is not { Count: > 0 })
-        {
-            return;
-        }
-
-        var elements = new KeyValuePair<ScalarValue, LogEventPropertyValue>[routeParameters.Count];
-        var index = 0;
-        foreach (var (key, value) in routeParameters)
-        {
-            elements[index++] = new(new ScalarValue(key), RouteValue(logger, value));
-        }
-        summary.AddPropertyIfAbsent(SummaryValueFactory.Instance, "RouteParameters", new DictionaryValue(elements));
-    }
-
-    // A custom ILogger that does not override BindProperty returns false while IsEnabled is true, so the fallback is reachable.
-    private static LogEventPropertyValue RouteValue(Serilog.ILogger logger, object? value) =>
-        value is string or null || !logger.BindProperty("RouteValue", value, false, out var property)
-            ? new ScalarValue(value)
-            : property.Value;
-
-    /// <summary>
-    /// Adds property values to a <see cref="LogEvent"/> through <c>AddPropertyIfAbsent(factory, name, value)</c>,
-    /// which stores the value without the <see cref="LogEventProperty"/> wrapper the one-argument overload needs.
-    /// A string is a scalar under every Serilog conversion policy; a value already converted is stored as it is.
-    /// </summary>
-    private sealed class SummaryValueFactory : ILogEventPropertyFactory, ILogEventPropertyValueFactory
-    {
-        internal static readonly SummaryValueFactory Instance = new();
-
-        public LogEventPropertyValue CreatePropertyValue(object? value, bool destructureObjects) =>
-            value as LogEventPropertyValue ?? new ScalarValue(value);
-
-        public LogEventProperty CreateProperty(string name, object? value, bool destructureObjects = false) =>
-            new(name, CreatePropertyValue(value, destructureObjects));
     }
 
     /// <summary>

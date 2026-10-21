@@ -14,6 +14,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Http;
 using Microsoft.Extensions.Options;
 using OpenTelemetry;
 using OpenTelemetry.Metrics;
@@ -237,6 +238,11 @@ public static class StepUpLoggingExtensions
             .ValidateOnStart();
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IValidateOptions<StepUpLoggingOptions>>(new StepUpLoggingOptionsValidator(configSectionName)));
+        if (configSnapshot.AlwaysLogOutboundRequestSummary)
+        {
+            // Outermost in every IHttpClientFactory client but the excluded ones (ADR 0032 D4).
+            builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IHttpMessageHandlerBuilderFilter, OutboundRequestSummaryFilter>());
+        }
 
         builder.Services.ConfigureOpenTelemetryMeterProvider(metrics =>
             metrics.AddStepUpLoggingMeters());
@@ -609,34 +615,9 @@ public static class StepUpLoggingExtensions
                     {
                         try
                         {
-                            var qs = httpContext.Request.QueryString.HasValue ? httpContext.Request.QueryString.Value! : string.Empty;
-                            var redactedQs = compiledPatterns.Redact(qs);
-                            var redactedPath = compiledPatterns.Redact(path);
-
-                            IReadOnlyDictionary<string, object?>? routeParams = null;
-                            if (httpContext.Request.RouteValues?.Count > 0)
-                            {
-                                routeParams = RequestPathRedaction.RedactRouteValues(httpContext.Request.RouteValues, path, redactedPath, compiledPatterns);
-                            }
-
-                            var rawUserAgent = ExtractUserAgent(httpContext.Request);
-                            var userAgent = rawUserAgent is null ? null : compiledPatterns.Redact(rawUserAgent);
-                            var (clientIp, forwardedFor) = ExtractClientAddresses(httpContext, opts.TrustForwardedHeaders, compiledPatterns);
-                            var rawJti = httpContext.User?.FindFirst("jti")?.Value;
-                            var jti = rawJti is null ? null : compiledPatterns.RedactProperty(LogProperties.Jti, rawJti);
                             var statusCode = failed ? StatusCodes.Status500InternalServerError : (httpContext.Response?.StatusCode ?? 0);
-                            stepUpController.EmitRequestSummary(
-                                httpContext.Request.Method,
-                                redactedPath,
-                                statusCode,
-                                sw.Elapsed.TotalMilliseconds,
-                                null,
-                                redactedQs,
-                                routeParams,
-                                userAgent,
-                                clientIp,
-                                jti,
-                                forwardedFor);
+                            stepUpController.EmitRequestSummary(InboundRequestSummary.From(
+                                httpContext, path, statusCode, sw.Elapsed.TotalMilliseconds, opts.RequestSummaryDetail, opts.TrustForwardedHeaders, compiledPatterns));
                         }
                         catch
                         {
@@ -852,23 +833,7 @@ public static class StepUpLoggingExtensions
     {
         try
         {
-            string? forwardedFor = null;
-            string? firstEntry = null;
-            if (httpContext.Request.Headers.TryGetValue("X-Forwarded-For", out var forwardedForHeader))
-            {
-                var rawValue = forwardedForHeader.Count > 0 ? forwardedForHeader[0] : null;
-                if (!string.IsNullOrWhiteSpace(rawValue))
-                {
-                    forwardedFor = patterns.Redact(rawValue);
-                    var comma = rawValue.IndexOf(',');
-                    var candidate = (comma < 0 ? rawValue : rawValue[..comma]).Trim();
-                    if (!string.IsNullOrWhiteSpace(candidate))
-                    {
-                        firstEntry = patterns.Redact(candidate);
-                    }
-                }
-            }
-
+            var (forwardedFor, firstEntry) = RedactedForwardedFor(httpContext.Request.Headers, patterns);
             var clientIp = trustForwardedHeaders && firstEntry is not null
                 ? firstEntry
                 : httpContext.Connection.RemoteIpAddress?.ToString();
@@ -879,6 +844,21 @@ public static class StepUpLoggingExtensions
         {
             return (null, null);
         }
+    }
+
+    // The redacted raw X-Forwarded-For header and its redacted first entry; null when absent or blank.
+    private static (string? ForwardedFor, string? FirstEntry) RedactedForwardedFor(IHeaderDictionary headers, CompiledRedactionPatterns patterns)
+    {
+        var rawValue = headers.TryGetValue("X-Forwarded-For", out var header) && header.Count > 0 ? header[0] : null;
+        if (string.IsNullOrWhiteSpace(rawValue))
+        {
+            return (null, null);
+        }
+
+        var forwardedFor = patterns.Redact(rawValue);
+        var comma = rawValue.IndexOf(',');
+        var candidate = (comma < 0 ? rawValue : rawValue[..comma]).Trim();
+        return (forwardedFor, string.IsNullOrWhiteSpace(candidate) ? null : patterns.Redact(candidate));
     }
 
     /// <summary>Extract the User-Agent header from the request.</summary>
