@@ -45,12 +45,13 @@ public class ConsoleFormatTests
     }
 
     [Fact]
-    public void Text_WritesOneLineWithLevelTraceIdSourceContextAndMessage()
+    public void Text_WritesEveryItemAsKeyValue()
     {
         var line = Format(ConsoleLogFormat.Text, Event());
 
-        Assert.EndsWith(Environment.NewLine, line);
-        Assert.Contains(" ERR] TraceId=c4fed5a2d96d1640c013ae014f5d162d MyApp.Orders: Order 42 failed for alice", line);
+        Assert.Equal(
+            "Timestamp=15:54:07.221 Level=ERR TraceId=c4fed5a2d96d1640c013ae014f5d162d SourceContext=MyApp.Orders Message=\"Order 42 failed for alice\"" + Environment.NewLine,
+            line);
         Assert.DoesNotContain("not-in-the-message", line);
         Assert.DoesNotContain("{", line);
     }
@@ -60,7 +61,7 @@ public class ConsoleFormatTests
     {
         var text = Format(ConsoleLogFormat.Text, Event(new InvalidOperationException("token mint refused")));
 
-        Assert.Contains("Order 42 failed for alice" + Environment.NewLine + "System.InvalidOperationException: token mint refused", text);
+        Assert.Contains("Message=\"Order 42 failed for alice\"" + Environment.NewLine + "System.InvalidOperationException: token mint refused", text);
     }
 
     [Fact]
@@ -68,7 +69,7 @@ public class ConsoleFormatTests
     {
         var line = Format(ConsoleLogFormat.Text, Event(null, new LogEventProperty("Jti", new ScalarValue("4ebece0627d94b5f9f37c969bb17d27f"))), "Jti");
 
-        Assert.EndsWith("Order 42 failed for alice Jti=4ebece0627d94b5f9f37c969bb17d27f" + Environment.NewLine, line);
+        Assert.EndsWith("Message=\"Order 42 failed for alice\" Jti=4ebece0627d94b5f9f37c969bb17d27f" + Environment.NewLine, line);
     }
 
     [Fact]
@@ -79,7 +80,7 @@ public class ConsoleFormatTests
             Event(null, new LogEventProperty("UserId", new ScalarValue(7)), new LogEventProperty("Jti", new ScalarValue("j-1"))),
             "Jti", "ClientId", "UserId");
 
-        Assert.EndsWith("Order 42 failed for alice Jti=j-1 UserId=7" + Environment.NewLine, line);
+        Assert.EndsWith("Message=\"Order 42 failed for alice\" Jti=j-1 UserId=7" + Environment.NewLine, line);
     }
 
     [Fact]
@@ -87,7 +88,7 @@ public class ConsoleFormatTests
     {
         var text = Format(ConsoleLogFormat.Text, Event(new InvalidOperationException("token mint refused"), new LogEventProperty("Jti", new ScalarValue("j-1"))), "Jti");
 
-        Assert.Contains("Order 42 failed for alice Jti=j-1" + Environment.NewLine + "System.InvalidOperationException: token mint refused", text);
+        Assert.Contains("Message=\"Order 42 failed for alice\" Jti=j-1" + Environment.NewLine + "System.InvalidOperationException: token mint refused", text);
     }
 
     [Fact]
@@ -113,7 +114,7 @@ public class ConsoleFormatTests
 
         var text = Format(ConsoleLogFormat.Text, logEvent, "Jti");
 
-        Assert.EndsWith("Login for bob\\n[12:00:00.000 ERR] forged Jti=j-1\\r\\nforged" + Environment.NewLine, text);
+        Assert.EndsWith("Message=\"Login for bob\\n[12:00:00.000 ERR] forged\" Jti=\"j-1\\r\\nforged\"" + Environment.NewLine, text);
         Assert.Single(text.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
     }
 
@@ -129,7 +130,7 @@ public class ConsoleFormatTests
 
         var line = Format(ConsoleLogFormat.Text, logEvent);
 
-        Assert.EndsWith(" INF] Application started" + Environment.NewLine, line);
+        Assert.Equal("Timestamp=15:54:07.221 Level=INF Message=\"Application started\"" + Environment.NewLine, line);
     }
 
     [Fact]
@@ -144,7 +145,7 @@ public class ConsoleFormatTests
 
         var line = Format(ConsoleLogFormat.Text, logEvent);
 
-        Assert.EndsWith(" INF] Microsoft.Hosting.Lifetime: Application started" + Environment.NewLine, line);
+        Assert.EndsWith(" Level=INF SourceContext=Microsoft.Hosting.Lifetime Message=\"Application started\"" + Environment.NewLine, line);
     }
 
     [Fact]
@@ -152,7 +153,7 @@ public class ConsoleFormatTests
     {
         var line = Format(ConsoleLogFormat.Text, ConsoleTraceFormat.Traceparent, Event(null, new LogEventProperty("TraceFlags", new ScalarValue("1"))));
 
-        Assert.Contains(" ERR] traceparent=00-c4fed5a2d96d1640c013ae014f5d162d-c692a71cf2b6dbbb-01 MyApp.Orders:", line);
+        Assert.Contains(" Level=ERR traceparent=00-c4fed5a2d96d1640c013ae014f5d162d-c692a71cf2b6dbbb-01 SourceContext=MyApp.Orders ", line);
     }
 
     [Fact]
@@ -160,7 +161,7 @@ public class ConsoleFormatTests
     {
         var line = Format(ConsoleLogFormat.Text, ConsoleTraceFormat.Traceparent, Event());
 
-        Assert.Contains(" ERR] traceparent=00-c4fed5a2d96d1640c013ae014f5d162d-c692a71cf2b6dbbb-00 MyApp.Orders:", line);
+        Assert.Contains(" Level=ERR traceparent=00-c4fed5a2d96d1640c013ae014f5d162d-c692a71cf2b6dbbb-00 SourceContext=MyApp.Orders ", line);
     }
 
     [Fact]
@@ -168,7 +169,7 @@ public class ConsoleFormatTests
     {
         var line = Format(ConsoleLogFormat.Text, ConsoleTraceFormat.Traceparent, Event(null, new LogEventProperty("TraceFlags", new ScalarValue("x"))));
 
-        Assert.Contains(" ERR] traceparent=00-c4fed5a2d96d1640c013ae014f5d162d-c692a71cf2b6dbbb-00 MyApp.Orders:", line);
+        Assert.Contains(" Level=ERR traceparent=00-c4fed5a2d96d1640c013ae014f5d162d-c692a71cf2b6dbbb-00 SourceContext=MyApp.Orders ", line);
     }
 
     [Fact]
@@ -185,7 +186,7 @@ public class ConsoleFormatTests
 
         var line = Format(ConsoleLogFormat.Text, ConsoleTraceFormat.Traceparent, logEvent);
 
-        Assert.EndsWith(" INF] TraceId=c4fed5a2d96d1640c013ae014f5d162d Application started" + Environment.NewLine, line);
+        Assert.EndsWith(" Level=INF TraceId=c4fed5a2d96d1640c013ae014f5d162d Message=\"Application started\"" + Environment.NewLine, line);
         Assert.DoesNotContain("traceparent=", line);
     }
 
@@ -201,7 +202,7 @@ public class ConsoleFormatTests
 
         var line = Format(ConsoleLogFormat.Text, ConsoleTraceFormat.Traceparent, logEvent);
 
-        Assert.EndsWith(" INF] Application started" + Environment.NewLine, line);
+        Assert.EndsWith(" Level=INF Message=\"Application started\"" + Environment.NewLine, line);
         Assert.DoesNotContain("TraceId=", line);
         Assert.DoesNotContain("traceparent=", line);
     }
@@ -225,7 +226,41 @@ public class ConsoleFormatTests
 
         var line = Format(ConsoleLogFormat.Text, ConsoleTraceFormat.Traceparent, logEvent);
 
-        Assert.EndsWith($" INF] traceparent=00-{activity.TraceId.ToHexString()}-{activity.SpanId.ToHexString()}-01 Application started" + Environment.NewLine, line);
+        Assert.EndsWith($" Level=INF traceparent=00-{activity.TraceId.ToHexString()}-{activity.SpanId.ToHexString()}-01 Message=\"Application started\"" + Environment.NewLine, line);
+    }
+
+    [Fact]
+    public void Text_ValueWithoutSpaceOrQuote_IsNotQuoted()
+    {
+        var logEvent = new LogEvent(
+            new DateTimeOffset(2026, 10, 17, 15, 54, 7, 221, TimeSpan.Zero),
+            LogEventLevel.Information,
+            null,
+            new MessageTemplateParser().Parse("Started"),
+            []);
+
+        var line = Format(ConsoleLogFormat.Text, logEvent);
+
+        Assert.Equal("Timestamp=15:54:07.221 Level=INF Message=Started" + Environment.NewLine, line);
+    }
+
+    [Fact]
+    public void Text_QuotesAndBackslashesInValues_AreEscaped()
+    {
+        var logEvent = new LogEvent(
+            DateTimeOffset.UtcNow,
+            LogEventLevel.Information,
+            null,
+            new MessageTemplateParser().Parse("Path {Path}"),
+            [
+                new LogEventProperty("Path", new ScalarValue("C:\\temp\\\"x\"")),
+                new LogEventProperty("Jti", new ScalarValue("a=b")),
+                new LogEventProperty("UserId", new ScalarValue("")),
+            ]);
+
+        var line = Format(ConsoleLogFormat.Text, logEvent, "Jti", "UserId");
+
+        Assert.EndsWith("Message=\"Path C:\\\\temp\\\\\\\"x\\\"\" Jti=\"a=b\" UserId=\"\"" + Environment.NewLine, line);
     }
 
     [Fact]
