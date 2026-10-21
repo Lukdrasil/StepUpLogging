@@ -43,11 +43,11 @@ public enum ConsoleLogFormat
     Json = 0,
 
     /// <summary>
-    /// One line per event with every item as <c>Key=value</c>: <c>Timestamp=</c>, <c>Level=</c>, the trace id as
+    /// One logfmt line per event with every item as <c>Key=value</c>: <c>Timestamp=</c>, <c>Level=</c>, the trace id as
     /// <c>TraceId=</c> or <c>traceparent=</c> (see <see cref="StepUpLoggingOptions.ConsoleTraceFormat"/>),
-    /// <c>SourceContext=</c> and <c>Message=</c>, with the exception on the following lines. Of the properties not in
-    /// the message, only <see cref="StepUpLoggingOptions.ConsoleTextProperties"/> are written. A value with a space,
-    /// <c>=</c>, <c>"</c>, <c>\</c> or a line break is double-quoted and escaped.
+    /// <c>SourceContext=</c>, <c>Message=</c> and last <c>Exception=</c>. Of the properties not in the message, only
+    /// <see cref="StepUpLoggingOptions.ConsoleTextProperties"/> are written. A value with a space, <c>=</c>, <c>"</c>,
+    /// <c>\</c> or a control character is double-quoted and escaped.
     /// </summary>
     Text = 1
 }
