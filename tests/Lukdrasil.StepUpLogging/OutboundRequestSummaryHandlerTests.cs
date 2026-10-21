@@ -90,6 +90,20 @@ public class OutboundRequestSummaryHandlerTests
     }
 
     [Fact]
+    public async Task Minimal_WritesTheCompactFieldsUnderShortKeys()
+    {
+        using var harness = new Harness(detail: RequestSummaryDetail.Minimal);
+
+        using var response = await harness.SendAsync(Get());
+
+        var summary = Assert.Single(harness.Sink.Events);
+        Assert.Equal(["dir", "mth", "path", "sc", "ms", "ck", "ua", "hc", "host", "IsRequestSummary"], summary.Properties.Keys);
+        Assert.Equal("Outbound", Scalar(summary, "dir"));
+        Assert.Equal("billing", Scalar(summary, "hc"));
+        Assert.StartsWith("\"Outbound\" \"GET\" \"/a\" 200 ", summary.RenderMessage(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Full_AddsProtocolAndContentLengths()
     {
         using var harness = new Harness(_ => new HttpResponseMessage(HttpStatusCode.OK)

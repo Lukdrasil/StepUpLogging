@@ -47,7 +47,7 @@ internal sealed class OutboundRequestSummaryHandler(string clientName, StepUpLog
     {
         var summary = new RequestSummary(
                 RequestSummary.Outbound, request.Method.Method, patterns.Redact(PathOf(request.RequestUri)), (int?)response?.StatusCode, elapsedMs,
-                request.Headers.UserAgent.ToString(), patterns)
+                request.Headers.UserAgent.ToString(), patterns, detail == RequestSummaryDetail.Minimal)
             .With("HttpClientName", clientName.Length == 0 ? DefaultClientName : clientName)
             .With("Host", HostOf(request.RequestUri, patterns));
         if (detail == RequestSummaryDetail.Full)
