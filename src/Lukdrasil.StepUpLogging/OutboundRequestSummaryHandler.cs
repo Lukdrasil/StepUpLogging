@@ -14,14 +14,14 @@ internal sealed class OutboundRequestSummaryHandler(string clientName, StepUpLog
 
     /// <inheritdoc />
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        => Observe(request, () => base.SendAsync(request, cancellationToken));
+        => ObserveAsync(request, () => base.SendAsync(request, cancellationToken));
 
     /// <inheritdoc />
-    /// <remarks>The inner call completes before <see cref="Observe"/> awaits it, so this never blocks on a task.</remarks>
+    /// <remarks>The inner call completes before <see cref="ObserveAsync"/> awaits it, so this never blocks on a task.</remarks>
     protected override HttpResponseMessage Send(HttpRequestMessage request, CancellationToken cancellationToken)
-        => Observe(request, () => Task.FromResult(base.Send(request, cancellationToken))).GetAwaiter().GetResult();
+        => ObserveAsync(request, () => Task.FromResult(base.Send(request, cancellationToken))).GetAwaiter().GetResult();
 
-    private async Task<HttpResponseMessage> Observe(HttpRequestMessage request, Func<Task<HttpResponseMessage>> send)
+    private async Task<HttpResponseMessage> ObserveAsync(HttpRequestMessage request, Func<Task<HttpResponseMessage>> send)
     {
         var start = Stopwatch.GetTimestamp();
         HttpResponseMessage? response = null;
@@ -81,7 +81,20 @@ internal sealed class OutboundRequestSummaryHandler(string clientName, StepUpLog
             .With("ExceptionType", failure?.GetType().FullName);
 
     private static string? ProtocolOf(HttpResponseMessage? response)
-        => response is null ? null : HttpProtocol.GetHttpProtocol(response.Version);
+        => response is null ? null : ProtocolName(response.Version);
+
+    /// <summary>The protocol name of <paramref name="version"/>; <c>HTTP/{version}</c> for one ASP.NET Core does not name.</summary>
+    private static string ProtocolName(Version version)
+    {
+        try
+        {
+            return HttpProtocol.GetHttpProtocol(version);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return $"HTTP/{version}";
+        }
+    }
 
     private static string? HostOf(Uri? uri, CompiledRedactionPatterns patterns)
         => uri is { IsAbsoluteUri: true } ? patterns.Redact(uri.Authority) : null;
