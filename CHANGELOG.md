@@ -9,7 +9,7 @@ Tags before 1.8.0 predate this file.
 ## [6.3.1] - 2026-10-21
 
 ### Changed
-- **`Text` console line layout:** every item is written as `Key=value`: `Timestamp=15:54:07.221 Level=ERR TraceId=<32 hex> SourceContext=MyApp.Orders Message="Order 42 failed" Jti=<id>`, instead of `[15:54:07.221 ERR] TraceId=<32 hex> MyApp.Orders: Order 42 failed Jti=<id>`. A value that is empty or holds a space, `=`, `"`, `\` or a line break is written in double quotes with `"`, `\`, `\r` and `\n` escaped, so the line parses as logfmt and a logged value cannot forge a key. The exception stays on the following lines. A parser of the old layout must change. JSON console, OTLP and file output are unchanged.
+- **`Text` console line layout:** every item is written as `Key=value`: `Timestamp=15:54:07.221 Level=ERR TraceId=<32 hex> SourceContext=MyApp.Orders Message="Order 42 failed" Jti=<id>`, instead of `[15:54:07.221 ERR] TraceId=<32 hex> MyApp.Orders: Order 42 failed Jti=<id>`. The line is logfmt: a value that is empty or holds a space, `=`, `"`, `\` or a control character is written in double quotes with `"`, `\`, `\r`, `\n` and `\t` escaped and other control characters as `\u00XX`, so a logged value cannot forge a key. The exception is written last as `Exception="..."` on the same line instead of on the following lines, so a stack trace no longer breaks the line into unparseable lines. A parser of the old layout must change. JSON console, OTLP and file output are unchanged.
 
 ## [6.3.0] - 2026-10-21
 

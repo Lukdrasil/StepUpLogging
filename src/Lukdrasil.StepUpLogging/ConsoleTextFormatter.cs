@@ -7,18 +7,20 @@ using Serilog.Formatting.Display;
 namespace Lukdrasil.StepUpLogging;
 
 /// <summary>
-/// The <see cref="ConsoleLogFormat.Text"/> console line, every item as <c>Key=value</c>: <c>Timestamp=</c>, <c>Level=</c>,
-/// the trace id as <c>TraceId=</c> or as a W3C <c>traceparent=</c> by <see cref="ConsoleTraceFormat"/>,
+/// The <see cref="ConsoleLogFormat.Text"/> console line in logfmt, every item as <c>Key=value</c>: <c>Timestamp=</c>,
+/// <c>Level=</c>, the trace id as <c>TraceId=</c> or as a W3C <c>traceparent=</c> by <see cref="ConsoleTraceFormat"/>,
 /// <c>SourceContext=</c> and <c>Message=</c> with the rendered message, then each listed property the event has as
-/// <c>Name=value</c>, then the exception on the following lines. The trace id and <c>SourceContext</c> are left out when
-/// absent. A value that is empty or holds a space, <c>=</c>, <c>"</c>, <c>\</c> or a line break is written in double
-/// quotes with <c>"</c>, <c>\</c> and line breaks escaped, so a logged value cannot forge a key or a console line.
+/// <c>Name=value</c>, then <c>Exception=</c>. The trace id, <c>SourceContext</c> and the exception are left out when
+/// absent. A value that is empty or holds a space, <c>=</c>, <c>"</c>, <c>\</c> or a control character is written in
+/// double quotes with <c>"</c>, <c>\</c> and control characters escaped, so a logged value cannot forge a key or a
+/// console line.
 /// </summary>
 internal sealed class ConsoleTextFormatter(string[] properties, ConsoleTraceFormat traceFormat) : ITextFormatter
 {
     private static readonly MessageTemplateTextFormatter Header = new("Timestamp={Timestamp:HH:mm:ss.fff} Level={Level:u3}");
     private static readonly MessageTemplateTextFormatter Message = new("{Message:lj}");
-    private static readonly SearchValues<char> NeedsQuotes = SearchValues.Create(" =\"\\\r\n");
+    private static readonly SearchValues<char> NeedsQuotes =
+        SearchValues.Create([.. " =\"\\\u007f", .. Enumerable.Range(0, ' ').Select(c => (char)c)]);
 
     public void Format(LogEvent logEvent, TextWriter output)
     {
@@ -43,8 +45,12 @@ internal sealed class ConsoleTextFormatter(string[] properties, ConsoleTraceForm
             output.Write('=');
             WriteValue(output, value is ScalarValue { Value: string text } ? text : value.ToString());
         }
+        if (logEvent.Exception is not null)
+        {
+            output.Write(" Exception=");
+            WriteValue(output, logEvent.Exception.ToString());
+        }
         output.WriteLine();
-        if (logEvent.Exception is not null) output.WriteLine(logEvent.Exception);
     }
 
     private static void WriteValue(TextWriter output, string value)
@@ -64,6 +70,8 @@ internal sealed class ConsoleTextFormatter(string[] properties, ConsoleTraceForm
                 case '\\': output.Write("\\\\"); break;
                 case '\r': output.Write("\\r"); break;
                 case '\n': output.Write("\\n"); break;
+                case '\t': output.Write("\\t"); break;
+                case < ' ' or '\u007f': output.Write($"\\u{(int)c:x4}"); break;
                 default: output.Write(c); break;
             }
         }

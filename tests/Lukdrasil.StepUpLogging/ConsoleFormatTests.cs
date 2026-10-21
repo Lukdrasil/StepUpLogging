@@ -57,11 +57,11 @@ public class ConsoleFormatTests
     }
 
     [Fact]
-    public void Text_WritesTheExceptionAfterTheMessage()
+    public void Text_WritesTheExceptionAsTheLastKeyOnTheSameLine()
     {
         var text = Format(ConsoleLogFormat.Text, Event(new InvalidOperationException("token mint refused")));
 
-        Assert.Contains("Message=\"Order 42 failed for alice\"" + Environment.NewLine + "System.InvalidOperationException: token mint refused", text);
+        Assert.EndsWith("Message=\"Order 42 failed for alice\" Exception=\"System.InvalidOperationException: token mint refused\"" + Environment.NewLine, text);
     }
 
     [Fact]
@@ -84,11 +84,22 @@ public class ConsoleFormatTests
     }
 
     [Fact]
-    public void Text_ListedPropertyThenException_ExceptionFollowsTheLine()
+    public void Text_ListedPropertyThenException_ExceptionFollowsTheProperty()
     {
         var text = Format(ConsoleLogFormat.Text, Event(new InvalidOperationException("token mint refused"), new LogEventProperty("Jti", new ScalarValue("j-1"))), "Jti");
 
-        Assert.Contains("Message=\"Order 42 failed for alice\" Jti=j-1" + Environment.NewLine + "System.InvalidOperationException: token mint refused", text);
+        Assert.EndsWith("Message=\"Order 42 failed for alice\" Jti=j-1 Exception=\"System.InvalidOperationException: token mint refused\"" + Environment.NewLine, text);
+    }
+
+    [Fact]
+    public void Text_MultiLineException_StaysOnOneLine()
+    {
+        var exception = new InvalidOperationException("outer", new InvalidOperationException("inner"));
+
+        var text = Format(ConsoleLogFormat.Text, Event(exception));
+
+        Assert.Single(text.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
+        Assert.Contains(" Exception=\"System.InvalidOperationException: outer\\n ---> System.InvalidOperationException: inner\\n", text.Replace("\\r\\n", "\\n"));
     }
 
     [Fact]
@@ -261,6 +272,21 @@ public class ConsoleFormatTests
         var line = Format(ConsoleLogFormat.Text, logEvent, "Jti", "UserId");
 
         Assert.EndsWith("Message=\"Path C:\\\\temp\\\\\\\"x\\\"\" Jti=\"a=b\" UserId=\"\"" + Environment.NewLine, line);
+    }
+
+    [Fact]
+    public void Text_ControlCharactersInValues_AreQuotedAndEscaped()
+    {
+        var logEvent = new LogEvent(
+            DateTimeOffset.UtcNow,
+            LogEventLevel.Information,
+            null,
+            new MessageTemplateParser().Parse("Started"),
+            [new LogEventProperty("Jti", new ScalarValue("a\tb\u0001c\u007f"))]);
+
+        var line = Format(ConsoleLogFormat.Text, logEvent, "Jti");
+
+        Assert.EndsWith(" Jti=\"a\\tb\\u0001c\\u007f\"" + Environment.NewLine, line);
     }
 
     [Fact]
