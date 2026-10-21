@@ -1083,15 +1083,16 @@ Per-component BenchmarkDotNet benchmarks (log pipeline, sinks, enrichers, redact
   readable line per event. Only the console changes: OTLP and the file sink stay structured.
 
 ```text
-[15:54:07.218 WRN] TraceId=c4fed5a2d96d1640c013ae014f5d162d PersonalTokens.DataAccess.KeycloakUserTokenIssuer: The PAT user token mint was refused with HTTP 400 and OAuth error invalid_scope: Invalid scopes: audience.
-[15:54:07.221 ERR] TraceId=c4fed5a2d96d1640c013ae014f5d162d Serilog.AspNetCore.RequestLoggingMiddleware: HTTP POST /api/pat/exchange responded 502 in 36.1778 ms Jti=4ebece0627d94b5f9f37c969bb17d27f
+Timestamp=15:54:07.218 Level=WRN TraceId=c4fed5a2d96d1640c013ae014f5d162d SourceContext=PersonalTokens.DataAccess.KeycloakUserTokenIssuer Message="The PAT user token mint was refused with HTTP 400 and OAuth error invalid_scope: Invalid scopes: audience."
+Timestamp=15:54:07.221 Level=ERR TraceId=c4fed5a2d96d1640c013ae014f5d162d SourceContext=Serilog.AspNetCore.RequestLoggingMiddleware Message="HTTP POST /api/pat/exchange responded 502 in 36.1778 ms" Jti=4ebece0627d94b5f9f37c969bb17d27f
 ```
 
-`Text` writes the time, level, trace id as `TraceId=<trace id>`, `SourceContext` and the rendered message, then each
-`ConsoleTextProperties` entry the event has as `Name=value`, with an exception on the following
-lines. Other properties that are not in the message template are not written to the console. Line
-breaks inside the message and the values are written as `\r` and `\n`, so a logged value cannot
-forge a console line.
+`Text` writes every item as `Key=value`: `Timestamp`, `Level`, the trace id as `TraceId=<trace id>`,
+`SourceContext` and the rendered `Message`, then each `ConsoleTextProperties` entry the event has as
+`Name=value`, with an exception on the following lines. Other properties that are not in the message
+template are not written to the console. A value that is empty or holds a space, `=`, `"`, `\` or a line
+break is written in double quotes with `"`, `\` and line breaks escaped as `\"`, `\\`, `\r` and `\n`, so a
+logged value cannot forge a key or a console line.
 
 `ConsoleTraceFormat: Traceparent` writes the trace token as the W3C
 `traceparent=00-c4fed5a2d96d1640c013ae014f5d162d-c692a71cf2b6dbbb-01` instead, so a line can be pasted
@@ -1149,7 +1150,7 @@ properties; a configured list replaces the default, so keep `Jti` in it if you s
 | (Endpoint/Protocol) | (env only) | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL` | OTLP configuration (environment variables only) |
 | **Additional Sinks** |
 | `EnableConsoleLogging` | `false` | - | Enable console output (dev scenarios) |
-| `ConsoleFormat` | `Json` | `SerilogStepUp__ConsoleFormat` | Console format: `Json` (CompactJSON) or `Text` (one line with time, level, keyed trace id, `SourceContext` and message); OTLP and file stay structured |
+| `ConsoleFormat` | `Json` | `SerilogStepUp__ConsoleFormat` | Console format: `Json` (CompactJSON) or `Text` (one `Key=value` line with `Timestamp`, `Level`, `TraceId`, `SourceContext` and `Message`); OTLP and file stay structured |
 | `ConsoleTraceFormat` | `TraceId` | `SerilogStepUp__ConsoleTraceFormat` | Trace token of the `Text` console line: `TraceId` (`TraceId=<trace id>`) or `Traceparent` (W3C `traceparent=00-<trace id>-<span id>-<flags>`) |
 | `ConsoleTextProperties` | `["Jti"]` | - | Properties written after the message in the `Text` console format as `Name=value` when the event has them; a configured list replaces the default |
 | **Enrichers** |
