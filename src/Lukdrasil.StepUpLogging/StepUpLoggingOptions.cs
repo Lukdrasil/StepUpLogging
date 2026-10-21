@@ -103,6 +103,13 @@ public sealed class StepUpLoggingOptions
     /// </summary>
     public string[]? ExcludePaths { get; set; }
 
+    /// <summary>
+    /// Request paths appended to the effective <see cref="ExcludePaths"/>, after the built-in defaults apply
+    /// when <see cref="ExcludePaths"/> is not configured. Matched like <see cref="ExcludePaths"/>
+    /// (case-insensitive, an entry ending in <c>*</c> matches a prefix). <see langword="null"/> or empty adds nothing.
+    /// </summary>
+    public string[]? AdditionalExcludePaths { get; set; } // af-stub
+
     public string? ServiceVersion { get; set; }
 
     public bool EnrichWithEnvironment { get; set; } = true;
