@@ -6,6 +6,11 @@ Releases from 1.8.0 onward are recorded here. Entries backfilled from each relea
 `PackageReleaseNotes` and, where those were not updated per release, from the commits between tags.
 Tags before 1.8.0 predate this file.
 
+## [6.3.1] - 2026-10-21
+
+### Changed
+- **`Text` console line layout:** every item is written as `Key=value`: `Timestamp=15:54:07.221 Level=ERR TraceId=<32 hex> SourceContext=MyApp.Orders Message="Order 42 failed" Jti=<id>`, instead of `[15:54:07.221 ERR] TraceId=<32 hex> MyApp.Orders: Order 42 failed Jti=<id>`. A value that is empty or holds a space, `=`, `"`, `\` or a line break is written in double quotes with `"`, `\`, `\r` and `\n` escaped, so the line parses as logfmt and a logged value cannot forge a key. The exception stays on the following lines. A parser of the old layout must change. JSON console, OTLP and file output are unchanged.
+
 ## [6.3.0] - 2026-10-21
 
 ### Added
