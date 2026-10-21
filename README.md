@@ -195,7 +195,7 @@ See [Category Control](#category-control) for how the category options combine.
 | `EnableConsoleLogging` | `false` | `true` writes every exported event to stdout as well. With OTLP on and a platform that also ships stdout, each event is stored twice |
 | `ConsoleFormat` | `Json` | `Text` writes one readable line per event with the keyed trace id; log processors that parse JSON from stdout lose the structured properties. OTLP and file output stay structured |
 | `ConsoleTraceFormat` | `TraceId` | `Traceparent` writes the `Text` line's trace token as a W3C `traceparent=00-<trace id>-<span id>-<flags>` instead of `TraceId=<trace id>`, for pasting into a trace lookup |
-| `ConsoleTextProperties` | `["Jti", "Method", "Path", "StatusCode", "ElapsedMs"]` | Properties written after the message in `Text` format, so identity and the request summary fields stay on the console without OTLP |
+| `ConsoleTextProperties` | `["Jti", "Method", "Path", "StatusCode", "ElapsedMs"]`, with `RequestSummaryDetail` `Minimal` `["jti", "mth", "path", "sc", "ms"]` | Properties written after the message in `Text` format, so identity and the request summary fields stay on the console without OTLP |
 
 The file sink is enabled by the `logFilePath` parameter of `AddStepUpLogging`: daily files, 30 kept.
 
@@ -318,7 +318,11 @@ The User-Agent is client-supplied and spoofable: `ClientKind` is a filtering lab
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | Field | `Direction` | `Method` | `Path` | `StatusCode` | `ElapsedMs` | `ClientKind` | `UserAgent` | `Route` | `Aborted` | `ClientId` | `ClientIp` | `Jti` | `HttpClientName` | `Host` |
 
-`IsRequestSummary` keeps its name. `ConsoleTextProperties` and `RedactionExemptProperties` match by key, so list the short key (`jti`, `sc`, ...) for a `Minimal` summary.
+`IsRequestSummary` keeps its name. `ConsoleTextProperties` and `RedactionExemptProperties` match by key, so list the short key (`jti`, `sc`, ...) for a `Minimal` summary. With `Minimal` the `Text` console line writes short keys too (`t`, `l`, `tid` or `tp`, `src`, `msg`, `ex`), and `ConsoleTextProperties` defaults to `["jti", "mth", "path", "sc", "ms"]`:
+
+```text
+t=17:13:45.110 l=INF tid=55b5a5163e2d4b008bfa8938d5189c3c msg="Outbound GET /v1/items 200 2.1677 ms Unknown MyApp/1.0" mth=GET path=/v1/items sc=200 ms=2.1677
+```
 
 | Inbound field | Compact | Full | Source |
 |---|---|---|---|

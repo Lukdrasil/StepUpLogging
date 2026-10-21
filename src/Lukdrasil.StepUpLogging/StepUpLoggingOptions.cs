@@ -47,7 +47,8 @@ public enum ConsoleLogFormat
     /// <c>TraceId=</c> or <c>traceparent=</c> (see <see cref="StepUpLoggingOptions.ConsoleTraceFormat"/>),
     /// <c>SourceContext=</c>, <c>Message=</c> and last <c>Exception=</c>. Of the properties not in the message, only
     /// <see cref="StepUpLoggingOptions.ConsoleTextProperties"/> are written. A value with a space, <c>=</c>, <c>"</c>,
-    /// <c>\</c> or a control character is double-quoted and escaped.
+    /// <c>\</c> or a control character is double-quoted and escaped. With <see cref="RequestSummaryDetail.Minimal"/>
+    /// the keys are <c>t=</c>, <c>l=</c>, <c>tid=</c> or <c>tp=</c>, <c>src=</c>, <c>msg=</c> and <c>ex=</c>.
     /// </summary>
     Text = 1
 }
@@ -94,7 +95,10 @@ public enum RequestSummaryDetail
     /// <summary>
     /// The <see cref="Compact"/> fields under short keys: <c>dir</c>, <c>mth</c>, <c>path</c>, <c>sc</c>, <c>ms</c>,
     /// <c>ck</c>, <c>ua</c>, <c>rt</c>, <c>ab</c>, <c>cid</c>, <c>ip</c>, <c>jti</c>, <c>hc</c> and <c>host</c>. The
-    /// template uses the short keys too, so the rendered message is the same.
+    /// template uses the short keys too, so the rendered message is the same. The <see cref="ConsoleLogFormat.Text"/>
+    /// console line writes short keys too (<c>t=</c>, <c>l=</c>, <c>tid=</c> or <c>tp=</c>, <c>src=</c>, <c>msg=</c>,
+    /// <c>ex=</c>), and the default <see cref="StepUpLoggingOptions.ConsoleTextProperties"/> is
+    /// <c>["jti", "mth", "path", "sc", "ms"]</c>.
     /// </summary>
     Minimal = 2
 }
@@ -309,7 +313,8 @@ public sealed class StepUpLoggingOptions
     /// Properties written after the message in the <see cref="ConsoleLogFormat.Text"/> console format as
     /// <c>Name=value</c>, when the event has them, so identity such as the token id stays on the console without
     /// OTLP. <see langword="null"/> means not configured, and the built-in default
-    /// <c>["Jti", "Method", "Path", "StatusCode", "ElapsedMs"]</c> applies after configuration. A configured list replaces the default; blank entries are ignored.
+    /// <c>["Jti", "Method", "Path", "StatusCode", "ElapsedMs"]</c> applies after configuration, or with
+    /// <see cref="RequestSummaryDetail.Minimal"/> its short keys <c>["jti", "mth", "path", "sc", "ms"]</c>. A configured list replaces the default; blank entries are ignored.
     /// </summary>
     public string[]? ConsoleTextProperties { get; set; }
 

@@ -6,6 +6,11 @@ Releases from 1.8.0 onward are recorded here. Entries backfilled from each relea
 `PackageReleaseNotes` and, where those were not updated per release, from the commits between tags.
 Tags before 1.8.0 predate this file.
 
+## [Unreleased]
+
+### Changed
+- With `RequestSummaryDetail` `Minimal` the `Text` console line writes short keys: `t=17:13:45.110 l=INF tid=<32 hex> src=MyApp.Orders msg="..." ex="..."` instead of `Timestamp=`, `Level=`, `TraceId=`, `SourceContext=`, `Message=` and `Exception=`; `traceparent=` becomes `tp=`. `SourceContext` is `src` because `sc` is the status code. The default `ConsoleTextProperties` under `Minimal` is `["jti", "mth", "path", "sc", "ms"]`, so the summary fields are written after the message again; a configured list is used as given. `Full` and `Compact` output, JSON console, OTLP and file output are unchanged. See docs/adr/0034-minimal-text-console-short-keys.md.
+
 ## [6.4.0] - 2026-10-21
 
 ### Added
