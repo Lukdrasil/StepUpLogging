@@ -204,7 +204,8 @@ The file sink is enabled by the `logFilePath` parameter of `AddStepUpLogging`: d
 |---|---|---|
 | `AlwaysLogRequestSummary` | `false` | `true` exports one summary per request at `RequestSummaryLevel` whatever the level: an access log whose volume equals your traffic |
 | `CaptureRequestBody` | `false` | `true` adds POST, PUT and PATCH bodies, up to `MaxBodyCaptureBytes` characters (16384), while stepped up or when the response is 5xx. Bodies can carry personal data: add `RedactionRegexes` for it. Each request body is buffered in memory |
-| `ExcludePaths` | `/healthz`, `/metrics`, `/health` | A configured list replaces these, so list them again if you still want them excluded |
+| `ExcludePaths` | `/healthz`, `/metrics`, `/health` | A configured list replaces these, so list them again if you still want them excluded, or set `AdditionalExcludePaths` to add paths and keep the defaults |
+| `AdditionalExcludePaths` | none | Added to `ExcludePaths` (to the defaults when `ExcludePaths` is not configured), so `SerilogStepUp__AdditionalExcludePaths__0=/.well-known/*` adds one path without restating the defaults |
 | `TrustForwardedHeaders` | `false` | `true` takes `ClientIp` from `X-Forwarded-For`, which any client can forge unless your proxy overwrites it |
 | `TreatServerErrorStatusAsError` | `true` | `false` logs a 5xx without an exception at `Warning`, so it no longer steps up or flushes. Unhandled exceptions are still `Error` |
 
@@ -324,7 +325,7 @@ so it is deliberately narrow:
 
 | Outcome | Level |
 |---|---|
-| Excluded path (`ExcludePaths`) | Verbose |
+| Excluded path (`ExcludePaths`, `AdditionalExcludePaths`) | Verbose |
 | Client aborted the connection (closed tab, reload, dropped connection) | Information |
 | Unhandled exception | Error |
 | Status >= 500, no exception | Error, or Warning when `TreatServerErrorStatusAsError` is `false` |
@@ -1106,6 +1107,7 @@ properties; a configured list replaces the default, so keep `Jti` in it if you s
 | `CaptureRequestBody` | `false` | - | Capture POST/PUT/PATCH bodies during step-up |
 | `MaxBodyCaptureBytes` | `16384` | - | Max bytes to capture from request body |
 | `ExcludePaths` | `["/healthz", "/metrics", "/health"]` (applied only when not configured) | - | Paths to exclude from logging. A configured list replaces the defaults, `[]` excludes nothing |
+| `AdditionalExcludePaths` | `[]` | `SerilogStepUp__AdditionalExcludePaths__0` | Paths appended to the effective `ExcludePaths`, same matching; the defaults stay unless `ExcludePaths` is configured |
 | `RedactionRegexes` | `[]` | - | Regex patterns for redacting sensitive data. Always applied to request metadata and bodies; also applied to application log properties when `RedactLogEventProperties` is set — see [Security](#security) |
 | `RedactionExemptProperties` | `[]` | `SerilogStepUp__RedactionExemptProperties__0` | Property names (ordinal, case-sensitive) whose values are never redacted: the `RedactLogEventProperties` sweep skips them and `Jti` on the request summary keeps its value when listed. Request inputs are always redacted. See [Security](#security) |
 | `RedactLogEventProperties` | `false` | - | Opt-in: also sweep the string-valued and URI-like (`PathString`, `QueryString`, `HostString`, `Uri`) scalar properties of application log events with `RedactionRegexes`, not just request metadata. See [Security](#security) |
