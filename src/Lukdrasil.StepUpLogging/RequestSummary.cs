@@ -8,7 +8,7 @@ namespace Lukdrasil.StepUpLogging;
 /// <summary>
 /// One request summary, inbound or outbound (ADR 0032): the template properties every summary carries, then the
 /// optional fields in the order they were added. The User-Agent is classified raw and redacted here, the one place
-/// that rule is written (ADR 0032 D2).
+/// that rule is written (ADR 0032 D2). With minimal keys every property is written under its short key (ADR 0033).
 /// </summary>
 internal sealed class RequestSummary
 {
@@ -23,6 +23,28 @@ internal sealed class RequestSummary
     private static readonly MessageTemplate Template =
         new MessageTemplateParser().Parse("{Direction} {Method} {Path} {StatusCode} {ElapsedMs} ms {ClientKind} {UserAgent}");
 
+    private static readonly MessageTemplate MinimalTemplate =
+        new MessageTemplateParser().Parse("{dir} {mth} {path} {sc} {ms} ms {ck} {ua}");
+
+    /// <summary>The short key of each property a <see cref="RequestSummaryDetail.Minimal"/> summary carries.</summary>
+    internal static readonly IReadOnlyDictionary<string, string> MinimalKeys = new Dictionary<string, string>
+    {
+        ["Direction"] = "dir",
+        ["Method"] = "mth",
+        ["Path"] = "path",
+        ["StatusCode"] = "sc",
+        ["ElapsedMs"] = "ms",
+        ["ClientKind"] = "ck",
+        ["UserAgent"] = "ua",
+        ["Route"] = "rt",
+        ["Aborted"] = "ab",
+        ["ClientId"] = "cid",
+        ["ClientIp"] = "ip",
+        [LogProperties.Jti] = "jti",
+        ["HttpClientName"] = "hc",
+        ["Host"] = "host",
+    };
+
     private static readonly LogEventProperty IsRequestSummaryProperty =
         new(LogProperties.IsRequestSummary, new ScalarValue(true));
 
@@ -33,14 +55,17 @@ internal sealed class RequestSummary
     private readonly double _elapsedMs;
     private readonly string _clientKind;
     private readonly string _userAgent;
+    private readonly bool _minimalKeys;
     private readonly List<KeyValuePair<string, object>> _fields = new(FieldCapacity);
 
     /// <summary>
     /// A summary whose <c>ClientKind</c> is classified from <paramref name="rawUserAgent"/> before it is redacted
     /// with <paramref name="patterns"/>; a missing or blank User-Agent is written as <see cref="NoUserAgent"/>.
+    /// With <paramref name="minimalKeys"/> every property is written under its key in <see cref="MinimalKeys"/>.
     /// </summary>
-    internal RequestSummary(string direction, string method, string path, int? statusCode, double elapsedMs, string? rawUserAgent, CompiledRedactionPatterns patterns)
+    internal RequestSummary(string direction, string method, string path, int? statusCode, double elapsedMs, string? rawUserAgent, CompiledRedactionPatterns patterns, bool minimalKeys = false)
     {
+        _minimalKeys = minimalKeys;
         _direction = direction;
         _method = method;
         _path = path;
@@ -102,7 +127,7 @@ internal sealed class RequestSummary
         var summary = CreateEvent(level, logger);
         foreach (var (name, value) in _fields)
         {
-            summary.AddPropertyIfAbsent(SummaryValueFactory.Instance, name, FieldValue(logger, value));
+            summary.AddPropertyIfAbsent(SummaryValueFactory.Instance, Key(name), FieldValue(logger, value));
         }
 
         summary.AddPropertyIfAbsent(IsRequestSummaryProperty);
@@ -112,22 +137,25 @@ internal sealed class RequestSummary
     private LogEvent CreateEvent(LogEventLevel level, Serilog.ILogger logger)
     {
         var templateProperties = new List<LogEventProperty>(TemplateProperties);
-        AddBound(templateProperties, logger, "Direction", _direction);
-        AddBound(templateProperties, logger, "Method", _method);
-        AddBound(templateProperties, logger, "Path", _path);
+        AddBound(templateProperties, logger, Key("Direction"), _direction);
+        AddBound(templateProperties, logger, Key("Method"), _method);
+        AddBound(templateProperties, logger, Key("Path"), _path);
         if (_statusCode.HasValue)
         {
-            AddBound(templateProperties, logger, "StatusCode", _statusCode.Value);
+            AddBound(templateProperties, logger, Key("StatusCode"), _statusCode.Value);
         }
 
-        AddBound(templateProperties, logger, "ElapsedMs", _elapsedMs);
-        AddBound(templateProperties, logger, "ClientKind", _clientKind);
-        AddBound(templateProperties, logger, "UserAgent", _userAgent);
+        AddBound(templateProperties, logger, Key("ElapsedMs"), _elapsedMs);
+        AddBound(templateProperties, logger, Key("ClientKind"), _clientKind);
+        AddBound(templateProperties, logger, Key("UserAgent"), _userAgent);
+        var template = _minimalKeys ? MinimalTemplate : Template;
         var activity = Activity.Current;
         return activity is null
-            ? new LogEvent(DateTimeOffset.Now, level, null, Template, templateProperties)
-            : new LogEvent(DateTimeOffset.Now, level, null, Template, templateProperties, activity.TraceId, activity.SpanId);
+            ? new LogEvent(DateTimeOffset.Now, level, null, template, templateProperties)
+            : new LogEvent(DateTimeOffset.Now, level, null, template, templateProperties, activity.TraceId, activity.SpanId);
     }
+
+    private string Key(string name) => _minimalKeys ? MinimalKeys[name] : name;
 
     private static void AddBound(List<LogEventProperty> properties, Serilog.ILogger logger, string name, object? value)
     {

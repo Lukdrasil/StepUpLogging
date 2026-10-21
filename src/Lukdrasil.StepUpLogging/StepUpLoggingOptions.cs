@@ -71,7 +71,8 @@ public enum ConsoleTraceFormat
 }
 
 /// <summary>
-/// Which fields the inbound and outbound request summary carries. The message template is the same in both modes.
+/// Which fields the inbound and outbound request summary carries, and under which keys. The rendered message is the
+/// same in every mode.
 /// </summary>
 public enum RequestSummaryDetail
 {
@@ -88,7 +89,14 @@ public enum RequestSummaryDetail
     /// <c>ClientKind</c>, <c>UserAgent</c>) plus, inbound, <c>Route</c>, <c>Aborted</c>, <c>ClientId</c>,
     /// <c>ClientIp</c> and <c>Jti</c>; outbound, <c>HttpClientName</c> and <c>Host</c>.
     /// </summary>
-    Compact = 1
+    Compact = 1,
+
+    /// <summary>
+    /// The <see cref="Compact"/> fields under short keys: <c>dir</c>, <c>mth</c>, <c>path</c>, <c>sc</c>, <c>ms</c>,
+    /// <c>ck</c>, <c>ua</c>, <c>rt</c>, <c>ab</c>, <c>cid</c>, <c>ip</c>, <c>jti</c>, <c>hc</c> and <c>host</c>. The
+    /// template uses the short keys too, so the rendered message is the same.
+    /// </summary>
+    Minimal = 2
 }
 
 /// <summary>
@@ -377,7 +385,8 @@ public sealed class StepUpLoggingOptions
     /// <summary>
     /// Which fields the inbound and outbound request summary carries. Default: <see cref="RequestSummaryDetail.Full"/>,
     /// every field. <see cref="RequestSummaryDetail.Compact"/> keeps the template properties and the fields that
-    /// identify the caller; the message template is the same in both modes.
+    /// identify the caller; <see cref="RequestSummaryDetail.Minimal"/> writes the Compact fields under short keys. The
+    /// rendered message is the same in every mode.
     /// </summary>
     public RequestSummaryDetail RequestSummaryDetail { get; set; } = RequestSummaryDetail.Full;
 

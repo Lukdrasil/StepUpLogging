@@ -166,9 +166,10 @@ public sealed class StepUpLoggingController : IDisposable
     /// The summary is written with the template <c>{Direction} {Method} {Path} {StatusCode} {ElapsedMs} ms {ClientKind} {UserAgent}</c>:
     /// <c>Direction</c> is <c>Inbound</c>, <c>ClientKind</c> is classified from <paramref name="userAgent"/>, and a
     /// missing or blank <paramref name="userAgent"/> is written as <c>(none)</c>. With
-    /// <see cref="StepUpLoggingOptions.RequestSummaryDetail"/> set to <see cref="RequestSummaryDetail.Compact"/>,
-    /// <paramref name="queryString"/>, <paramref name="routeParameters"/> and <paramref name="forwardedFor"/> are not
-    /// written (ADR 0032).
+    /// <see cref="StepUpLoggingOptions.RequestSummaryDetail"/> set to <see cref="RequestSummaryDetail.Compact"/> or
+    /// <see cref="RequestSummaryDetail.Minimal"/>, <paramref name="queryString"/>, <paramref name="routeParameters"/>
+    /// and <paramref name="forwardedFor"/> are not written (ADR 0032); with <see cref="RequestSummaryDetail.Minimal"/>
+    /// the rest are written under short keys (ADR 0033).
     /// <para>
     /// Route values are converted per value with the logger's scalar conversion. A <c>ToMaximumCollectionCount</c>
     /// below the number of route values, or a destructuring depth limit, on a consumer-supplied summary logger is not

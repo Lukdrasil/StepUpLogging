@@ -205,7 +205,7 @@ The file sink is enabled by the `logFilePath` parameter of `AddStepUpLogging`: d
 |---|---|---|
 | `AlwaysLogRequestSummary` | `false` | `true` exports one summary per request at `RequestSummaryLevel` whatever the level: an access log whose volume equals your traffic |
 | `AlwaysLogOutboundRequestSummary` | `false` | `true` exports one summary per `IHttpClientFactory` call (not the library's audit client or the OTLP exporter), read once at startup: volume grows with every outgoing call |
-| `RequestSummaryDetail` | `Full` | `Compact` drops `Protocol`, `Scheme`, `Host` (inbound), content lengths, identity, `EndpointName`, `QueryString`, `RouteParameters`, `ForwardedFor` and `ExceptionType` from both summaries; the template is unchanged |
+| `RequestSummaryDetail` | `Full` | `Compact` drops `Protocol`, `Scheme`, `Host` (inbound), content lengths, identity, `EndpointName`, `QueryString`, `RouteParameters`, `ForwardedFor` and `ExceptionType` from both summaries; `Minimal` writes the `Compact` fields under short keys; the rendered message is unchanged |
 | `CaptureRequestBody` | `false` | `true` adds POST, PUT and PATCH bodies, up to `MaxBodyCaptureBytes` characters (16384), while stepped up or when the response is 5xx. Bodies can carry personal data: add `RedactionRegexes` for it. Each request body is buffered in memory |
 | `ExcludePaths` | `/healthz`, `/metrics`, `/health` | A configured list replaces these, so list them again if you still want them excluded, or set `AdditionalExcludePaths` to add paths and keep the defaults |
 | `AdditionalExcludePaths` | none | Added to `ExcludePaths` (to the defaults when `ExcludePaths` is not configured), so `SerilogStepUp__AdditionalExcludePaths__0=/.well-known/*` adds one path without restating the defaults |
@@ -312,7 +312,13 @@ When "AlwaysLogRequestSummary" is enabled, the middleware emits a single structu
 
 The User-Agent is client-supplied and spoofable: `ClientKind` is a filtering label, not an identity. `ClientId` carries the identity of an authenticated caller.
 
-**RequestSummaryDetail** (`Full` by default, or `Compact`) chooses the attached fields; the template never changes. `Full` keeps every property the summary had before 6.3.0.
+**RequestSummaryDetail** (`Full` by default, `Compact` or `Minimal`) chooses the attached fields; the rendered message never changes. `Full` keeps every property the summary had before 6.3.0. `Minimal` writes the `Compact` fields under short keys, the template included (`{dir} {mth} {path} {sc} {ms} ms {ck} {ua}`):
+
+| Key | `dir` | `mth` | `path` | `sc` | `ms` | `ck` | `ua` | `rt` | `ab` | `cid` | `ip` | `jti` | `hc` | `host` |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Field | `Direction` | `Method` | `Path` | `StatusCode` | `ElapsedMs` | `ClientKind` | `UserAgent` | `Route` | `Aborted` | `ClientId` | `ClientIp` | `Jti` | `HttpClientName` | `Host` |
+
+`IsRequestSummary` keeps its name. `ConsoleTextProperties` and `RedactionExemptProperties` match by key, so list the short key (`jti`, `sc`, ...) for a `Minimal` summary.
 
 | Inbound field | Compact | Full | Source |
 |---|---|---|---|
@@ -1167,7 +1173,7 @@ the entries you still want in it.
 | **Request Logging** |
 | `AlwaysLogRequestSummary` | `false` | - | Export one summary per request at `RequestSummaryLevel`, whatever the current level |
 | `RequestSummaryLevel` | `"Information"` | - | Level of the inbound and outbound request summary |
-| `RequestSummaryDetail` | `Full` | - | `Compact` or `Full`: which fields the inbound and outbound summary carries; the template is the same. See [Request summary](#request-summary) |
+| `RequestSummaryDetail` | `Full` | - | `Full`, `Compact` or `Minimal` (the `Compact` fields under short keys): which fields the inbound and outbound summary carries; the rendered message is the same. See [Request summary](#request-summary) |
 | `AlwaysLogOutboundRequestSummary` | `false` | - | Export one summary per `IHttpClientFactory` call, outermost in the handler chain; the audit and OTLP exporter clients are excluded. Read once at registration. See [Outbound request summary](#outbound-request-summary) |
 | `CaptureRequestBody` | `false` | - | Capture POST/PUT/PATCH bodies during step-up |
 | `MaxBodyCaptureBytes` | `16384` | - | Max bytes to capture from request body |

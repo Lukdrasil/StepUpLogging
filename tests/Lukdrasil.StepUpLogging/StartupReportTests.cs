@@ -84,10 +84,12 @@ public class StartupReportTests
         Assert.EndsWith("request summary off", summary.RenderMessage(), StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void CompactWithBothSummariesOff_WarnsUnused()
+    [Theory]
+    [InlineData("Compact")]
+    [InlineData("Minimal")]
+    public void NotFullWithBothSummariesOff_WarnsUnused(string detail)
     {
-        using var run = Start(("RequestSummaryDetail", "Compact"));
+        using var run = Start(("RequestSummaryDetail", detail));
 
         Assert.Contains(run.WithTemplate(StartupReport.UnusedOptionTemplate), e => e.RenderMessage().Contains("RequestSummaryDetail", StringComparison.Ordinal));
     }

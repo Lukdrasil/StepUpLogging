@@ -29,7 +29,7 @@ internal static class StartupReport
         (nameof(StepUpLoggingOptions.RedactLogEventProperties), "RedactionRegexes is empty",
             opts => opts.RedactLogEventProperties && !(opts.RedactionRegexes ?? []).Any(p => !string.IsNullOrWhiteSpace(p))),
         (nameof(StepUpLoggingOptions.RequestSummaryDetail), "AlwaysLogRequestSummary and AlwaysLogOutboundRequestSummary are false",
-            opts => opts.RequestSummaryDetail == RequestSummaryDetail.Compact && !opts.AlwaysLogRequestSummary && !opts.AlwaysLogOutboundRequestSummary),
+            opts => opts.RequestSummaryDetail != RequestSummaryDetail.Full && !opts.AlwaysLogRequestSummary && !opts.AlwaysLogOutboundRequestSummary),
     ];
 
     internal static void Write(Serilog.ILogger logger, StepUpLoggingOptions opts, IConfigurationSection section, string? logFilePath)

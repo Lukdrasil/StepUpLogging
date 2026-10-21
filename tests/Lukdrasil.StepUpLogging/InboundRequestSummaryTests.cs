@@ -90,6 +90,28 @@ public class InboundRequestSummaryTests
     }
 
     [Fact]
+    public void Minimal_WritesTheCompactFieldsUnderShortKeys()
+    {
+        var compact = From(Context(), RequestSummaryDetail.Compact);
+        var minimal = From(Context(), RequestSummaryDetail.Minimal);
+
+        Assert.Equal(
+            ["dir", "mth", "path", "sc", "ms", "ck", "ua", "rt", "ab", "cid", "ip", "jti", "IsRequestSummary"],
+            minimal.Properties.Keys);
+        Assert.All(CompactKeys.SkipLast(1), key => Assert.Equal(
+            compact.Properties[key].ToString(), minimal.Properties[RequestSummary.MinimalKeys[key]].ToString()));
+        Assert.Equal(compact.RenderMessage(), minimal.RenderMessage());
+    }
+
+    [Fact]
+    public void FromArguments_Minimal_WritesShortKeys()
+    {
+        var logEvent = FromArguments(RequestSummaryDetail.Minimal);
+
+        Assert.Equal(["dir", "mth", "path", "sc", "ms", "ck", "ua", "ip", "jti", "IsRequestSummary"], logEvent.Properties.Keys);
+    }
+
+    [Fact]
     public void Full_WritesEveryField()
     {
         var logEvent = From(Context(), RequestSummaryDetail.Full);
