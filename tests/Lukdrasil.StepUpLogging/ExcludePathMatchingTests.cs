@@ -1,4 +1,9 @@
 using System.Collections.Generic;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.Configuration;
+using Serilog.Events;
 using Xunit;
 
 namespace Lukdrasil.StepUpLogging.Tests;
@@ -40,5 +45,55 @@ public class ExcludePathMatchingTests
 
         Assert.True(StepUpLoggingExtensions.IsExcludedPath("/HEALTH", exact, NoPrefixes));
         Assert.True(StepUpLoggingExtensions.IsExcludedPath("/API/X", NoExact, new[] { "/api" }));
+    }
+
+    [Fact]
+    public async Task AdditionalExcludePathsFromConfiguration_ExcludesTheAddedPathAndKeepsTheDefaults()
+    {
+        var captureKey = Guid.NewGuid().ToString("N");
+        var settings = new Dictionary<string, string?>
+        {
+            ["SerilogStepUp:EnableOtlpExporter"] = "false",
+            ["SerilogStepUp:AlwaysLogRequestSummary"] = "true",
+            ["SerilogStepUp:AdditionalExcludePaths:0"] = "/.well-known/*",
+            ["Serilog:Using:0"] = typeof(KeyedCaptureSink).Assembly.GetName().Name,
+            ["Serilog:WriteTo:0:Name"] = nameof(KeyedCaptureSink.StepUpCapture),
+            ["Serilog:WriteTo:0:Args:key"] = captureKey,
+        };
+
+        try
+        {
+            var builder = WebApplication.CreateBuilder();
+            builder.WebHost.UseTestServer();
+            builder.Configuration.AddInMemoryCollection(settings);
+            builder.AddStepUpLogging();
+
+            await using (var app = builder.Build())
+            {
+                app.UseStepUpRequestLogging();
+                app.MapGet("/ping", () => "pong");
+
+                await app.StartAsync(TestContext.Current.CancellationToken);
+                using var client = app.GetTestClient();
+                foreach (var path in new[] { "/health", "/.well-known/ogham-sealing-keys.json", "/ping" })
+                {
+                    using var response = await client.GetAsync(path, TestContext.Current.CancellationToken);
+                }
+
+                await Task.Delay(200, TestContext.Current.CancellationToken);
+                await app.StopAsync(TestContext.Current.CancellationToken);
+            }
+
+            var summaryPaths = KeyedCaptureSink.Events(captureKey)
+                .Where(e => LogProperties.HasFlag(e, LogProperties.IsRequestSummary))
+                .Select(e => (string)((ScalarValue)e.Properties["Path"]).Value!)
+                .ToArray();
+
+            Assert.Equal(["/ping"], summaryPaths);
+        }
+        finally
+        {
+            KeyedCaptureSink.Forget(captureKey);
+        }
     }
 }

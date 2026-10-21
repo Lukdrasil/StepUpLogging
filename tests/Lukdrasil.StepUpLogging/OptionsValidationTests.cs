@@ -571,4 +571,48 @@ public class OptionsValidationTests
     {
         Assert.Equal([], ResolveExcludePaths(""", "ExcludePaths": []"""));
     }
+
+    [Fact]
+    public void AdditionalExcludePathsOnly_AppendsToBuiltInDefaults()
+    {
+        Assert.Equal(
+            ["/healthz", "/metrics", "/health", "/.well-known/*"],
+            ResolveExcludePaths(""", "AdditionalExcludePaths": ["/.well-known/*"]"""));
+    }
+
+    [Fact]
+    public void AdditionalExcludePathsWithConfiguredExcludePaths_AppendsToTheConfiguredList()
+    {
+        Assert.Equal(
+            ["/alive", "/ready"],
+            ResolveExcludePaths(""", "ExcludePaths": ["/alive"], "AdditionalExcludePaths": ["/ready"]"""));
+    }
+
+    [Fact]
+    public void AdditionalExcludePathsConfiguredEmpty_LeavesDefaults()
+    {
+        Assert.Equal(["/healthz", "/metrics", "/health"], ResolveExcludePaths(""", "AdditionalExcludePaths": []"""));
+    }
+
+    [Fact]
+    public void AdditionalExcludePathsWithEmptyExcludePaths_ExcludesOnlyTheAdditionalPaths()
+    {
+        var resolved = ResolveExcludePaths("", o =>
+        {
+            o.ExcludePaths = [];
+            o.AdditionalExcludePaths = ["/x"];
+        });
+
+        Assert.Equal(["/x"], resolved);
+    }
+
+    [Fact]
+    public void AdditionalExcludePathsSetInCode_WinsOverConfiguration()
+    {
+        var resolved = ResolveExcludePaths(
+            """, "AdditionalExcludePaths": ["/a"]""",
+            o => o.AdditionalExcludePaths = ["/b"]);
+
+        Assert.Equal(["/healthz", "/metrics", "/health", "/b"], resolved);
+    }
 }
