@@ -6,7 +6,7 @@ Releases from 1.8.0 onward are recorded here. Entries backfilled from each relea
 `PackageReleaseNotes` and, where those were not updated per release, from the commits between tags.
 Tags before 1.8.0 predate this file.
 
-## [Unreleased]
+## [6.4.0] - 2026-10-21
 
 ### Added
 - `RequestSummaryDetail.Minimal`: the `Compact` fields of the inbound and outbound request summary under short keys (`dir`, `mth`, `path`, `sc`, `ms`, `ck`, `ua`, `rt`, `ab`, `cid`, `ip`, `jti`, `hc`, `host`), the template included, so the rendered message is the same. `IsRequestSummary` keeps its name. `Minimal` with both summaries off is reported as an unused option. See docs/adr/0033-request-summary-minimal-keys.md.
