@@ -227,6 +227,10 @@ public static class StepUpLoggingExtensions
             .PostConfigure(options =>
             {
                 options.ExcludePaths ??= ["/healthz", "/metrics", "/health"];
+                if (options.AdditionalExcludePaths is { Length: > 0 } extra)
+                {
+                    options.ExcludePaths = [.. options.ExcludePaths, .. extra];
+                }
                 options.NeverStepUpCategories ??= ["Microsoft.EntityFrameworkCore.Database.Command"];
                 options.ConsoleTextProperties ??= [LogProperties.Jti];
             })
