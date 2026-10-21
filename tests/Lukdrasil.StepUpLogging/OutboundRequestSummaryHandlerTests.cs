@@ -109,6 +109,17 @@ public class OutboundRequestSummaryHandlerTests
     }
 
     [Fact]
+    public async Task Full_UnknownResponseVersion_WritesHttpSlashVersion()
+    {
+        using var harness = new Harness(_ => new HttpResponseMessage(HttpStatusCode.OK) { Version = new Version(1, 2) });
+
+        using var response = await harness.SendAsync(Get());
+
+        var summary = Assert.Single(harness.Sink.Events);
+        Assert.Equal("HTTP/1.2", Scalar(summary, "Protocol"));
+    }
+
+    [Fact]
     public async Task FailingCall_WritesExceptionTypeWithoutStatusCode_AndRethrowsTheSameException()
     {
         var failure = new HttpRequestException("connection refused");

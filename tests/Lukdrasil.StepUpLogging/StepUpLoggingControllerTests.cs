@@ -74,6 +74,20 @@ namespace Lukdrasil.StepUpLogging.Tests
             Assert.False(sink.LastEvent.Properties.ContainsKey("ClientIp"));
         }
 
+        [Fact(DisplayName = "EmitRequestSummary_CompactDetail_OmitsQueryString")]
+        public void EmitRequestSummary_CompactDetail_OmitsQueryString()
+        {
+            var opts = new StepUpLoggingOptions { RequestSummaryDetail = RequestSummaryDetail.Compact };
+            var sink = new CaptureSink();
+            var logger = new LoggerConfiguration().WriteTo.Sink(sink).CreateLogger();
+            var controller = new StepUpLoggingController(opts, logger);
+
+            controller.EmitRequestSummary("GET", "/api/test", 200, 50.0, queryString: "id=1");
+
+            Assert.NotNull(sink.LastEvent);
+            Assert.False(sink.LastEvent!.Properties.ContainsKey("QueryString"));
+        }
+
         [Fact(DisplayName = "BaseLevel_DefaultOptions_IsWarning")]
         public void BaseLevel_DefaultOptions_IsWarning()
         {
