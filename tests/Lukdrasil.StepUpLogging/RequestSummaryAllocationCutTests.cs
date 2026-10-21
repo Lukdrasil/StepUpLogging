@@ -22,7 +22,7 @@ public class RequestSummaryAllocationCutTests
     private const string ClientIp = "203.0.113.7";
     private const string Jti = "jti-0001";
     private const string ForwardedFor = "198.51.100.1";
-    private const int OptionalFieldCount = 6;
+    private const int OptionalFieldCount = 5;
     private const int SummariesPerRun = 100;
     // Measured on the ForContext chain (af/perf-prebuffer-lock @ 490a54d), Serilog 4.3.1, net10.0 x64.
     private const long HeadBytesPerOptionalField = 304;
@@ -77,7 +77,7 @@ public class RequestSummaryAllocationCutTests
         EmitFull(controller);
 
         Assert.Equal(
-            ["Method", "Path", "StatusCode", "ElapsedMs", "ForwardedFor", "Jti", "ClientIp", "UserAgent", "RouteParameters", "QueryString", "IsRequestSummary"],
+            ["Direction", "Method", "Path", "StatusCode", "ElapsedMs", "ClientKind", "UserAgent", "ClientIp", "Jti", "QueryString", "RouteParameters", "ForwardedFor", "IsRequestSummary"],
             sink.LastEvent!.Properties.Keys);
     }
 
@@ -92,7 +92,7 @@ public class RequestSummaryAllocationCutTests
             queryString: string.Empty, routeParameters: new Dictionary<string, object?>(), userAgent: string.Empty,
             clientIp: string.Empty, jti: string.Empty, forwardedFor: string.Empty);
 
-        Assert.Equal(["Method", "Path", "StatusCode", "ElapsedMs", "IsRequestSummary"], sink.LastEvent!.Properties.Keys);
+        Assert.Equal(["Direction", "Method", "Path", "StatusCode", "ElapsedMs", "ClientKind", "UserAgent", "IsRequestSummary"], sink.LastEvent!.Properties.Keys);
     }
 
     [Fact]
