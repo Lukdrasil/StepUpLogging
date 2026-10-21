@@ -108,7 +108,7 @@ public sealed class StepUpLoggingOptions
     /// when <see cref="ExcludePaths"/> is not configured. Matched like <see cref="ExcludePaths"/>
     /// (case-insensitive, an entry ending in <c>*</c> matches a prefix). <see langword="null"/> or empty adds nothing.
     /// </summary>
-    public string[]? AdditionalExcludePaths { get; set; } // af-stub
+    public string[]? AdditionalExcludePaths { get; set; }
 
     public string? ServiceVersion { get; set; }
 
