@@ -73,6 +73,7 @@ Check it after the first deployment. `outputs none` means no log leaves the proc
 | Console and file output | Off |
 | Request completion event | One per request at `Information`, `Warning` for 4xx, `Error` for 5xx and unhandled exceptions; exported like any other event, so normally only from `Warning` |
 | Per-request summary | Off |
+| Outbound request summary | Off |
 | Request body capture | Off |
 | Excluded paths | `/healthz`, `/metrics`, `/health` |
 | Redaction | `Authorization`, `Proxy-Authorization`, `Cookie`, `X-API-Key`, `X-Auth-Token`, `X-Access-Token` and other credential headers always; no regex patterns |
@@ -203,6 +204,8 @@ The file sink is enabled by the `logFilePath` parameter of `AddStepUpLogging`: d
 | Option | Default | Effect of changing it in production |
 |---|---|---|
 | `AlwaysLogRequestSummary` | `false` | `true` exports one summary per request at `RequestSummaryLevel` whatever the level: an access log whose volume equals your traffic |
+| `AlwaysLogOutboundRequestSummary` | `false` | `true` exports one summary per `IHttpClientFactory` call (not the library's audit client or the OTLP exporter), read once at startup: volume grows with every outgoing call |
+| `RequestSummaryDetail` | `Full` | `Compact` drops `Protocol`, `Scheme`, `Host` (inbound), content lengths, identity, `EndpointName`, `QueryString`, `RouteParameters`, `ForwardedFor` and `ExceptionType` from both summaries; the template is unchanged |
 | `CaptureRequestBody` | `false` | `true` adds POST, PUT and PATCH bodies, up to `MaxBodyCaptureBytes` characters (16384), while stepped up or when the response is 5xx. Bodies can carry personal data: add `RedactionRegexes` for it. Each request body is buffered in memory |
 | `ExcludePaths` | `/healthz`, `/metrics`, `/health` | A configured list replaces these, so list them again if you still want them excluded, or set `AdditionalExcludePaths` to add paths and keep the defaults |
 | `AdditionalExcludePaths` | none | Added to `ExcludePaths` (to the defaults when `ExcludePaths` is not configured), so `SerilogStepUp__AdditionalExcludePaths__0=/.well-known/*` adds one path without restating the defaults |
@@ -287,18 +290,65 @@ The `UseStepUpRequestLogging()` middleware enriches each request with detailed c
 
 ### Request summary
 
-When "AlwaysLogRequestSummary" is enabled, the middleware emits a single structured summary event at the configured "RequestSummaryLevel" for every completed HTTP request. The summary contains:
+When "AlwaysLogRequestSummary" is enabled, the middleware emits a single structured summary event at the configured "RequestSummaryLevel" for every completed HTTP request. With "AlwaysLogOutboundRequestSummary" enabled, every call through an `IHttpClientFactory` client gets one too. Both directions share one message template:
 
-- **HTTP method** - GET, POST, etc.
-- **Request path** - URL path (trailing slashes normalized, redacted based on `RedactionRegexes`)
-- **Response status code** - 200, 404, 500, etc.
-- **Elapsed milliseconds** - Request duration
-- **Trace ID** - Optional trace/correlation id
-- **UserAgent** - Client User-Agent header (for client identification), redacted via `RedactionRegexes`
-- **ClientIp** - Client IP address from `Connection.RemoteIpAddress` by default (see [Security](#security)); when `TrustForwardedHeaders` is enabled, the first `X-Forwarded-For` entry instead
-- **ForwardedFor** - The raw `X-Forwarded-For` header value (redacted), present only when the header is sent
+```
+{Direction} {Method} {Path} {StatusCode} {ElapsedMs} ms {ClientKind} {UserAgent}
+```
+
+`Direction` is `Inbound` or `Outbound`. `UserAgent` is always present: the redacted header, or `(none)` when it is missing or blank. A failed outbound call has no status code, so `StatusCode` is left out.
+
+**ClientKind** labels the source by the User-Agent: an ordered, case-insensitive substring table, first match wins. The raw header is classified before it is redacted.
+
+| ClientKind | User-Agent contains |
+|---|---|
+| `HealthProbe` | `kube-probe/`, `ELB-HealthChecker`, `GoogleHC`, `AlwaysOn` |
+| `Bot` | `bot`, `crawler`, `spider`, `Slurp` |
+| `Tool` | `curl/`, `Wget/`, `PostmanRuntime/`, `insomnia/` |
+| `Library` | `python-requests/`, `Go-http-client/`, `okhttp/`, `Java/`, `axios/`, `node-fetch`, `Apache-HttpClient/` |
+| `Browser` | `Mozilla/` (checked last, bots send it too) |
+| `Unknown` | anything else |
+| `None` | no header |
+
+The User-Agent is client-supplied and spoofable: `ClientKind` is a filtering label, not an identity. `ClientId` carries the identity of an authenticated caller.
+
+**RequestSummaryDetail** (`Full` by default, or `Compact`) chooses the attached fields; the template never changes. `Full` keeps every property the summary had before 6.3.0.
+
+| Inbound field | Compact | Full | Source |
+|---|---|---|---|
+| `Direction`, `Method`, `Path`, `StatusCode`, `ElapsedMs` | yes | yes | `Inbound`; path trailing slashes normalized and redacted |
+| `ClientKind`, `UserAgent` | yes | yes | User-Agent header, redacted; `(none)` when missing |
+| `Route` | yes | yes | the matched route template, e.g. `/orders/{id}` |
+| `Aborted` | yes | yes | `true` when the client aborted the request; left out otherwise |
+| `ClientId` | yes | yes | `azp` claim, else `client_id`; redacted like `Jti` |
+| `ClientIp` | yes | yes | `Connection.RemoteIpAddress`, or the first `X-Forwarded-For` entry with `TrustForwardedHeaders` (see [Security](#security)) |
+| `Jti` | yes | yes | `jti` claim, redacted unless listed in `RedactionExemptProperties` |
+| `Protocol`, `Scheme`, `Host` | | yes | request line; `Host` redacted |
+| `RequestContentLength`, `ResponseContentLength` | | yes | when known |
+| `IsAuthenticated`, `AuthScheme` | | yes | `User.Identity` |
+| `EndpointName` | | yes | `Endpoint.DisplayName` |
+| `QueryString`, `RouteParameters` | | yes | redacted |
+| `ForwardedFor` | | yes | raw `X-Forwarded-For`, redacted, untrusted |
+
+Not logged: `Referer`, `sub`, email and name claims, cookies, `Authorization`.
 
 Summary events are marked with the "IsRequestSummary" property and are processed by the library's SummarySink so they are exported independently of the StepUp level switch (base Warning) and the normal step-up flow.
+
+### Outbound request summary
+
+`AlwaysLogOutboundRequestSummary` = `true` adds a handler, outermost, to every `IHttpClientFactory` client, so a call retried by a resilience handler is summarized once with its final status. It writes through the same bypass logger at `RequestSummaryLevel` and follows `RequestSummaryDetail`. A failing call is rethrown unchanged.
+
+| Outbound field | Compact | Full | Source |
+|---|---|---|---|
+| `Direction`, `Method`, `Path`, `StatusCode`, `ElapsedMs` | yes | yes | `Outbound`; path without query string, redacted; no `StatusCode` on failure |
+| `ClientKind`, `UserAgent` | yes | yes | outgoing header; `(none)` when missing (the .NET default) |
+| `HttpClientName` | yes | yes | factory client name; `(default)` for the unnamed client |
+| `Host` | yes | yes | host and port of the request URI, redacted |
+| `Protocol` | | yes | response HTTP version |
+| `RequestContentLength`, `ResponseContentLength` | | yes | when the content headers know it |
+| `ExceptionType` | | yes | full type name of the exception of a failed call |
+
+Never summarized, so an export does not cause another export: the library's audit client `Lukdrasil.StepUpLogging.Audit` and the OpenTelemetry OTLP exporter clients `OtlpTraceExporter`, `OtlpMetricExporter` and `OtlpLogExporter`. An `HttpClient` created with `new HttpClient()` is not covered, and outbound summaries carry no `Jti`. The option is read once at registration. See docs/adr/0032-request-summary-direction-detail-outbound.md.
 
 ### Example Request Summary Log
 
@@ -306,13 +356,22 @@ Summary events are marked with the "IsRequestSummary" property and are processed
 {
   "Timestamp": "2025-01-08T12:34:56.789Z",
   "Level": "Information",
-  "MessageTemplate": "Request finished {Method} {Path} {StatusCode} {ElapsedMs}",
+  "MessageTemplate": "{Direction} {Method} {Path} {StatusCode} {ElapsedMs} ms {ClientKind} {UserAgent}",
+  "Direction": "Inbound",
   "Method": "POST",
   "Path": "/api/users",
   "StatusCode": 201,
   "ElapsedMs": 45.23,
+  "ClientKind": "Browser",
   "UserAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+  "Route": "/api/users",
   "ClientIp": "198.51.100.100",
+  "Protocol": "HTTP/2",
+  "Scheme": "https",
+  "Host": "api.example.com",
+  "RequestContentLength": 58,
+  "IsAuthenticated": false,
+  "EndpointName": "HTTP: POST /api/users",
   "ForwardedFor": "203.0.113.42, 198.51.100.100",
   "IsRequestSummary": true
 }
@@ -1103,7 +1162,9 @@ properties; a configured list replaces the default, so keep `Jti` in it if you s
 | `EnrichWithEnvironment` | `true` | - | Include environment name (Development/Production) |
 | **Request Logging** |
 | `AlwaysLogRequestSummary` | `false` | - | Export one summary per request at `RequestSummaryLevel`, whatever the current level |
-| `RequestSummaryLevel` | `"Information"` | - | Level of the request summary when `AlwaysLogRequestSummary` is on |
+| `RequestSummaryLevel` | `"Information"` | - | Level of the inbound and outbound request summary |
+| `RequestSummaryDetail` | `Full` | - | `Compact` or `Full`: which fields the inbound and outbound summary carries; the template is the same. See [Request summary](#request-summary) |
+| `AlwaysLogOutboundRequestSummary` | `false` | - | Export one summary per `IHttpClientFactory` call, outermost in the handler chain; the audit and OTLP exporter clients are excluded. Read once at registration. See [Outbound request summary](#outbound-request-summary) |
 | `CaptureRequestBody` | `false` | - | Capture POST/PUT/PATCH bodies during step-up |
 | `MaxBodyCaptureBytes` | `16384` | - | Max bytes to capture from request body |
 | `ExcludePaths` | `["/healthz", "/metrics", "/health"]` (applied only when not configured) | - | Paths to exclude from logging. A configured list replaces the defaults, `[]` excludes nothing |

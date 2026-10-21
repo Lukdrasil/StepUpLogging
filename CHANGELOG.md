@@ -10,6 +10,16 @@ Tags before 1.8.0 predate this file.
 
 ### Added
 - `AdditionalExcludePaths` (default none): paths appended to the effective `ExcludePaths`, matched the same way (case-insensitive, a trailing `*` matches a prefix). When `ExcludePaths` is not configured the built-in defaults (`/healthz`, `/metrics`, `/health`) stay, so `SerilogStepUp__AdditionalExcludePaths__0=/.well-known/*` replaces the four variables that restating the defaults needed. `ExcludePaths` keeps its meaning: a configured list still replaces the defaults. Fixes #90.
+- `RequestSummaryDetail` (`Full` | `Compact`, default `Full`) and the `RequestSummaryDetail` enum: which fields the inbound and outbound request summary carries. `Full` keeps every property the summary had before, plus the new ones; `Compact` keeps the template properties and the fields that identify the caller. The validator rejects other values, the startup report shows the mode, and `Compact` with both summaries off is reported as an unused option. Part of #91.
+- `ClientKind` on every summary: `HealthProbe`, `Bot`, `Tool`, `Library`, `Browser`, `Unknown` or `None`, from an ordered, case-insensitive substring table over the raw User-Agent. A filtering label, not an identity. Part of #91.
+- New inbound fields: `Direction`, `Route`, `Aborted` (only when `true`), `ClientId` (`azp`, else `client_id`, redacted like `Jti`), and in `Full` `Protocol`, `Scheme`, `Host` (redacted), `RequestContentLength`, `ResponseContentLength`, `IsAuthenticated`, `AuthScheme` and `EndpointName`. Part of #91.
+- `AlwaysLogOutboundRequestSummary` (default `false`): one summary with `Direction` `Outbound` and `HttpClientName` per call through an `IHttpClientFactory` client, from a handler placed outermost so a retried call is summarized once. A failed call writes `ExceptionType` (in `Full`) without `StatusCode` and is rethrown unchanged. The library's audit client and the OTLP exporter clients are never summarized; `new HttpClient()` is not covered. Part of #91. See docs/adr/0032-request-summary-direction-detail-outbound.md.
+
+### Changed
+- **Request summary template:** `Request finished {Method} {Path} {StatusCode} {ElapsedMs}` becomes `{Direction} {Method} {Path} {StatusCode} {ElapsedMs} ms {ClientKind} {UserAgent}`. Queries that match the exact template text must change; existing property names are kept.
+- **`UserAgent` is always present** on the summary: `(none)` when the header is missing or blank, instead of leaving the property out.
+- The summary's property order is the template properties, then `ClientIp`, `Jti`, `QueryString`, `RouteParameters`, `ForwardedFor`, then `IsRequestSummary`.
+- The public `StepUpLoggingController.EmitRequestSummary` follows `RequestSummaryDetail`: with `Compact` it drops `QueryString`, `RouteParameters` and `ForwardedFor`.
 
 ## [6.2.0] - 2026-10-20
 
