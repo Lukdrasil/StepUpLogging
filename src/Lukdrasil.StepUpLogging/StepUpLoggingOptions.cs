@@ -69,6 +69,19 @@ public enum ConsoleTraceFormat
     Traceparent = 1
 }
 
+// af-stub
+/// <summary>
+/// Which fields the request summary carries.
+/// </summary>
+public enum RequestSummaryDetail
+{
+    /// <summary>Every field.</summary>
+    Full = 0,
+
+    /// <summary>The compact field set.</summary>
+    Compact = 1
+}
+
 /// <summary>
 /// Selects the built-in framework category rules applied under <see cref="StepUpLoggingOptions.CategoryFloors"/>.
 /// </summary>
@@ -351,6 +364,18 @@ public sealed class StepUpLoggingOptions
     /// The level to use for request summary logs (e.g., "Information").
     /// </summary>
     public string RequestSummaryLevel { get; set; } = "Information";
+
+    // af-stub
+    /// <summary>
+    /// Which fields the request summary carries. Default: <see cref="RequestSummaryDetail.Full"/>.
+    /// </summary>
+    public RequestSummaryDetail RequestSummaryDetail { get; set; } = RequestSummaryDetail.Full;
+
+    // af-stub
+    /// <summary>
+    /// When true, write a request summary for every outgoing <c>IHttpClientFactory</c> call. Default: false.
+    /// </summary>
+    public bool AlwaysLogOutboundRequestSummary { get; set; } = false;
 
     /// <summary>
     /// When true, the logged <c>ClientIp</c> is taken from the first entry of the

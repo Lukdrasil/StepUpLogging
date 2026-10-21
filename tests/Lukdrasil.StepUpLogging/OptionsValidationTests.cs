@@ -35,6 +35,7 @@ public class OptionsValidationTests
     [InlineData("FrameworkCategoryDefaults")]
     [InlineData("ConsoleFormat")]
     [InlineData("ConsoleTraceFormat")]
+    [InlineData("RequestSummaryDetail")]
     public void UndefinedEnumNumber_FailsValidationOnStart(string option)
     {
         Assert.Throws<OptionsValidationException>(
@@ -47,6 +48,7 @@ public class OptionsValidationTests
     [InlineData("DurationSeconds", "0")]
     [InlineData("PreErrorBufferSize", "0")]
     [InlineData("MaxContinuousStepUpSeconds", "-1")]
+    [InlineData("RequestSummaryDetail", "5")]
     public void InvalidOption_FailsValidationNamingOnlyThatOption(string option, string value)
     {
         var ex = Assert.Throws<OptionsValidationException>(

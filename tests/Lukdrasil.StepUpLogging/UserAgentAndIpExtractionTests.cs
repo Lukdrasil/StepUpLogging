@@ -116,8 +116,8 @@ namespace Lukdrasil.StepUpLogging.Tests
             Assert.DoesNotContain("secret-abc123", userAgent);
         }
 
-        [Fact(DisplayName = "EmitRequestSummary_OmitsUserAgent_WhenNotProvided")]
-        public async Task EmitRequestSummary_OmitsUserAgent_WhenNotProvided()
+        [Fact(DisplayName = "EmitRequestSummary_RendersNone_WhenUserAgentMissing")]
+        public async Task EmitRequestSummary_RendersNone_WhenUserAgentMissing()
         {
             var capture = new CaptureSink();
             using var host = await CreateTestServerAsync(capture);
@@ -129,7 +129,9 @@ namespace Lukdrasil.StepUpLogging.Tests
             Assert.NotNull(capture.LastEvent);
             var logEvent = capture.LastEvent;
 
-            Assert.False(logEvent!.Properties.ContainsKey("UserAgent"), "UserAgent property should not be in the log event when header is missing");
+            Assert.Equal("(none)", StringProperty(logEvent!, "UserAgent"));
+            Assert.Equal("None", StringProperty(logEvent, "ClientKind"));
+            Assert.Contains("(none)", logEvent.RenderMessage(), StringComparison.Ordinal);
         }
 
         [Fact(DisplayName = "EmitRequestSummary_UsesRemoteIpAddress_WhenXForwardedForAbsent")]

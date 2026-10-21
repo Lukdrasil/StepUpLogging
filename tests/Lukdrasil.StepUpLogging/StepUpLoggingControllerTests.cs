@@ -33,7 +33,7 @@ namespace Lukdrasil.StepUpLogging.Tests
             controller.EmitRequestSummary("GET", "/api/values", 200, 123.45, "abcdef", "id=1&order=abc", routeParams);
 
             Assert.NotNull(sink.LastEvent);
-            Assert.Equal("Request finished {Method} {Path} {StatusCode} {ElapsedMs}", sink.LastEvent!.MessageTemplate.Text);
+            Assert.Equal("{Direction} {Method} {Path} {StatusCode} {ElapsedMs} ms {ClientKind} {UserAgent}", sink.LastEvent!.MessageTemplate.Text);
             Assert.True(sink.LastEvent.Properties.ContainsKey("IsRequestSummary"));
             // Check some properties
             Assert.Equal("GET", ((ScalarValue)sink.LastEvent.Properties["Method"]).Value);
@@ -58,8 +58,8 @@ namespace Lukdrasil.StepUpLogging.Tests
             Assert.Equal("127.0.0.1", ((ScalarValue)sink.LastEvent.Properties["ClientIp"]).Value);
         }
 
-        [Fact(DisplayName = "EmitRequestSummary_WithNullUserAgentAndClientIp_OmitsProperties")]
-        public void EmitRequestSummary_WithNullUserAgentAndClientIp_OmitsProperties()
+        [Fact(DisplayName = "EmitRequestSummary_WithNullUserAgentAndClientIp_WritesNoneAndOmitsClientIp")]
+        public void EmitRequestSummary_WithNullUserAgentAndClientIp_WritesNoneAndOmitsClientIp()
         {
             var opts = new StepUpLoggingOptions();
             var sink = new CaptureSink();
@@ -69,7 +69,8 @@ namespace Lukdrasil.StepUpLogging.Tests
             controller.EmitRequestSummary("GET", "/api/test", 200, 50.0, userAgent: null, clientIp: null);
 
             Assert.NotNull(sink.LastEvent);
-            Assert.False(sink.LastEvent!.Properties.ContainsKey("UserAgent"));
+            Assert.Equal("(none)", (sink.LastEvent!.Properties.GetValueOrDefault("UserAgent") as ScalarValue)?.Value);
+            Assert.Equal("None", (sink.LastEvent.Properties.GetValueOrDefault("ClientKind") as ScalarValue)?.Value);
             Assert.False(sink.LastEvent.Properties.ContainsKey("ClientIp"));
         }
 

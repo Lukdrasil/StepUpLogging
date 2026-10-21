@@ -64,6 +64,35 @@ public class StartupReportTests
     }
 
     [Theory]
+    [InlineData("true", "true", "Compact", "request summary inbound and outbound at Information, Compact")]
+    [InlineData("true", "false", "Full", "request summary inbound at Information, Full")]
+    [InlineData("false", "true", "Full", "request summary outbound at Information, Full")]
+    public void Summary_NamesDirectionsLevelAndDetail(string inbound, string outbound, string detail, string expected)
+    {
+        using var run = Start(("AlwaysLogRequestSummary", inbound), ("AlwaysLogOutboundRequestSummary", outbound), ("RequestSummaryDetail", detail));
+
+        var summary = Assert.Single(run.WithTemplate(StartupReport.SummaryTemplate));
+        Assert.EndsWith(expected, summary.RenderMessage(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Summary_BothOff_SaysOff()
+    {
+        using var run = Start();
+
+        var summary = Assert.Single(run.WithTemplate(StartupReport.SummaryTemplate));
+        Assert.EndsWith("request summary off", summary.RenderMessage(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CompactWithBothSummariesOff_WarnsUnused()
+    {
+        using var run = Start(("RequestSummaryDetail", "Compact"));
+
+        Assert.Contains(run.WithTemplate(StartupReport.UnusedOptionTemplate), e => e.RenderMessage().Contains("RequestSummaryDetail", StringComparison.Ordinal));
+    }
+
+    [Theory]
     [InlineData("http://collector:4317", "http://collector:4317")]
     [InlineData("https://user:secret@collector:4318/v1/logs?token=abc", "https://collector:4318")]
     [InlineData(null, "default localhost")]
