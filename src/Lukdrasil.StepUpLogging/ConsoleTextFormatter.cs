@@ -13,28 +13,36 @@ namespace Lukdrasil.StepUpLogging;
 /// <c>Name=value</c>, then <c>Exception=</c>. The trace id, <c>SourceContext</c> and the exception are left out when
 /// absent. A value that is empty or holds a space, <c>=</c>, <c>"</c>, <c>\</c> or a control character is written in
 /// double quotes with <c>"</c>, <c>\</c> and control characters escaped, so a logged value cannot forge a key or a
-/// console line.
+/// console line. With <c>shortKeys</c> the line keys are <c>t=</c>, <c>l=</c>, <c>tid=</c> or <c>tp=</c>, <c>src=</c>,
+/// <c>msg=</c> and <c>ex=</c> (ADR 0034).
 /// </summary>
-internal sealed class ConsoleTextFormatter(string[] properties, ConsoleTraceFormat traceFormat) : ITextFormatter
+internal sealed class ConsoleTextFormatter(string[] properties, ConsoleTraceFormat traceFormat, bool shortKeys = false) : ITextFormatter
 {
-    private static readonly MessageTemplateTextFormatter Header = new("Timestamp={Timestamp:HH:mm:ss.fff} Level={Level:u3}");
+    private sealed record Keys(MessageTemplateTextFormatter Header, string TraceId, string Traceparent, string SourceContext, string Message, string Exception);
+
+    private static readonly Keys LongKeys = new(
+        new("Timestamp={Timestamp:HH:mm:ss.fff} Level={Level:u3}"), " TraceId=", " traceparent=", " SourceContext=", " Message=", " Exception=");
+    private static readonly Keys ShortKeys = new(
+        new("t={Timestamp:HH:mm:ss.fff} l={Level:u3}"), " tid=", " tp=", " src=", " msg=", " ex=");
     private static readonly MessageTemplateTextFormatter Message = new("{Message:lj}");
     private static readonly SearchValues<char> NeedsQuotes =
         SearchValues.Create([.. " =\"\\\u007f", .. Enumerable.Range(0, ' ').Select(c => (char)c)]);
 
+    private readonly Keys _keys = shortKeys ? ShortKeys : LongKeys;
+
     public void Format(LogEvent logEvent, TextWriter output)
     {
-        Header.Format(logEvent, output);
+        _keys.Header.Format(logEvent, output);
         WriteTrace(logEvent, output);
         if (CategoryPrefix.TryGetSourceContext(logEvent, out var sourceContext))
         {
-            output.Write(" SourceContext=");
+            output.Write(_keys.SourceContext);
             WriteValue(output, sourceContext);
         }
 
         using var message = new StringWriter();
         Message.Format(logEvent, message);
-        output.Write(" Message=");
+        output.Write(_keys.Message);
         WriteValue(output, message.ToString());
         foreach (var name in properties)
         {
@@ -47,7 +55,7 @@ internal sealed class ConsoleTextFormatter(string[] properties, ConsoleTraceForm
         }
         if (logEvent.Exception is not null)
         {
-            output.Write(" Exception=");
+            output.Write(_keys.Exception);
             WriteValue(output, logEvent.Exception.ToString());
         }
         output.WriteLine();
@@ -83,10 +91,10 @@ internal sealed class ConsoleTextFormatter(string[] properties, ConsoleTraceForm
         if (logEvent.TraceId is not { } traceId) return;
         if (traceFormat == ConsoleTraceFormat.Traceparent && logEvent.SpanId is { } spanId)
         {
-            output.Write($" traceparent=00-{traceId.ToHexString()}-{spanId.ToHexString()}-{Flags(logEvent)}");
+            output.Write($"{_keys.Traceparent}00-{traceId.ToHexString()}-{spanId.ToHexString()}-{Flags(logEvent)}");
             return;
         }
-        output.Write($" TraceId={traceId.ToHexString()}");
+        output.Write($"{_keys.TraceId}{traceId.ToHexString()}");
     }
 
     /// <summary>The <c>TraceFlags</c> property as two hex digits, <c>00</c> when it is absent or not a byte.</summary>

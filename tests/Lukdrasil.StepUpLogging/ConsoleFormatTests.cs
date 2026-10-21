@@ -14,9 +14,12 @@ public class ConsoleFormatTests
         => Format(format, ConsoleTraceFormat.TraceId, logEvent, textProperties);
 
     private static string Format(ConsoleLogFormat format, ConsoleTraceFormat traceFormat, LogEvent logEvent, params string[] textProperties)
+        => Format(format, traceFormat, RequestSummaryDetail.Full, logEvent, textProperties);
+
+    private static string Format(ConsoleLogFormat format, ConsoleTraceFormat traceFormat, RequestSummaryDetail detail, LogEvent logEvent, params string[] textProperties)
     {
         using var output = new StringWriter();
-        StepUpLoggingExtensions.CreateConsoleFormatter(format, textProperties, traceFormat).Format(logEvent, output);
+        StepUpLoggingExtensions.CreateConsoleFormatter(format, textProperties, traceFormat, detail).Format(logEvent, output);
         return output.ToString();
     }
 
@@ -287,6 +290,70 @@ public class ConsoleFormatTests
         var line = Format(ConsoleLogFormat.Text, logEvent, "Jti");
 
         Assert.EndsWith(" Jti=\"a\\tb\\u0001c\\u007f\"" + Environment.NewLine, line);
+    }
+
+    [Fact]
+    public void Text_Minimal_WritesShortLineKeys()
+    {
+        var line = Format(
+            ConsoleLogFormat.Text,
+            ConsoleTraceFormat.TraceId,
+            RequestSummaryDetail.Minimal,
+            Event(new InvalidOperationException("token mint refused"), new LogEventProperty("jti", new ScalarValue("j-1"))),
+            "jti");
+
+        Assert.Equal(
+            "t=15:54:07.221 l=ERR tid=c4fed5a2d96d1640c013ae014f5d162d src=MyApp.Orders msg=\"Order 42 failed for alice\" jti=j-1 ex=\"System.InvalidOperationException: token mint refused\"" + Environment.NewLine,
+            line);
+    }
+
+    [Fact]
+    public void Text_Minimal_Traceparent_WritesTp()
+    {
+        var line = Format(ConsoleLogFormat.Text, ConsoleTraceFormat.Traceparent, RequestSummaryDetail.Minimal, Event(null, new LogEventProperty("TraceFlags", new ScalarValue("1"))));
+
+        Assert.Contains(" l=ERR tp=00-c4fed5a2d96d1640c013ae014f5d162d-c692a71cf2b6dbbb-01 src=MyApp.Orders ", line);
+    }
+
+    [Fact]
+    public void Text_Minimal_Traceparent_WithoutSpanId_FallsBackToTid()
+    {
+        var logEvent = new LogEvent(
+            new DateTimeOffset(2026, 10, 17, 15, 54, 7, 221, TimeSpan.Zero),
+            LogEventLevel.Information,
+            null,
+            new MessageTemplateParser().Parse("Application started"),
+            [],
+            TraceId,
+            default);
+
+        var line = Format(ConsoleLogFormat.Text, ConsoleTraceFormat.Traceparent, RequestSummaryDetail.Minimal, logEvent);
+
+        Assert.Equal("t=15:54:07.221 l=INF tid=c4fed5a2d96d1640c013ae014f5d162d msg=\"Application started\"" + Environment.NewLine, line);
+    }
+
+    [Theory]
+    [InlineData(RequestSummaryDetail.Full)]
+    [InlineData(RequestSummaryDetail.Compact)]
+    public void Text_FullAndCompact_KeepTheLongLineKeys(RequestSummaryDetail detail)
+    {
+        var logEvent = Event(new InvalidOperationException("token mint refused"), new LogEventProperty("Jti", new ScalarValue("j-1")), new LogEventProperty("TraceFlags", new ScalarValue("1")));
+
+        Assert.Equal(
+            "Timestamp=15:54:07.221 Level=ERR TraceId=c4fed5a2d96d1640c013ae014f5d162d SourceContext=MyApp.Orders Message=\"Order 42 failed for alice\" Jti=j-1 Exception=\"System.InvalidOperationException: token mint refused\"" + Environment.NewLine,
+            Format(ConsoleLogFormat.Text, ConsoleTraceFormat.TraceId, detail, logEvent, "Jti"));
+        Assert.Equal(
+            "Timestamp=15:54:07.221 Level=ERR traceparent=00-c4fed5a2d96d1640c013ae014f5d162d-c692a71cf2b6dbbb-01 SourceContext=MyApp.Orders Message=\"Order 42 failed for alice\" Jti=j-1 Exception=\"System.InvalidOperationException: token mint refused\"" + Environment.NewLine,
+            Format(ConsoleLogFormat.Text, ConsoleTraceFormat.Traceparent, detail, logEvent, "Jti"));
+    }
+
+    [Fact]
+    public void Json_Minimal_WritesCompactJson()
+    {
+        var line = Format(ConsoleLogFormat.Json, ConsoleTraceFormat.TraceId, RequestSummaryDetail.Minimal, Event());
+
+        Assert.StartsWith("{\"@t\":", line);
+        Assert.Contains("\"Unrendered\":\"not-in-the-message\"", line);
     }
 
     [Fact]

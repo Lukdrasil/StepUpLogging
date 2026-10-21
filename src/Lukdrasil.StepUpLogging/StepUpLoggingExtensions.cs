@@ -233,7 +233,10 @@ public static class StepUpLoggingExtensions
                     options.ExcludePaths = [.. options.ExcludePaths, .. extra];
                 }
                 options.NeverStepUpCategories ??= ["Microsoft.EntityFrameworkCore.Database.Command"];
-                options.ConsoleTextProperties ??= [LogProperties.Jti, "Method", "Path", "StatusCode", "ElapsedMs"];
+                string[] textProperties = [LogProperties.Jti, "Method", "Path", "StatusCode", "ElapsedMs"];
+                options.ConsoleTextProperties ??= options.RequestSummaryDetail == RequestSummaryDetail.Minimal
+                    ? [.. textProperties.Select(p => RequestSummary.MinimalKeys[p])]
+                    : textProperties;
             })
             .ValidateOnStart();
         builder.Services.TryAddEnumerable(
@@ -957,12 +960,13 @@ public static class StepUpLoggingExtensions
 
     /// <summary>
     /// The console formatter for <paramref name="format"/>: compact JSON, or one line with the keyed trace id in
-    /// <paramref name="traceFormat"/>, the rendered message and the <paramref name="textProperties"/> the event has.
+    /// <paramref name="traceFormat"/>, the rendered message and the <paramref name="textProperties"/> the event has,
+    /// under short line keys when <paramref name="detail"/> is <see cref="RequestSummaryDetail.Minimal"/> (ADR 0034).
     /// The OTLP and file sinks do not use it and stay structured.
     /// </summary>
-    internal static ITextFormatter CreateConsoleFormatter(ConsoleLogFormat format, string[] textProperties, ConsoleTraceFormat traceFormat) => format switch
+    internal static ITextFormatter CreateConsoleFormatter(ConsoleLogFormat format, string[] textProperties, ConsoleTraceFormat traceFormat, RequestSummaryDetail detail) => format switch
     {
-        ConsoleLogFormat.Text => new ConsoleTextFormatter([.. textProperties.Where(p => !string.IsNullOrWhiteSpace(p))], traceFormat),
+        ConsoleLogFormat.Text => new ConsoleTextFormatter([.. textProperties.Where(p => !string.IsNullOrWhiteSpace(p))], traceFormat, detail == RequestSummaryDetail.Minimal),
         _ => new CompactJsonFormatter(),
     };
 
@@ -997,7 +1001,7 @@ public static class StepUpLoggingExtensions
 
         if (opts.EnableConsoleLogging)
         {
-            lc.WriteTo.Async(a => a.Console(CreateConsoleFormatter(opts.ConsoleFormat, opts.ConsoleTextProperties ?? [], opts.ConsoleTraceFormat)));
+            lc.WriteTo.Async(a => a.Console(CreateConsoleFormatter(opts.ConsoleFormat, opts.ConsoleTextProperties ?? [], opts.ConsoleTraceFormat, opts.RequestSummaryDetail)));
         }
 
         if (!string.IsNullOrWhiteSpace(logFilePath))

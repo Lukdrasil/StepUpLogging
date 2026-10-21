@@ -475,6 +475,40 @@ public class OptionsValidationTests
         Assert.Equal(["UserId"], ResolveOptions(host).ConsoleTextProperties!);
     }
 
+    [Theory]
+    [InlineData("Full")]
+    [InlineData("Compact")]
+    public void ConsoleTextProperties_NotConfigured_FullOrCompact_ResolvesToTheLongNames(string detail)
+    {
+        using var host = BuildHost(("SerilogStepUp:RequestSummaryDetail", detail));
+
+        Assert.Equal(["Jti", "Method", "Path", "StatusCode", "ElapsedMs"], ResolveOptions(host).ConsoleTextProperties!);
+    }
+
+    [Fact]
+    public void ConsoleTextProperties_NotConfigured_Minimal_ResolvesToTheShortKeys()
+    {
+        using var host = BuildHost(("SerilogStepUp:RequestSummaryDetail", "Minimal"));
+
+        Assert.Equal(["jti", "mth", "path", "sc", "ms"], ResolveOptions(host).ConsoleTextProperties!);
+    }
+
+    [Fact]
+    public void ConsoleTextProperties_Configured_Minimal_ReplacesTheDefault()
+    {
+        using var host = BuildHost(("SerilogStepUp:RequestSummaryDetail", "Minimal"), ("SerilogStepUp:ConsoleTextProperties:0", "Jti"));
+
+        Assert.Equal(["Jti"], ResolveOptions(host).ConsoleTextProperties!);
+    }
+
+    [Fact]
+    public void ConsoleTextProperties_NotConfigured_MinimalFromCode_ResolvesToTheShortKeys()
+    {
+        using var host = BuildHostWith(o => o.RequestSummaryDetail = RequestSummaryDetail.Minimal);
+
+        Assert.Equal(["jti", "mth", "path", "sc", "ms"], ResolveOptions(host).ConsoleTextProperties!);
+    }
+
     [Fact]
     public void ConsoleText_WiresWithoutError()
     {
