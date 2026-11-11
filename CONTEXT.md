@@ -21,3 +21,5 @@ Domain terms of `Lukdrasil.StepUpLogging`.
 - **path-bearing property**: (#66) an event property that repeats the request path: `RequestPath`
   on any event, `Path` on `Microsoft.AspNetCore.Hosting.Diagnostics` events. Avoid: path field,
   URL property.
+- **native image**: (ADR 0035) a consumer app published with `PublishAot=true`, where
+  `RuntimeFeature.IsDynamicCodeSupported` is false and reflection-based JSON is off. Avoid: AOT build, trimmed app.
