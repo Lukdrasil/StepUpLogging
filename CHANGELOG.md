@@ -6,7 +6,7 @@ Releases from 1.8.0 onward are recorded here. Entries backfilled from each relea
 `PackageReleaseNotes` and, where those were not updated per release, from the commits between tags.
 Tags before 1.8.0 predate this file.
 
-## [Unreleased]
+## [7.1.0] - 2026-11-11
 
 ### Added
 - **Native AOT ready.** The library builds with `IsAotCompatible`. In an application published with `PublishAot`, the `Serilog` section works without `Using` for the library's own sinks and enrichers, and the encrypted spool writes through source-generated JSON with the same wire bytes. Under JIT nothing changes. A config-only sink from another package needs a `Serilog:Using` entry in a native image, the reader roots the formatter and console theme type strings of the library's own assemblies (`CompactJsonFormatter`, `RenderedCompactJsonFormatter`, `JsonFormatter`, the console themes) while a type string from another package must be rooted by the application, and a `Data`, `OldValues` or `NewValues` value must be one of the declared types. See the README section "Native AOT" and docs/adr/0035-native-aot-readiness.md.
