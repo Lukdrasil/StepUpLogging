@@ -6,6 +6,12 @@ Releases from 1.8.0 onward are recorded here. Entries backfilled from each relea
 `PackageReleaseNotes` and, where those were not updated per release, from the commits between tags.
 Tags before 1.8.0 predate this file.
 
+## [7.0.0] - 2026-11-11
+
+### Changed
+- **The package targets `net11.0` only.** `lib/` and `buildTransitive/` ship for `net11.0`; a project on `net10.0` gets restore error NU1202 and stays on 6.4.1. See MIGRATION.md.
+- Dependencies: Microsoft.Extensions.Http.Resilience 11.0.0, OpenTelemetry.Extensions.Hosting and OpenTelemetry.Exporter.OpenTelemetryProtocol 1.21.0. The options, the log output and the audit wire format are unchanged.
+
 ## [6.4.1] - 2026-10-21
 
 ### Changed
