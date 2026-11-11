@@ -9,7 +9,8 @@ namespace Lukdrasil.StepUpLogging;
 
 /// <summary>
 /// Applies the <c>Serilog</c> configuration section, with explicit reader assemblies only when
-/// there is no dynamic code (ADR 0035 D1).
+/// there is no dynamic code (ADR 0035 D1). In a native image it also roots the formatter and console
+/// theme types of those assemblies that the section can name by type string.
 /// </summary>
 internal static class SerilogConfigurationAssemblies
 {
@@ -64,6 +65,12 @@ internal static class SerilogConfigurationAssemblies
     [DynamicDependency(DynamicallyAccessedMemberTypes.PublicMethods, typeof(EnvironmentLoggerConfigurationExtensions))]
     [DynamicDependency(DynamicallyAccessedMemberTypes.PublicMethods, typeof(ProcessLoggerConfigurationExtensions))]
     [DynamicDependency(DynamicallyAccessedMemberTypes.PublicMethods, typeof(Serilog.Enrichers.OpenTelemetry.LoggingExtensions))]
+    [DynamicDependency(DynamicallyAccessedMemberTypes.PublicConstructors, typeof(Serilog.Formatting.Compact.CompactJsonFormatter))]
+    [DynamicDependency(DynamicallyAccessedMemberTypes.PublicConstructors, typeof(Serilog.Formatting.Compact.RenderedCompactJsonFormatter))]
+    [DynamicDependency(DynamicallyAccessedMemberTypes.PublicConstructors, typeof(Serilog.Formatting.Json.JsonFormatter))]
+    [DynamicDependency(DynamicallyAccessedMemberTypes.PublicProperties, typeof(Serilog.Sinks.SystemConsole.Themes.ConsoleTheme))]
+    [DynamicDependency(DynamicallyAccessedMemberTypes.PublicProperties, typeof(Serilog.Sinks.SystemConsole.Themes.AnsiConsoleTheme))]
+    [DynamicDependency(DynamicallyAccessedMemberTypes.PublicProperties, typeof(Serilog.Sinks.SystemConsole.Themes.SystemConsoleTheme))]
     private static ConfigurationReaderOptions ReaderOptions(IConfiguration serilogConfig) =>
         new([.. ConfigurationLibraryAssemblies.Concat(UsingAssemblies(serilogConfig)).Distinct()]);
 

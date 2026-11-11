@@ -1066,6 +1066,12 @@ The library builds with `IsAotCompatible` and works in an application published 
   image there is no assembly scanning, so every `ReadFrom.Configuration` call is handed the Serilog
   assemblies the library references (Console, File, Async, OpenTelemetry, the Thread, Environment,
   Process and OpenTelemetry enrichers, Compact formatting). Under JIT nothing changes.
+- **Formatter and console theme type strings of those packages work in a native image**:
+  `CompactJsonFormatter`, `RenderedCompactJsonFormatter`, `Serilog.Formatting.Json.JsonFormatter`
+  and the `ConsoleTheme`, `AnsiConsoleTheme` and `SystemConsoleTheme` members such as
+  `Serilog.Sinks.SystemConsole.Themes.AnsiConsoleTheme::Code, Serilog.Sinks.Console`. A type string
+  from any other package (for example a formatter from `Serilog.Expressions`) must be rooted by the
+  application, for example with `<TrimmerRootAssembly Include="..." />`.
 - **Any other config-only sink or enricher must be named in `Serilog:Using`** and its assembly rooted
   with `<TrimmerRootAssembly Include="..." />`, or configured in code through the `configure` hook.
   That includes a Serilog package the library pulls in only transitively, such as
