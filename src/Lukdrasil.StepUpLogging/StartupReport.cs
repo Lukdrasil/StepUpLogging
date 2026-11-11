@@ -5,8 +5,8 @@ namespace Lukdrasil.StepUpLogging;
 
 /// <summary>
 /// What the library writes once at startup through the bypass logger: one Information line with the effective
-/// configuration, and a Warning for each key under the options section that binds to nothing and for each option
-/// set to a value that has no effect.
+/// configuration unless <see cref="StepUpLoggingOptions.WriteStartupSummary"/> is false, and a Warning for each key
+/// under the options section that binds to nothing and for each option set to a value that has no effect.
 /// </summary>
 internal static class StartupReport
 {
@@ -34,9 +34,12 @@ internal static class StartupReport
 
     internal static void Write(Serilog.ILogger logger, StepUpLoggingOptions opts, IConfigurationSection section, string? logFilePath)
     {
-        logger.Information(SummaryTemplate,
-            opts.Mode.ToString(), opts.BaseLevel, opts.StepUpLevel, opts.DurationSeconds, Outputs(opts, logFilePath),
-            opts.FrameworkCategoryDefaults.ToString(), RequestSummaryText(opts));
+        if (opts.WriteStartupSummary)
+        {
+            logger.Information(SummaryTemplate,
+                opts.Mode.ToString(), opts.BaseLevel, opts.StepUpLevel, opts.DurationSeconds, Outputs(opts, logFilePath),
+                opts.FrameworkCategoryDefaults.ToString(), RequestSummaryText(opts));
+        }
 
         foreach (var key in UnknownKeys(section))
         {
