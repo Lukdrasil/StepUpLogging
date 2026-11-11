@@ -150,7 +150,7 @@ public class PackageConsumerBuildTests(PackedStepUpLoggingPackage package) : ICl
     {
         var consumer = WriteConsumer(
             "with-telemetry-abstractions",
-            extraPackageReferences: $"""<PackageReference Include="{TelemetryAbstractions}" Version="10.0.0" />""");
+            extraPackageReferences: $"""<PackageReference Include="{TelemetryAbstractions}" Version="11.0.0" />""");
 
         var build = await BuildAsync(consumer);
 
@@ -181,7 +181,7 @@ public class PackageConsumerBuildTests(PackedStepUpLoggingPackage package) : ICl
         File.WriteAllText(Path.Combine(directory, "PackTestConsumer.csproj"), $"""
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup>
-                <TargetFramework>net10.0</TargetFramework>
+                <TargetFramework>net11.0</TargetFramework>
               </PropertyGroup>
               <ItemGroup>
                 <PackageReference Include="Lukdrasil.StepUpLogging" Version="{package.Version}" />

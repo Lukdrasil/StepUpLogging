@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net11.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     
@@ -30,7 +30,7 @@
   <ItemGroup>
     <None Include="..\..\README.md" Pack="true" PackagePath="\" />
     <None Include="..\..\LICENSE" Pack="true" PackagePath="\" />
-    <None Update="buildTransitive\Lukdrasil.StepUpLogging.targets" Pack="true" PackagePath="buildTransitive/net10.0/Lukdrasil.StepUpLogging.targets" />
+    <None Update="buildTransitive\Lukdrasil.StepUpLogging.targets" Pack="true" PackagePath="buildTransitive/net11.0/Lukdrasil.StepUpLogging.targets" />
   </ItemGroup>
 
   <ItemGroup>
@@ -47,8 +47,8 @@
 </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.15.3" />
-    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.3" />
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.21.0" />
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.21.0" />
     <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
     <PackageReference Include="Serilog.Sinks.Async" Version="2.1.0" />
     <PackageReference Include="Serilog.Formatting.Compact" Version="3.0.0" />
@@ -59,7 +59,7 @@
     <PackageReference Include="Serilog.Enrichers.Process" Version="3.0.0" />
     <PackageReference Include="Serilog.Enrichers.Environment" Version="3.0.1" />
     <PackageReference Include="Serilog.Enrichers.CallStack" Version="1.0.358" />
-    <PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="10.0.0" PrivateAssets="build;buildtransitive;analyzers;contentfiles" />
+    <PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="11.0.0" PrivateAssets="build;buildtransitive;analyzers;contentfiles" />
   </ItemGroup>
 
 </Project>
