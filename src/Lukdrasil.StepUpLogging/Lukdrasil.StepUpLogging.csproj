@@ -4,6 +4,8 @@
     <TargetFramework>net11.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <IsAotCompatible>true</IsAotCompatible>
+    <EnableConfigurationBindingGenerator>true</EnableConfigurationBindingGenerator>
     
     <!-- Package Metadata -->
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
