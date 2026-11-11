@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       publish_to_nuget:
-        description: 'Publish to NuGet (requires NUGET_API_KEY secret)'
+        description: 'Publish to NuGet'
         required: false
         default: 'true'
         type: choice
@@ -19,6 +19,10 @@ env:
   PROJECT_PATH: 'src/Lukdrasil.StepUpLogging/Lukdrasil.StepUpLogging.csproj'
   TEST_PROJECT_PATH: 'tests/Lukdrasil.StepUpLogging/Lukdrasil.StepUpLogging.Tests.csproj'
   BENCHMARK_PROJECT_PATH: 'tests/Lukdrasil.StepUpLogging.Benchmarks/Lukdrasil.StepUpLogging.Benchmarks.csproj'
+
+permissions:
+  contents: read
+  id-token: write
 
 jobs:
   build-test-publish:
@@ -51,20 +55,17 @@ jobs:
     - name: Create NuGet package
       run: dotnet pack "${{ env.PROJECT_PATH }}" --configuration Release --output ./nuget-packages
     
-    - name: Check NuGet API Key
-      env:
-        NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
-      if: env.NUGET_API_KEY == ''
-      run: echo "⚠️ NUGET_API_KEY secret is not set. NuGet publish will be skipped. Set it in GitHub Settings → Secrets and variables → Actions"
-    
+    - name: NuGet login (Trusted Publishing)
+      id: nuget-login
+      if: github.event_name == 'push' || github.event.inputs.publish_to_nuget == 'true'
+      uses: NuGet/login@v1
+      with:
+        user: ${{ vars.NUGET_USER }}
+
     - name: Publish to NuGet
-      env:
-        NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
-      if: |
-        env.NUGET_API_KEY != '' && 
-        (github.event_name == 'push' || github.event.inputs.publish_to_nuget == 'true')
-      run: dotnet nuget push ./nuget-packages/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
-    
+      if: steps.nuget-login.outcome == 'success'
+      run: dotnet nuget push ./nuget-packages/*.nupkg --api-key ${{ steps.nuget-login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+
     - name: Upload NuGet package as artifact
       uses: actions/upload-artifact@v5
       with:
