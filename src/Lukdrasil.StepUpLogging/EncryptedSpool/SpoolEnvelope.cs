@@ -23,4 +23,14 @@ internal sealed record SpoolEnvelope
     /// </summary>
     [JsonPropertyName("payload")]
     public required byte[] Payload { get; init; }
+
+    /// <summary>Serializes this envelope to the bytes the spool stores on disk.</summary>
+    public byte[] ToUtf8Bytes() => throw new NotImplementedException("af-stub");
+
+    /// <summary>
+    /// Reads an envelope from the bytes the spool stores on disk: <see langword="null"/> for the
+    /// JSON literal <c>null</c>, a <see cref="System.Text.Json.JsonException"/> for unparseable
+    /// input or a missing required member.
+    /// </summary>
+    public static SpoolEnvelope? FromUtf8Bytes(ReadOnlySpan<byte> utf8Json) => throw new NotImplementedException("af-stub");
 }
