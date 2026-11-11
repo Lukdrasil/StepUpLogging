@@ -98,7 +98,7 @@ internal sealed class SpoolReader(string spoolDirectory)
         SpoolEnvelope? envelope;
         try
         {
-            envelope = JsonSerializer.Deserialize<SpoolEnvelope>(bytes);
+            envelope = SpoolEnvelope.FromUtf8Bytes(bytes);
         }
         catch (JsonException)
         {

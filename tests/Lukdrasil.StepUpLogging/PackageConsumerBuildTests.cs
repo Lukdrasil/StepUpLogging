@@ -1,4 +1,7 @@
 using System.Diagnostics;
+using System.Globalization;
+using System.Net;
+using System.Net.Sockets;
 using System.Text.Json;
 
 namespace Lukdrasil.StepUpLogging.Tests;
@@ -40,9 +43,17 @@ public sealed class PackedStepUpLoggingPackage : IAsyncLifetime
     public Task<(int ExitCode, string Output, string StandardOutput)> RunConsumerDotnetAsync(string workingDirectory, params string[] arguments) =>
         RunDotnetAsync(workingDirectory, PackagesPath, arguments);
 
-    private static async Task<(int ExitCode, string Output, string StandardOutput)> RunDotnetAsync(string workingDirectory, string? packagesPath, params string[] arguments)
+    public Task<(int ExitCode, string Output, string StandardOutput)> RunConsumerProcessAsync(
+        string fileName, string workingDirectory, IReadOnlyDictionary<string, string> environment, params string[] arguments) =>
+        RunProcessAsync(fileName, workingDirectory, PackagesPath, environment, arguments);
+
+    private static Task<(int ExitCode, string Output, string StandardOutput)> RunDotnetAsync(string workingDirectory, string? packagesPath, params string[] arguments) =>
+        RunProcessAsync("dotnet", workingDirectory, packagesPath, new Dictionary<string, string>(), arguments);
+
+    private static async Task<(int ExitCode, string Output, string StandardOutput)> RunProcessAsync(
+        string fileName, string workingDirectory, string? packagesPath, IReadOnlyDictionary<string, string> environment, params string[] arguments)
     {
-        var startInfo = new ProcessStartInfo("dotnet")
+        var startInfo = new ProcessStartInfo(fileName)
         {
             WorkingDirectory = workingDirectory,
             RedirectStandardOutput = true,
@@ -67,6 +78,11 @@ public sealed class PackedStepUpLoggingPackage : IAsyncLifetime
 
         startInfo.Environment["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
         startInfo.Environment["DOTNET_NOLOGO"] = "1";
+
+        foreach (var (key, value) in environment)
+        {
+            startInfo.Environment[key] = value;
+        }
 
         using var process = Process.Start(startInfo)!;
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(10));
@@ -117,6 +133,76 @@ public class PackageConsumerBuildTests(PackedStepUpLoggingPackage package) : ICl
         }
         """;
 
+    private const string AotConsumerProgram = """
+        using System.Text;
+        using System.Text.Json;
+        using Lukdrasil.StepUpLogging;
+        using Lukdrasil.StepUpLogging.Audit.EncryptedSpool;
+
+        var port = Environment.GetEnvironmentVariable("SMOKE_PORT")!;
+        var logs = Environment.GetEnvironmentVariable("SMOKE_LOGS")!;
+        var builder = WebApplication.CreateBuilder(args);
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Serilog:MinimumLevel:Default"] = "Information",
+            ["Serilog:WriteTo:0:Name"] = "Console",
+            ["Serilog:WriteTo:0:Args:theme"] = "Serilog.Sinks.SystemConsole.Themes.AnsiConsoleTheme::Code, Serilog.Sinks.Console",
+            ["Serilog:WriteTo:1:Name"] = "File",
+            ["Serilog:WriteTo:1:Args:path"] = Path.Combine(logs, "compact.json"),
+            ["Serilog:WriteTo:1:Args:shared"] = "true",
+            ["Serilog:WriteTo:1:Args:formatter"] = "Serilog.Formatting.Compact.CompactJsonFormatter, Serilog.Formatting.Compact",
+            ["Serilog:WriteTo:2:Name"] = "File",
+            ["Serilog:WriteTo:2:Args:path"] = Path.Combine(logs, "rendered-compact.json"),
+            ["Serilog:WriteTo:2:Args:shared"] = "true",
+            ["Serilog:WriteTo:2:Args:formatter"] = "Serilog.Formatting.Compact.RenderedCompactJsonFormatter, Serilog.Formatting.Compact",
+            ["Serilog:WriteTo:3:Name"] = "File",
+            ["Serilog:WriteTo:3:Args:path"] = Path.Combine(logs, "json.json"),
+            ["Serilog:WriteTo:3:Args:shared"] = "true",
+            ["Serilog:WriteTo:3:Args:formatter"] = "Serilog.Formatting.Json.JsonFormatter, Serilog",
+            ["SerilogStepUp:EnableConsoleLogging"] = "false",
+            ["SerilogStepUp:EnableOtlpExporter"] = "false",
+        });
+        builder.WebHost.UseUrls($"http://127.0.0.1:{port}");
+        builder.AddStepUpLogging();
+        builder.Services.AddSingleton<IAuditPayloadEncryptor, IdentityEncryptor>();
+        builder.AddEncryptedSpoolAuditSink(options =>
+        {
+            options.SpoolDirectory = Environment.GetEnvironmentVariable("SMOKE_SPOOL")!;
+            options.EndpointBaseUrl = $"http://127.0.0.1:{port}";
+            options.ModuleName = "smoke";
+            options.Version = "1.0.0";
+            options.DrainInterval = TimeSpan.FromSeconds(1);
+        });
+
+        var delivered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var app = builder.Build();
+        app.UseStepUpRequestLogging();
+        app.Map(new PathString("/audit"), branch => branch.Run(async context =>
+        {
+            using var envelope = await JsonDocument.ParseAsync(context.Request.Body);
+            Console.WriteLine(Encoding.UTF8.GetString(envelope.RootElement.GetProperty("payload").GetBytesFromBase64()));
+            delivered.TrySetResult();
+            context.Response.StatusCode = StatusCodes.Status200OK;
+        }));
+
+        await app.StartAsync();
+        using (var scope = app.Services.CreateScope())
+        {
+            var audit = scope.ServiceProvider.GetRequiredService<IAuditLogger<Program>>();
+            await audit.AuditAsync(AuditEvent.Success("smoke.run", "u", "user") with { Data = new Dictionary<string, object?> { ["attempt"] = 1 } });
+        }
+
+        app.Logger.LogWarning("smoke-marker");
+        var completed = await Task.WhenAny(delivered.Task, Task.Delay(TimeSpan.FromSeconds(60))) == delivered.Task;
+        await app.StopAsync();
+        return completed ? 0 : 1;
+
+        internal sealed class IdentityEncryptor : IAuditPayloadEncryptor
+        {
+            public ValueTask<byte[]> EncryptAsync(ReadOnlyMemory<byte> payload) => ValueTask.FromResult(payload.ToArray());
+        }
+        """;
+
     [Fact]
     public async Task ConsumerOfOnlyThePackage_BuildsWithRuntimeGeneratorAndNoTelemetryAbstractionsAssets()
     {
@@ -162,21 +248,53 @@ public class PackageConsumerBuildTests(PackedStepUpLoggingPackage package) : ICl
         Assert.Contains(analyzers, analyzer => analyzer.PackageId == TelemetryAbstractions && analyzer.FileName == "Microsoft.Gen.Logging.dll");
     }
 
+    [Fact]
+    public async Task AotConsumer_WithSerilogSectionAndOneAuditRecord_PublishesWithoutLibraryWarningsAndRuns()
+    {
+        if (NativeAotToolchain.Current() is { } missingToolchain)
+        {
+            Assert.Skip(missingToolchain);
+        }
+
+        var consumer = WriteAotConsumer("aot-consumer");
+
+        var publish = await package.RunConsumerDotnetAsync(consumer,
+            "publish", "-c", "Release", "-o", "publish", "-p:StripSymbols=false", "-nologo", "-nodeReuse:false", "-p:UseSharedCompilation=false");
+
+        Assert.True(publish.ExitCode == 0, publish.Output);
+        var libraryWarnings = publish.Output.Split('\n')
+            .Where(line => line.Contains("warning IL", StringComparison.Ordinal) && line.Contains("Lukdrasil.StepUpLogging", StringComparison.Ordinal))
+            .ToList();
+        Assert.True(libraryWarnings.Count == 0, string.Join(Environment.NewLine, libraryWarnings));
+
+        var environment = new Dictionary<string, string>
+        {
+            ["SMOKE_PORT"] = FreeLoopbackPort().ToString(CultureInfo.InvariantCulture),
+            ["SMOKE_SPOOL"] = Path.Combine(consumer, "spool"),
+            ["SMOKE_LOGS"] = Path.Combine(consumer, "logs"),
+        };
+        var binary = Path.Combine(consumer, "publish", OperatingSystem.IsWindows() ? "AotConsumer.exe" : "AotConsumer");
+
+        var run = await package.RunConsumerProcessAsync(binary, consumer, environment);
+
+        Assert.True(run.ExitCode == 0, run.Output);
+        Assert.Contains("smoke-marker", run.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("\"auditEvent\":{\"action\":\"smoke.run\"", run.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("\"data\":{\"attempt\":1}", run.StandardOutput, StringComparison.Ordinal);
+        Assert.DoesNotContain("Unknown configuration key", run.StandardOutput, StringComparison.Ordinal);
+
+        foreach (var formatterFile in new[] { "compact.json", "rendered-compact.json", "json.json" })
+        {
+            Assert.Contains("smoke-marker", File.ReadAllText(Path.Combine(consumer, "logs", formatterFile)), StringComparison.Ordinal);
+        }
+    }
+
     private string WriteConsumer(string name, string extraPackageReferences)
     {
         var directory = Path.Combine(package.Root, name);
         Directory.CreateDirectory(directory);
 
-        File.WriteAllText(Path.Combine(directory, "nuget.config"), $"""
-            <?xml version="1.0" encoding="utf-8"?>
-            <configuration>
-              <packageSources>
-                <clear />
-                <add key="packtest" value="{package.FeedPath}" />
-                <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
-              </packageSources>
-            </configuration>
-            """);
+        WriteNuGetConfig(directory, package.FeedPath);
 
         File.WriteAllText(Path.Combine(directory, "PackTestConsumer.csproj"), $"""
             <Project Sdk="Microsoft.NET.Sdk">
@@ -193,6 +311,51 @@ public class PackageConsumerBuildTests(PackedStepUpLoggingPackage package) : ICl
         File.WriteAllText(Path.Combine(directory, "Log.cs"), LoggerMessageSource);
 
         return directory;
+    }
+
+    private static void WriteNuGetConfig(string directory, string feedPath) =>
+        File.WriteAllText(Path.Combine(directory, "nuget.config"), $"""
+            <?xml version="1.0" encoding="utf-8"?>
+            <configuration>
+              <packageSources>
+                <clear />
+                <add key="packtest" value="{feedPath}" />
+                <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+              </packageSources>
+            </configuration>
+            """);
+
+    private string WriteAotConsumer(string name)
+    {
+        var directory = Path.Combine(package.Root, name);
+        Directory.CreateDirectory(directory);
+
+        WriteNuGetConfig(directory, package.FeedPath);
+
+        File.WriteAllText(Path.Combine(directory, "AotConsumer.csproj"), $"""
+            <Project Sdk="Microsoft.NET.Sdk.Web">
+              <PropertyGroup>
+                <TargetFramework>net11.0</TargetFramework>
+                <Nullable>enable</Nullable>
+                <ImplicitUsings>enable</ImplicitUsings>
+                <PublishAot>true</PublishAot>
+              </PropertyGroup>
+              <ItemGroup>
+                <PackageReference Include="Lukdrasil.StepUpLogging" Version="{package.Version}" />
+              </ItemGroup>
+            </Project>
+            """);
+
+        File.WriteAllText(Path.Combine(directory, "Program.cs"), AotConsumerProgram);
+
+        return directory;
+    }
+
+    private static int FreeLoopbackPort()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        return ((IPEndPoint)listener.LocalEndpoint).Port;
     }
 
     private Task<(int ExitCode, string Output, string StandardOutput)> BuildAsync(string consumer) =>

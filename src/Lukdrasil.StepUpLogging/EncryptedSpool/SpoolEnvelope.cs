@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Lukdrasil.StepUpLogging.Audit.EncryptedSpool;
@@ -23,4 +24,15 @@ internal sealed record SpoolEnvelope
     /// </summary>
     [JsonPropertyName("payload")]
     public required byte[] Payload { get; init; }
+
+    /// <summary>Serializes this envelope to the bytes the spool stores on disk.</summary>
+    public byte[] ToUtf8Bytes() => JsonSerializer.SerializeToUtf8Bytes(this, SpoolEnvelopeJsonContext.Default.SpoolEnvelope);
+
+    /// <summary>
+    /// Reads an envelope from the bytes the spool stores on disk: <see langword="null"/> for the
+    /// JSON literal <c>null</c>, a <see cref="JsonException"/> for unparseable
+    /// input or a missing required member.
+    /// </summary>
+    public static SpoolEnvelope? FromUtf8Bytes(ReadOnlySpan<byte> utf8Json) =>
+        JsonSerializer.Deserialize(utf8Json, SpoolEnvelopeJsonContext.Default.SpoolEnvelope);
 }

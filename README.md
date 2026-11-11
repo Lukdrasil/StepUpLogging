@@ -1057,6 +1057,44 @@ ordinary SSDs, more on network storage, and it lands **on the business path** â€
 (mutating operations, not every request), but account for it: nobody will guess that audit is the
 source of the latency until they measure it.
 
+## Native AOT
+
+The library builds with `IsAotCompatible` and works in an application published with
+`<PublishAot>true</PublishAot>` (ADR 0035):
+
+- **The `Serilog` section needs no `Using` for the library's own sinks and enrichers.** In a native
+  image there is no assembly scanning, so every `ReadFrom.Configuration` call is handed the Serilog
+  assemblies the library references (Console, File, Async, OpenTelemetry, the Thread, Environment,
+  Process and OpenTelemetry enrichers, Compact formatting). Under JIT nothing changes.
+- **Formatter and console theme type strings of those packages (and `JsonFormatter` from Serilog core) work in a native image**:
+  `CompactJsonFormatter`, `RenderedCompactJsonFormatter`, `Serilog.Formatting.Json.JsonFormatter`
+  and the `ConsoleTheme`, `AnsiConsoleTheme` and `SystemConsoleTheme` members such as
+  `Serilog.Sinks.SystemConsole.Themes.AnsiConsoleTheme::Code, Serilog.Sinks.Console`. A type string
+  from any other package (for example a formatter from `Serilog.Expressions`) must be rooted by the
+  application, for example with `<TrimmerRootAssembly Include="..." />`.
+- **Any other config-only sink or enricher must be named in `Serilog:Using`** and its assembly rooted
+  with `<TrimmerRootAssembly Include="..." />`, or configured in code through the `configure` hook.
+  That includes a Serilog package the library pulls in only transitively, such as
+  `Serilog.Sinks.Debug`, and the config names of `Serilog.Exceptions` and
+  `Serilog.Enrichers.CallStack`, which the native reader leaves out on purpose; use the
+  `EnrichWithExceptionDetails` and `EnrichWithCallStack` options instead.
+- **The encrypted spool writes through source-generated JSON** with the same bytes as before. The
+  values of `AuditEvent.Data`, `OldValues` and `NewValues` must be one of the declared types: `string`,
+  `bool`, `byte`, `short`, `int`, `long`, `uint`, `ulong`, `float`, `double`, `decimal`, `Guid`, `DateTime`, `DateTimeOffset`,
+  `DateOnly`, `TimeOnly`, `TimeSpan`, `JsonElement`, `Dictionary<string, object?>`, `object?[]`,
+  `List<object?>`, `string[]` or `int[]`. An undeclared type throws `NotSupportedException` in a
+  native image (under JIT it still serializes by reflection). Pass a DTO as a `JsonElement`:
+  `JsonSerializer.SerializeToElement(dto, MyJsonContext.Default.MyDto)`.
+- **`IAuditLogger<T>` needs a reference-type `T`.**
+
+Features that rely on reflection-based dependencies, which report their own trim warnings and may
+not work fully in a native image:
+
+- Serilog.Settings.Configuration (the `Serilog` section itself).
+- Serilog.Exceptions (`EnrichWithExceptionDetails`).
+- Serilog.Enrichers.CallStack (`EnrichWithCallStack`).
+- Serilog destructuring (`{@x}` in a message template).
+
 ## Performance
 
 Benchmark results (k6 load test, 50 VUs, 3 minutes):

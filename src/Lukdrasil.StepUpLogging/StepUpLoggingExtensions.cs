@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Diagnostics.Metrics;
 using System.IO;
 using System.Linq;
@@ -167,7 +168,7 @@ public static class StepUpLoggingExtensions
     /// built, on the same collection Program.cs already registered on — call
     /// <c>services.RemoveAll&lt;IAuditEventSink&gt;()</c> first to substitute a test double.
     /// </exception>
-    public static IHostApplicationBuilder AddAuditLogging<TSink>(
+    public static IHostApplicationBuilder AddAuditLogging<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] TSink>(
         this IHostApplicationBuilder builder,
         ServiceLifetime sinkLifetime = ServiceLifetime.Scoped)
         where TSink : class, IAuditEventSink
@@ -279,7 +280,7 @@ public static class StepUpLoggingExtensions
             // unchanged.
             var (rootConfig, gatedConfig) = SplitSerilogConfiguration(builder.Configuration);
 
-            lc.ReadFrom.Configuration(rootConfig)
+            SerilogConfigurationAssemblies.ReadSerilogSection(lc, rootConfig)
               .MinimumLevel.Verbose();
 
             var needsEnrichment = EnrichmentGate.For(stepUpController.LevelSwitch, stepUpController.StepUpLevel, configure, builder.Configuration);
@@ -322,7 +323,7 @@ public static class StepUpLoggingExtensions
             // Config-declared WriteTo sinks join the library's own output sinks behind the LevelSwitch.
             // gatedConfig carries only WriteTo + Using (no MinimumLevel/Enrich), so the inner logger
             // stays Verbose and does not double-enrich (events arrive already enriched from the root).
-            stepUpInnerCfg.ReadFrom.Configuration(gatedConfig);
+            SerilogConfigurationAssemblies.ReadSerilogSection(stepUpInnerCfg, gatedConfig);
             ConfigureOutputSinks(stepUpInnerCfg, builder, logFilePath, opts);
             stepUpInnerCfg.MinimumLevel.Verbose();
             // AlwaysOn never steps up (Trigger() no-ops, the switch starts at StepUpLevel), so nothing
@@ -546,7 +547,7 @@ public static class StepUpLoggingExtensions
         var cfg = new LoggerConfiguration().MinimumLevel.Verbose();
         cfg.Enrich.FromLogContext();
         ApplyCommonEnrichers(cfg.Enrich, builder, opts, redactionPatterns);
-        cfg.ReadFrom.Configuration(gatedConfig);
+        SerilogConfigurationAssemblies.ReadSerilogSection(cfg, gatedConfig);
         ConfigureOutputSinks(cfg, builder, logFilePath, opts);
         return cfg.CreateLogger();
     }

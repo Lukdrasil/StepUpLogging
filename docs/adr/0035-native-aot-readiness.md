@@ -1,0 +1,39 @@
+# ADR 0035 - Native AOT readiness
+
+- Status: Accepted
+- Date: 2026-11-11
+
+## Context
+
+Published with `PublishAot=true`, a consumer of the library aborts at startup on any `Serilog` section without
+`Serilog:Using`: `ReadFrom.Configuration` scans for sink assemblies and a native image has nothing to scan. The
+encrypted spool serializes with reflection-based System.Text.Json, which a native image switches off.
+
+## Decision
+
+**D1. Explicit reader assemblies only in a native image.** When `RuntimeFeature.IsDynamicCodeSupported` is false,
+every `ReadFrom.Configuration` call gets `ConfigurationReaderOptions` with the Serilog assemblies the library
+references directly, except those `SerilogConfigurationAssemblies.DeliberateExclusions` names with a reason (the
+reader and host integrations, and the reflection-based Serilog.Exceptions and Serilog.Enrichers.CallStack), plus each
+non-blank `Serilog:Using` entry loaded by name; the explicit reader ignores `Using` on its own, so a package the
+library pulls in only transitively (such as Serilog.Sinks.Debug) needs a `Using` entry. A unit test keeps the table
+and the exclusions equal to the library's Serilog references. Under JIT the call is unchanged, so a sink found by
+scanning without `Using` keeps working. In a native image the reader also roots the formatter and console theme types of the table's
+assemblies that the section can name by type string (`CompactJsonFormatter`, `RenderedCompactJsonFormatter`,
+`JsonFormatter`, the console themes); a type string from any other package needs the application to root it.
+
+**D2. Two source-generated spool contexts.** The envelope context has no naming policy and the payload context uses
+camelCase, mirroring the two option sets they replace; the wire bytes are unchanged.
+
+**D3. Payload reflection fallback where reflection JSON is on.** `AuditEvent.Data`, `OldValues` and `NewValues`
+hold `object?` values. The payload context declares common value types; while
+`JsonSerializer.IsReflectionEnabledByDefault` is true a reflection resolver follows it, so a JIT caller's own types
+serialize as before. In a native image an undeclared value type throws `NotSupportedException`; no public resolver
+hook is added.
+
+**D4. Configuration binding generator** replaces the reflection binder for `SerilogStepUp`.
+
+## Consequences
+
+JIT and native behaviour differ for config-only sinks not named in `Using` and for undeclared `Data` value types.
+An AOT publish-and-run consumer test guards the native path.
