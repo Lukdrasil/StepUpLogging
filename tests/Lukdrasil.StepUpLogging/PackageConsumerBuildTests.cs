@@ -140,11 +140,25 @@ public class PackageConsumerBuildTests(PackedStepUpLoggingPackage package) : ICl
         using Lukdrasil.StepUpLogging.Audit.EncryptedSpool;
 
         var port = Environment.GetEnvironmentVariable("SMOKE_PORT")!;
+        var logs = Environment.GetEnvironmentVariable("SMOKE_LOGS")!;
         var builder = WebApplication.CreateBuilder(args);
         builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["Serilog:MinimumLevel:Default"] = "Information",
             ["Serilog:WriteTo:0:Name"] = "Console",
+            ["Serilog:WriteTo:0:Args:theme"] = "Serilog.Sinks.SystemConsole.Themes.AnsiConsoleTheme::Code, Serilog.Sinks.Console",
+            ["Serilog:WriteTo:1:Name"] = "File",
+            ["Serilog:WriteTo:1:Args:path"] = Path.Combine(logs, "compact.json"),
+            ["Serilog:WriteTo:1:Args:shared"] = "true",
+            ["Serilog:WriteTo:1:Args:formatter"] = "Serilog.Formatting.Compact.CompactJsonFormatter, Serilog.Formatting.Compact",
+            ["Serilog:WriteTo:2:Name"] = "File",
+            ["Serilog:WriteTo:2:Args:path"] = Path.Combine(logs, "rendered-compact.json"),
+            ["Serilog:WriteTo:2:Args:shared"] = "true",
+            ["Serilog:WriteTo:2:Args:formatter"] = "Serilog.Formatting.Compact.RenderedCompactJsonFormatter, Serilog.Formatting.Compact",
+            ["Serilog:WriteTo:3:Name"] = "File",
+            ["Serilog:WriteTo:3:Args:path"] = Path.Combine(logs, "json.json"),
+            ["Serilog:WriteTo:3:Args:shared"] = "true",
+            ["Serilog:WriteTo:3:Args:formatter"] = "Serilog.Formatting.Json.JsonFormatter, Serilog",
             ["SerilogStepUp:EnableConsoleLogging"] = "false",
             ["SerilogStepUp:EnableOtlpExporter"] = "false",
         });
@@ -257,6 +271,7 @@ public class PackageConsumerBuildTests(PackedStepUpLoggingPackage package) : ICl
         {
             ["SMOKE_PORT"] = FreeLoopbackPort().ToString(CultureInfo.InvariantCulture),
             ["SMOKE_SPOOL"] = Path.Combine(consumer, "spool"),
+            ["SMOKE_LOGS"] = Path.Combine(consumer, "logs"),
         };
         var binary = Path.Combine(consumer, "publish", OperatingSystem.IsWindows() ? "AotConsumer.exe" : "AotConsumer");
 
@@ -267,6 +282,11 @@ public class PackageConsumerBuildTests(PackedStepUpLoggingPackage package) : ICl
         Assert.Contains("\"auditEvent\":{\"action\":\"smoke.run\"", run.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("\"data\":{\"attempt\":1}", run.StandardOutput, StringComparison.Ordinal);
         Assert.DoesNotContain("Unknown configuration key", run.StandardOutput, StringComparison.Ordinal);
+
+        foreach (var formatterFile in new[] { "compact.json", "rendered-compact.json", "json.json" })
+        {
+            Assert.Contains("smoke-marker", File.ReadAllText(Path.Combine(consumer, "logs", formatterFile)), StringComparison.Ordinal);
+        }
     }
 
     private string WriteConsumer(string name, string extraPackageReferences)
