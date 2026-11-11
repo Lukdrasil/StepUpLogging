@@ -48,7 +48,7 @@ internal sealed class SpoolWriter
     /// the caller knows what the record will cost before it reserves room for it.
     /// </summary>
     internal static SpoolRecord Prepare(SpoolEnvelope envelope) =>
-        new(SpoolFile.NameFor(envelope), JsonSerializer.SerializeToUtf8Bytes(envelope));
+        new(SpoolFile.NameFor(envelope), envelope.ToUtf8Bytes());
 
     /// <summary>Writes <paramref name="record"/> and returns only once it is durably on disk and in place.</summary>
     public async Task WriteAsync(SpoolRecord record)
@@ -114,7 +114,7 @@ internal sealed class SpoolWriter
         SpoolEnvelope? envelope;
         try
         {
-            envelope = JsonSerializer.Deserialize<SpoolEnvelope>(File.ReadAllBytes(temporaryPath));
+            envelope = SpoolEnvelope.FromUtf8Bytes(File.ReadAllBytes(temporaryPath));
         }
         catch (JsonException)
         {

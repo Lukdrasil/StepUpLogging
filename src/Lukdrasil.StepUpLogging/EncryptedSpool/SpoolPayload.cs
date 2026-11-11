@@ -21,9 +21,6 @@ internal sealed record SpoolPayload
     [JsonPropertyName("auditEvent")]
     public required AuditEvent AuditEvent { get; init; }
 
-    private static readonly JsonSerializerOptions SerializerOptions =
-        new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
-
     /// <summary>Serializes this payload to the bytes handed to the encryption port.</summary>
-    public byte[] ToUtf8Bytes() => JsonSerializer.SerializeToUtf8Bytes(this, SerializerOptions);
+    public byte[] ToUtf8Bytes() => JsonSerializer.SerializeToUtf8Bytes(this, SpoolPayloadJson.PayloadTypeInfo);
 }
