@@ -1,3 +1,14 @@
+# Migrating to v7.0.0
+
+## The package targets .NET 11
+
+**What changed.** 7.0.0 ships only for `net11.0`. A project targeting `net10.0` fails restore with NU1202.
+
+**Why.** The library now builds against the .NET 11 shared framework and Microsoft.Extensions 11.0 packages.
+
+**Migrate.** Set `<TargetFramework>net11.0</TargetFramework>` and build with the .NET 11 SDK. A project that must stay
+on .NET 10 keeps `Lukdrasil.StepUpLogging` 6.4.1. No option, log output or audit wire format changed.
+
 # Migrating to v6.0.0
 
 ## `DurationSeconds` defaults to 3
