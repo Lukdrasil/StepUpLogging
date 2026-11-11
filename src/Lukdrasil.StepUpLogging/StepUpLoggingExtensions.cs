@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Diagnostics.Metrics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -960,6 +961,15 @@ public static class StepUpLoggingExtensions
         };
 
     /// <summary>
+    /// Resolves the longest wait for one OTLP export from the <c>OTEL_EXPORTER_OTLP_TIMEOUT</c> value in
+    /// milliseconds. A missing, unparseable or non-positive value falls back to the spec default of 10 s.
+    /// </summary>
+    internal static TimeSpan ResolveOtlpTimeout(string? milliseconds)
+        => int.TryParse(milliseconds, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) && value > 0
+            ? TimeSpan.FromMilliseconds(value)
+            : TimeSpan.FromSeconds(10);
+
+    /// <summary>
     /// The console formatter for <paramref name="format"/>: compact JSON, or one line with the keyed trace id in
     /// <paramref name="traceFormat"/>, the rendered message and the <paramref name="textProperties"/> the event has,
     /// under short line keys when <paramref name="detail"/> is <see cref="RequestSummaryDetail.Minimal"/> (ADR 0034).
@@ -985,6 +995,8 @@ public static class StepUpLoggingExtensions
 
                 otlpOptions.Endpoint = endpoint;
                 otlpOptions.Protocol = ResolveOtlpProtocol(protocol);
+                otlpOptions.HttpMessageHandler = new OtlpExportTimeoutHandler(
+                    ResolveOtlpTimeout(Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_TIMEOUT")));
 
                 var headers = ParseOtlpHeaders(Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_HEADERS"));
                 foreach (var header in headers)

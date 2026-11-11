@@ -431,6 +431,13 @@ public sealed class StepUpLoggingOptions
     public bool SetStaticLogger { get; set; } = false;
 
     /// <summary>
+    /// When true, the startup report writes its one Information line with the effective configuration to every
+    /// output. Set it to false in a command-line tool, where that line is written once per command. The report's
+    /// Warnings (unknown keys, options with no effect) are written either way. Default: true.
+    /// </summary>
+    public bool WriteStartupSummary { get; set; } = true;
+
+    /// <summary>
     /// Upper bound, in seconds, on how long step-up may stay continuously active. When exceeded the
     /// level is forced back to BaseLevel and further triggers are ignored for StepUpCooldownSeconds.
     /// Default: 0 (no bound).

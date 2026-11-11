@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
+using SilentCollector = Lukdrasil.StepUpLogging.Tests.OtlpExportTimeoutTests.SilentCollector;
 
 namespace Lukdrasil.StepUpLogging.Tests;
 
@@ -203,6 +204,34 @@ public class PackageConsumerBuildTests(PackedStepUpLoggingPackage package) : ICl
         }
         """;
 
+    private const string CliConsumerProgram = """
+        using System.Diagnostics;
+        using Lukdrasil.StepUpLogging;
+        using Microsoft.Extensions.Configuration;
+        using Microsoft.Extensions.DependencyInjection;
+        using Microsoft.Extensions.Hosting;
+        using Microsoft.Extensions.Logging;
+
+        var builder = Host.CreateApplicationBuilder(args);
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["SerilogStepUp:EnableConsoleLogging"] = "true",
+            ["SerilogStepUp:ConsoleFormat"] = "Text",
+            ["SerilogStepUp:WriteStartupSummary"] = "false",
+        });
+        builder.AddStepUpLogging();
+
+        using var host = builder.Build();
+        var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Cli");
+        using (new Activity("cli-command").Start())
+        {
+            logger.LogInformation("cli-held-back");
+            logger.LogError("cli-marker");
+        }
+
+        return 0;
+        """;
+
     [Fact]
     public async Task ConsumerOfOnlyThePackage_BuildsWithRuntimeGeneratorAndNoTelemetryAbstractionsAssets()
     {
@@ -256,7 +285,7 @@ public class PackageConsumerBuildTests(PackedStepUpLoggingPackage package) : ICl
             Assert.Skip(missingToolchain);
         }
 
-        var consumer = WriteAotConsumer("aot-consumer");
+        var consumer = WriteAotConsumer("aot-consumer", "Microsoft.NET.Sdk.Web", AotConsumerProgram);
 
         var publish = await package.RunConsumerDotnetAsync(consumer,
             "publish", "-c", "Release", "-o", "publish", "-p:StripSymbols=false", "-nologo", "-nodeReuse:false", "-p:UseSharedCompilation=false");
@@ -287,6 +316,46 @@ public class PackageConsumerBuildTests(PackedStepUpLoggingPackage package) : ICl
         {
             Assert.Contains("smoke-marker", File.ReadAllText(Path.Combine(consumer, "logs", formatterFile)), StringComparison.Ordinal);
         }
+    }
+
+    [Fact]
+    public async Task AotCliConsumer_OnTheGenericHostWithASilentCollector_PublishesWithoutLibraryWarningsAndExitsWithinTheOtlpTimeout()
+    {
+        if (NativeAotToolchain.Current() is { } missingToolchain)
+        {
+            Assert.Skip(missingToolchain);
+        }
+
+        var consumer = WriteAotConsumer("aot-cli-consumer", "Microsoft.NET.Sdk", CliConsumerProgram);
+
+        var publish = await package.RunConsumerDotnetAsync(consumer,
+            "publish", "-c", "Release", "-o", "publish", "-p:StripSymbols=false", "-nologo", "-nodeReuse:false", "-p:UseSharedCompilation=false");
+
+        Assert.True(publish.ExitCode == 0, publish.Output);
+        var libraryWarnings = publish.Output.Split('\n')
+            .Where(line => line.Contains("warning IL", StringComparison.Ordinal) && line.Contains("Lukdrasil.StepUpLogging", StringComparison.Ordinal))
+            .ToList();
+        Assert.True(libraryWarnings.Count == 0, string.Join(Environment.NewLine, libraryWarnings));
+
+        using var collector = new SilentCollector();
+        var environment = new Dictionary<string, string>
+        {
+            ["OTEL_EXPORTER_OTLP_ENDPOINT"] = collector.Endpoint,
+            ["OTEL_EXPORTER_OTLP_PROTOCOL"] = "grpc",
+            ["OTEL_EXPORTER_OTLP_TIMEOUT"] = "500",
+        };
+        var binary = Path.Combine(consumer, "publish", OperatingSystem.IsWindows() ? "AotConsumer.exe" : "AotConsumer");
+
+        var stopwatch = Stopwatch.StartNew();
+        var run = await package.RunConsumerProcessAsync(binary, consumer, environment);
+        stopwatch.Stop();
+
+        Assert.True(run.ExitCode == 0, run.Output);
+        Assert.True(collector.Accepted > 0, "the native binary never connected to the collector");
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(30), $"the native binary ran {stopwatch.Elapsed.TotalSeconds:F1} s");
+        Assert.Contains("cli-marker", run.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("cli-held-back", run.StandardOutput, StringComparison.Ordinal);
+        Assert.DoesNotContain("StepUp logging:", run.StandardOutput, StringComparison.Ordinal);
     }
 
     private string WriteConsumer(string name, string extraPackageReferences)
@@ -325,7 +394,7 @@ public class PackageConsumerBuildTests(PackedStepUpLoggingPackage package) : ICl
             </configuration>
             """);
 
-    private string WriteAotConsumer(string name)
+    private string WriteAotConsumer(string name, string sdk, string program)
     {
         var directory = Path.Combine(package.Root, name);
         Directory.CreateDirectory(directory);
@@ -333,8 +402,9 @@ public class PackageConsumerBuildTests(PackedStepUpLoggingPackage package) : ICl
         WriteNuGetConfig(directory, package.FeedPath);
 
         File.WriteAllText(Path.Combine(directory, "AotConsumer.csproj"), $"""
-            <Project Sdk="Microsoft.NET.Sdk.Web">
+            <Project Sdk="{sdk}">
               <PropertyGroup>
+                <OutputType>Exe</OutputType>
                 <TargetFramework>net11.0</TargetFramework>
                 <Nullable>enable</Nullable>
                 <ImplicitUsings>enable</ImplicitUsings>
@@ -346,7 +416,7 @@ public class PackageConsumerBuildTests(PackedStepUpLoggingPackage package) : ICl
             </Project>
             """);
 
-        File.WriteAllText(Path.Combine(directory, "Program.cs"), AotConsumerProgram);
+        File.WriteAllText(Path.Combine(directory, "Program.cs"), program);
 
         return directory;
     }

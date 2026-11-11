@@ -233,6 +233,7 @@ Every option, with its default, is listed in [Configuration Options](#configurat
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Collector endpoint; setting it turns OTLP export on | none (OTLP export off) |
 | `OTEL_EXPORTER_OTLP_PROTOCOL` | `grpc` or `http/protobuf` | `grpc` |
 | `OTEL_EXPORTER_OTLP_HEADERS` | Headers, `key1=value1,key2=value2` | none |
+| `OTEL_EXPORTER_OTLP_TIMEOUT` | Longest wait for one export, in milliseconds | `10000` |
 | `OTEL_SERVICE_NAME` | Service name | `unknown_service:<process name>` |
 | `OTEL_RESOURCE_ATTRIBUTES` | Resource attributes, `key1=value1,key2=value2` | none |
 
@@ -245,6 +246,7 @@ OpenTelemetry specification, so `Authorization=Basic%20QWxhZGRpbg%3D%3D` reaches
 When the logger is built, the library writes through its own output, whatever the current level:
 
 - One `Information` line with the effective configuration. The OTLP endpoint is shown as scheme, host and port only.
+  `WriteStartupSummary` `false` leaves this line out; the Warnings below are written either way.
 - A `Warning` for each key under `SerilogStepUp` that matches no option, such as a misspelled `BaseLvel` or
   `OtlpEndpoint`. The key is ignored.
 - A `Warning` for an option set to a value that has no effect: `ConsoleFormat` with `EnableConsoleLogging`
@@ -1057,6 +1059,56 @@ ordinary SSDs, more on network storage, and it lands **on the business path** â€
 (mutating operations, not every request), but account for it: nobody will guess that audit is the
 source of the latency until they measure it.
 
+## Generic host and command-line tools
+
+`AddStepUpLogging` works on `Host.CreateApplicationBuilder()` without an HTTP pipeline, for a worker or a
+command-line tool; `UseStepUpRequestLogging` is then not called.
+
+- **Start one `Activity` per operation.** The pre-error buffer keys its events by `Activity.Current.TraceId`.
+  Without an activity every event shares one `__global__` buffer, so an error flushes whatever any operation
+  held back before it.
+
+  ```csharp
+  using (new Activity("import-orders").Start())
+  {
+      await importer.RunAsync();
+  }
+  ```
+
+- **Set `OTEL_EXPORTER_OTLP_TIMEOUT` low.** Each OTLP export waits at most this many milliseconds (default
+  `10000`). Disposing the host flushes two loggers, so a process whose collector does not answer exits after
+  about twice the timeout: set `OTEL_EXPORTER_OTLP_TIMEOUT=1000` for a tool that should exit within seconds
+  (ADR 0036).
+- **Turn off the startup summary.** `SerilogStepUp__WriteStartupSummary=false` stops the one `Information` line
+  per command, and the OTLP export it costs when the command logs nothing else. Unknown keys and options with no
+  effect are still warned.
+- **A size-limited text file** comes from a `Serilog:WriteTo` File sink rather than `logFilePath` (compact JSON,
+  daily, 30 files, no size limit). `shared: true` lets several processes of the tool write the same file:
+
+  ```json
+  {
+    "Serilog": {
+      "WriteTo": [
+        {
+          "Name": "File",
+          "Args": {
+            "path": "logs/tool-.log",
+            "rollingInterval": "Day",
+            "fileSizeLimitBytes": 10485760,
+            "rollOnFileSizeLimit": true,
+            "retainedFileCountLimit": 10,
+            "shared": true,
+            "outputTemplate": "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}"
+          }
+        }
+      ]
+    }
+  }
+  ```
+
+  Like every `Serilog:WriteTo` sink it sits behind the step-up level (ADR 0005), and it works in a native image
+  without a `Using` entry.
+
 ## Native AOT
 
 The library builds with `IsAotCompatible` and works in an application published with
@@ -1229,6 +1281,7 @@ the entries you still want in it.
 | `TreatServerErrorStatusAsError` | `true` | - | When `false`, a request completing with status >= 500 but **no** exception is logged at Warning instead of Error, so it does not trigger step-up. Set this in a reverse proxy / BFF where most 5xx are relayed from a backend. An unhandled exception is still Error. |
 | **Hosting** |
 | `SetStaticLogger` | `false` | - | When `true`, the built logger is assigned to Serilog's static `Log.Logger` and host dispose calls `Log.CloseAndFlush()` (pre-5.0.0 behavior). By default `Log.Logger` is left unchanged: log through DI `ILogger<T>`. Read once at registration. See [MIGRATION.md](MIGRATION.md#migrating-to-v500). |
+| `WriteStartupSummary` | `true` | `SerilogStepUp__WriteStartupSummary` | When `false`, the startup report leaves out its `Information` line with the effective configuration; its Warnings are still written. See [Generic host and command-line tools](#generic-host-and-command-line-tools) |
 | **Service Identification** |
 | `ServiceVersion` | `null` | - | `ServiceVersion` property on every event; not added when unset |
 | `ServiceInstanceId` | `null` | - | `ServiceInstanceId` property on every event; not added when unset |

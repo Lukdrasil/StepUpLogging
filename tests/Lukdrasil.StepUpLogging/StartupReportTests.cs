@@ -22,6 +22,22 @@ public class StartupReportTests
     }
 
     [Fact]
+    public void WriteStartupSummaryFalse_WritesNoSummary()
+    {
+        using var run = Start(("WriteStartupSummary", "false"));
+
+        Assert.Empty(run.WithTemplate(StartupReport.SummaryTemplate));
+    }
+
+    [Fact]
+    public void WriteStartupSummaryFalse_StillWarnsAnUnknownKey()
+    {
+        using var run = Start(("WriteStartupSummary", "false"), ("OtlpEndpoint", "http://collector:4317"));
+
+        Assert.Single(run.WithTemplate(StartupReport.UnknownKeyTemplate));
+    }
+
+    [Fact]
     public void UnknownKey_IsWarnedByItsFullName()
     {
         using var run = Start(("OtlpEndpoint", "http://collector:4317"));

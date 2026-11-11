@@ -6,6 +6,15 @@ Releases from 1.8.0 onward are recorded here. Entries backfilled from each relea
 `PackageReleaseNotes` and, where those were not updated per release, from the commits between tags.
 Tags before 1.8.0 predate this file.
 
+## [7.2.0] - 2026-11-11
+
+### Added
+- `WriteStartupSummary` (default `true`): `false` leaves out the startup report's `Information` line with the effective configuration, so a command-line tool does not write it, and export it over OTLP, once per command. The report's Warnings for unknown keys and options with no effect are still written.
+- README section "Generic host and command-line tools": one `Activity` per operation for the pre-error buffer, the OTLP exit bound, the new option and a size-limited text File sink through `Serilog:WriteTo`.
+
+### Fixed
+- **Disposing the host no longer waits 200 s for an OTLP collector that accepts the connection and never answers.** The Serilog OTLP sink waits at most `OTEL_EXPORTER_OTLP_TIMEOUT` milliseconds (default 10000, per the OpenTelemetry specification) for one export instead of the 100 s `HttpClient` default, once for each of the two loggers that flush at dispose. A collector that answers within the timeout sees no change; an export slower than the timeout now fails, so raise the variable for a slow collector. See docs/adr/0036-otlp-export-timeout.md.
+
 ## [7.1.0] - 2026-11-11
 
 ### Added
