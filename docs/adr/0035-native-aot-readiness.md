@@ -13,8 +13,12 @@ encrypted spool serializes with reflection-based System.Text.Json, which a nativ
 
 **D1. Explicit reader assemblies only in a native image.** When `RuntimeFeature.IsDynamicCodeSupported` is false,
 every `ReadFrom.Configuration` call gets `ConfigurationReaderOptions` with the Serilog assemblies the library
-references plus each non-blank `Serilog:Using` entry loaded by name; the explicit reader ignores `Using` on its own.
-Under JIT the call is unchanged, so a sink found by scanning without `Using` keeps working.
+references directly, except those `SerilogConfigurationAssemblies.DeliberateExclusions` names with a reason (the
+reader and host integrations, and the reflection-based Serilog.Exceptions and Serilog.Enrichers.CallStack), plus each
+non-blank `Serilog:Using` entry loaded by name; the explicit reader ignores `Using` on its own, so a package the
+library pulls in only transitively (such as Serilog.Sinks.Debug) needs a `Using` entry. A unit test keeps the table
+and the exclusions equal to the library's Serilog references. Under JIT the call is unchanged, so a sink found by
+scanning without `Using` keeps working.
 
 **D2. Two source-generated spool contexts.** The envelope context has no naming policy and the payload context uses
 camelCase, mirroring the two option sets they replace; the wire bytes are unchanged.
