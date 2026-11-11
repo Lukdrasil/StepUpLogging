@@ -18,7 +18,9 @@ reader and host integrations, and the reflection-based Serilog.Exceptions and Se
 non-blank `Serilog:Using` entry loaded by name; the explicit reader ignores `Using` on its own, so a package the
 library pulls in only transitively (such as Serilog.Sinks.Debug) needs a `Using` entry. A unit test keeps the table
 and the exclusions equal to the library's Serilog references. Under JIT the call is unchanged, so a sink found by
-scanning without `Using` keeps working.
+scanning without `Using` keeps working. In a native image the reader also roots the formatter and console theme types of the table's
+assemblies that the section can name by type string (`CompactJsonFormatter`, `RenderedCompactJsonFormatter`,
+`JsonFormatter`, the console themes); a type string from any other package needs the application to root it.
 
 **D2. Two source-generated spool contexts.** The envelope context has no naming policy and the payload context uses
 camelCase, mirroring the two option sets they replace; the wire bytes are unchanged.
