@@ -16,7 +16,7 @@
 ✅ **Sensitive data redaction** - Sensitive headers always, plus regex redaction of paths, query strings, route values and bodies, and optionally of application log properties  
 ✅ **Fails fast on bad configuration** - Invalid values stop the host with the key named; unknown keys are warned at startup  
 ✅ **Audit logging** - Optional encrypted, durable audit spool  
-✅ **.NET 10.0** - Built with modern C# 14 features
+✅ **.NET 11.0** - Built with modern C# 15 features
 
 ## Getting started
 

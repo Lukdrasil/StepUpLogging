@@ -1,6 +1,6 @@
 # Performance
 
-The benchmarks live in `tests/Lukdrasil.StepUpLogging.Benchmarks` (BenchmarkDotNet 0.15.8, .NET 10). They
+The benchmarks live in `tests/Lukdrasil.StepUpLogging.Benchmarks` (BenchmarkDotNet 0.15.8, .NET 11). They
 measure the library's hot paths in isolation so a change to `src/` can be compared against a recorded number.
 
 - [baseline.md](baseline.md): what the Logging and Audit suites measured, on which machine and commit.
