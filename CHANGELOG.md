@@ -6,6 +6,14 @@ Releases from 1.8.0 onward are recorded here. Entries backfilled from each relea
 `PackageReleaseNotes` and, where those were not updated per release, from the commits between tags.
 Tags before 1.8.0 predate this file.
 
+## [7.4.0] - 2026-11-13
+
+### Added
+- **The package targets `net10.0` and `net11.0`.** `lib/net10.0` is back, so a .NET 10 project can move from 6.4.1 to 7.4.0 and gets every 7.x change. On `net10.0` the package depends on Microsoft.Extensions.Http.Resilience 10.0.0, as 6.4.1 did; on `net11.0` on 11.0.0. The `buildTransitive` targets now ship framework-neutral under `buildTransitive/`.
+
+### Fixed
+- **Traces and metrics are exported when the app registers the OpenTelemetry SDK before `AddStepUpLogging()`.** With `EnableOtlpExporter` on and an SDK registration such as `AddOpenTelemetry().WithTracing(...).WithMetrics(...)` without an exporter, the library skipped its exporter and traces and metrics were silently not exported; logs still arrived through the Serilog OTLP sink. The library now adds an OTLP trace processor and metric reader to the app's tracer and meter providers, configured from the `OTEL_EXPORTER_OTLP_*` variables, unless the app registers `UseOtlpExporter()` or `AddOtlpExporter()` anywhere, before or after `AddStepUpLogging()`. The check runs when the providers are built, so an app exporter registered after `AddStepUpLogging()` is exported once and does not throw. An app whose SDK exports only to a non-OTLP backend while `EnableOtlpExporter` is on now also exports traces and metrics over OTLP; `EnableOtlpExporter` `false` stops that, together with the OTLP log export. Without a prior SDK registration nothing changes.
+
 ## [7.3.0] - 2026-11-13
 
 ### Added
