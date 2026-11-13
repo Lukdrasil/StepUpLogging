@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net11.0</TargetFramework>
+    <TargetFrameworks>net10.0;net11.0</TargetFrameworks>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <OutputType>Exe</OutputType>
@@ -25,8 +25,10 @@
     </PackageReference>
     <PackageReference Include="Microsoft.Testing.Platform.MSBuild" Version="2.5.3" />
     <PackageReference Include="xunit.v3.mtp-v2" Version="4.0.3" />
-    <PackageReference Include="Microsoft.AspNetCore.TestHost" Version="11.0.0" />
-    <PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="11.0.0" />
+    <PackageReference Include="Microsoft.AspNetCore.TestHost" Version="10.0.7" Condition="'$(TargetFramework)' == 'net10.0'" />
+    <PackageReference Include="Microsoft.AspNetCore.TestHost" Version="11.0.0" Condition="'$(TargetFramework)' == 'net11.0'" />
+    <PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="10.0.0" Condition="'$(TargetFramework)' == 'net10.0'" />
+    <PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="11.0.0" Condition="'$(TargetFramework)' == 'net11.0'" />
     <PackageReference Include="Serilog" Version="4.4.0" />
 
       <PackageReference Include="xunit.runner.visualstudio" Version="4.0.1">

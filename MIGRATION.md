@@ -9,6 +9,9 @@
 **Migrate.** Set `<TargetFramework>net11.0</TargetFramework>` and build with the .NET 11 SDK. A project that must stay
 on .NET 10 keeps `Lukdrasil.StepUpLogging` 6.4.1. No option, log output or audit wire format changed.
 
+From 7.4.0 the package ships for `net10.0` again, so a .NET 10 project can move from 6.4.1 to 7.4.0 without changing
+its target framework.
+
 # Migrating to v6.0.0
 
 ## `DurationSeconds` defaults to 3

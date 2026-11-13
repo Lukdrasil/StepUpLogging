@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net11.0</TargetFramework>
+    <TargetFrameworks>net10.0;net11.0</TargetFrameworks>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsAotCompatible>true</IsAotCompatible>
@@ -32,7 +32,7 @@
   <ItemGroup>
     <None Include="..\..\README.md" Pack="true" PackagePath="\" />
     <None Include="..\..\LICENSE" Pack="true" PackagePath="\" />
-    <None Update="buildTransitive\Lukdrasil.StepUpLogging.targets" Pack="true" PackagePath="buildTransitive/net11.0/Lukdrasil.StepUpLogging.targets" />
+    <None Include="buildTransitive\Lukdrasil.StepUpLogging.targets" Pack="true" PackagePath="buildTransitive/" Condition="'$(TargetFramework)' == ''" />
   </ItemGroup>
 
   <ItemGroup>
@@ -61,7 +61,8 @@
     <PackageReference Include="Serilog.Enrichers.Process" Version="3.0.0" />
     <PackageReference Include="Serilog.Enrichers.Environment" Version="3.0.1" />
     <PackageReference Include="Serilog.Enrichers.CallStack" Version="1.0.358" />
-    <PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="11.0.0" PrivateAssets="build;buildtransitive;analyzers;contentfiles" />
+    <PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="10.0.0" PrivateAssets="build;buildtransitive;analyzers;contentfiles" Condition="'$(TargetFramework)' == 'net10.0'" />
+    <PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="11.0.0" PrivateAssets="build;buildtransitive;analyzers;contentfiles" Condition="'$(TargetFramework)' == 'net11.0'" />
   </ItemGroup>
 
 </Project>

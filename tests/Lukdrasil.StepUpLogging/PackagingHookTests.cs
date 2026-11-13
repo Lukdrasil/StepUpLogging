@@ -4,10 +4,12 @@ namespace Lukdrasil.StepUpLogging.Tests;
 
 public class PackagingHookTests(PackedStepUpLoggingPackage package) : IClassFixture<PackedStepUpLoggingPackage>
 {
-    [Fact]
-    public async Task ConsumerResolvingPackageAssetsFirst_StillHasNoTelemetryAbstractionsAnalyzers()
+    [Theory]
+    [InlineData("net10.0")]
+    [InlineData("net11.0")]
+    public async Task ConsumerResolvingPackageAssetsFirst_StillHasNoTelemetryAbstractionsAnalyzers(string targetFramework)
     {
-        var consumer = Path.Combine(package.Root, "resolve-assets-first");
+        var consumer = Path.Combine(package.Root, $"resolve-assets-first-{targetFramework}");
         Directory.CreateDirectory(consumer);
 
         File.WriteAllText(Path.Combine(consumer, "nuget.config"), $"""
@@ -24,7 +26,7 @@ public class PackagingHookTests(PackedStepUpLoggingPackage package) : IClassFixt
         File.WriteAllText(Path.Combine(consumer, "PackTestConsumer.csproj"), $"""
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup>
-                <TargetFramework>net11.0</TargetFramework>
+                <TargetFramework>{targetFramework}</TargetFramework>
               </PropertyGroup>
               <ItemGroup>
                 <PackageReference Include="Lukdrasil.StepUpLogging" Version="{package.Version}" />

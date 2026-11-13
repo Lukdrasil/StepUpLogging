@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-`Lukdrasil.StepUpLogging` is a NuGet library for ASP.NET Core (.NET 11 / C# 15) that dynamically raises Serilog's minimum log level in response to errors and lowers it again after a configurable timeout. It is not an application — there is no runnable entry point in `src/`.
+`Lukdrasil.StepUpLogging` is a NuGet library for ASP.NET Core (multi-targets `net10.0;net11.0`) that dynamically raises Serilog's minimum log level in response to errors and lowers it again after a configurable timeout. It is not an application — there is no runnable entry point in `src/`.
 
 ## Commands
 
