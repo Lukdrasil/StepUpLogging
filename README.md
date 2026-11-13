@@ -266,6 +266,7 @@ The `UseStepUpRequestLogging()` middleware enriches each request with detailed c
 - **QueryString** - Query parameters (redacted based on `RedactionRegexes`)
 - **RouteParameters** - Route parameter values (e.g., `{id}`, `{role}`), redacted based on `RedactionRegexes`; a value whose text sits inside a redacted part of the path becomes `[REDACTED]`
 - **Headers** - HTTP request headers with automatic redaction of sensitive headers
+- **ClientIp** - `Connection.RemoteIpAddress`, or the first `X-Forwarded-For` entry with `TrustForwardedHeaders` (see [Security](#security)); left out when unknown
 - **RequestBody** - POST/PUT/PATCH bodies (when `CaptureRequestBody` is enabled and logging is stepped-up)
 
 ### Example Log Output
@@ -286,6 +287,7 @@ The `UseStepUpRequestLogging()` middleware enriches each request with detailed c
     "authorization": "[REDACTED]",
     "cookie": "[REDACTED]"
   },
+  "ClientIp": "198.51.100.100",
   "RequestBody": "{\"name\": \"John Doe\", \"password\": \"[REDACTED]\"}"
 }
 ```
