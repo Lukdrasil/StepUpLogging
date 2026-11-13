@@ -705,6 +705,10 @@ public static class StepUpLoggingExtensions
 
                 diagnosticContext.Set("Headers", RequestHeaderRedaction.RedactRequestHeaders(httpContext.Request.Headers, sensitiveHeaders, compiledPatterns, noteRedaction));
 
+                var (clientIp, _) = ExtractClientAddresses(httpContext, opts.TrustForwardedHeaders, compiledPatterns);
+                if (clientIp is not null)
+                    diagnosticContext.Set("ClientIp", clientIp);
+
                 if (redactionActivity is not null)
                 {
                     redactionActivity.SetTag("security.redaction_applied", true);
