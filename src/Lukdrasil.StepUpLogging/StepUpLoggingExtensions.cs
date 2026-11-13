@@ -19,7 +19,9 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Http;
 using Microsoft.Extensions.Options;
 using OpenTelemetry;
+using OpenTelemetry.Exporter;
 using OpenTelemetry.Metrics;
+using OpenTelemetry.Trace;
 using Serilog;
 using Serilog.Configuration;
 using Serilog.Core;
@@ -215,10 +217,17 @@ public static class StepUpLoggingExtensions
         builder.Configuration.GetSection(configSectionName).Bind(configSnapshot);
         configureOptions?.Invoke(configSnapshot);
 
-        if (configSnapshot.EnableOtlpExporter && !IsOpenTelemetryRegistered(builder.Services))
+        if (configSnapshot.EnableOtlpExporter)
         {
-            // Align with Aspire defaults: ensure OTLP exporter is registered when OTLP logging is enabled
-            builder.Services.AddOpenTelemetry().UseOtlpExporter();
+            if (IsOpenTelemetryRegistered(builder.Services))
+            {
+                AddOtlpExportersUnlessAppHasOne(builder.Services);
+            }
+            else
+            {
+                // Align with Aspire defaults: ensure OTLP exporter is registered when OTLP logging is enabled
+                builder.Services.AddOpenTelemetry().UseOtlpExporter();
+            }
         }
 
         // Standard options pipeline: bind the section, apply the caller's overrides, then validate at
@@ -897,6 +906,39 @@ public static class StepUpLoggingExtensions
             sd.ImplementationType is { Namespace: { } ns, Name: "OpenTelemetrySdkHostedService" or "TelemetryHostedService" } &&
             ns.StartsWith("OpenTelemetry.Extensions.Hosting", StringComparison.Ordinal));
     }
+
+    // The app registered the OpenTelemetry SDK first. Whether it exports over OTLP itself is decided when a provider
+    // is built, against the final service collection, so its UseOtlpExporter or AddOtlpExporter is seen whether it
+    // comes before or after AddStepUpLogging, and no second UseOtlpExporter registration makes OpenTelemetry throw.
+    private static void AddOtlpExportersUnlessAppHasOne(IServiceCollection services)
+    {
+        services.ConfigureOpenTelemetryTracerProvider((_, tracing) =>
+        {
+            if (HasOtlpExporterRegistration(services)) return;
+            var options = new OtlpExporterOptions();
+            var batch = options.BatchExportProcessorOptions;
+            tracing.AddProcessor(new BatchActivityExportProcessor(
+                new OtlpTraceExporter(options),
+                batch.MaxQueueSize,
+                batch.ScheduledDelayMilliseconds,
+                batch.ExporterTimeoutMilliseconds,
+                batch.MaxExportBatchSize));
+        });
+        services.ConfigureOpenTelemetryMeterProvider((_, metrics) =>
+        {
+            if (HasOtlpExporterRegistration(services)) return;
+            var reader = new PeriodicExportingMetricReaderOptions();
+            metrics.AddReader(new PeriodicExportingMetricReader(
+                new OtlpMetricExporter(new OtlpExporterOptions()),
+                reader.ExportIntervalMilliseconds ?? 60000,
+                reader.ExportTimeoutMilliseconds ?? 30000));
+        });
+    }
+
+    private static bool HasOtlpExporterRegistration(IServiceCollection services)
+        => services.Any(sd =>
+            sd.ServiceType == typeof(IOptionsFactory<OtlpExporterOptions>) ||
+            sd.ServiceType.FullName == "OpenTelemetry.Exporter.UseOtlpExporterRegistration");
 
     /// <summary>Parse OTEL_EXPORTER_OTLP_HEADERS environment variable (W3C Baggage-style list of percent-encoded key=value pairs, per the OTel spec).</summary>
     internal static Dictionary<string, string> ParseOtlpHeaders(string? headerString)

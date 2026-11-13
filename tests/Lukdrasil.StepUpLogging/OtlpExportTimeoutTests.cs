@@ -15,6 +15,7 @@ namespace Lukdrasil.StepUpLogging.Tests;
 /// host of a short-lived process does not wait for the 100 s <see cref="System.Net.Http.HttpClient"/> default when
 /// the collector accepts the connection and never answers.
 /// </summary>
+[Collection(OtlpEnvironmentCollection.Name)]
 public class OtlpExportTimeoutTests
 {
     [Theory]

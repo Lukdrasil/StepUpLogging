@@ -113,7 +113,9 @@ OTEL_RESOURCE_ATTRIBUTES=deployment.environment=production
 Put it in `appsettings.Development.json` so production keeps the defaults.
 
 **Aspire.** Call `AddStepUpLogging()` from `AddServiceDefaults()` after `ConfigureOpenTelemetry()`, and do not also
-call `AddSerilog`. When the OpenTelemetry SDK is already registered, the library leaves the exporter setup to it.
+call `AddSerilog`. When the OpenTelemetry SDK is already registered and `EnableOtlpExporter` is on, the library adds
+an OTLP exporter to the app's tracer and meter providers only if the app registers none itself (`UseOtlpExporter()`
+or `AddOtlpExporter()`, before or after `AddStepUpLogging()`).
 
 ```csharp
 public static TBuilder AddServiceDefaults<TBuilder>(this TBuilder builder)
