@@ -6,6 +6,14 @@ Releases from 1.8.0 onward are recorded here. Entries backfilled from each relea
 `PackageReleaseNotes` and, where those were not updated per release, from the commits between tags.
 Tags before 1.8.0 predate this file.
 
+## [7.3.0] - 2026-11-13
+
+### Added
+- The request completion event written by `UseStepUpRequestLogging()` carries `ClientIp`, by the same rule as the request summary: `Connection.RemoteIpAddress`, or the first `X-Forwarded-For` entry with `TrustForwardedHeaders`. Before, only the opt-in request summary (`AlwaysLogRequestSummary`) had the source IP. Left out when the address is unknown.
+
+### Changed
+- Test and example dependencies: Microsoft.Testing.Platform.MSBuild 2.5.3, OpenTelemetry.Instrumentation.* 1.21.0, Scalar.AspNetCore 2.21.0. The package's own dependencies are unchanged.
+
 ## [7.2.0] - 2026-11-11
 
 ### Added
