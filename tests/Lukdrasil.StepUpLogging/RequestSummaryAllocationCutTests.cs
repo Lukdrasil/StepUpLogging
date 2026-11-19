@@ -52,13 +52,13 @@ public class RequestSummaryAllocationCutTests
     }
 
     private static void EmitFull(StepUpLoggingController controller) =>
-        controller.EmitRequestSummary(
+        controller.EmitRequestSummary(TestSummaries.Inbound(
             Method, Path, StatusCode, ElapsedMs,
             queryString: QueryString, routeParameters: RouteParameters, userAgent: UserAgent,
-            clientIp: ClientIp, jti: Jti, forwardedFor: ForwardedFor);
+            clientIp: ClientIp, jti: Jti, forwardedFor: ForwardedFor));
 
     private static void EmitMinimal(StepUpLoggingController controller) =>
-        controller.EmitRequestSummary(Method, Path, StatusCode, ElapsedMs);
+        controller.EmitRequestSummary(TestSummaries.Inbound(Method, Path, StatusCode, ElapsedMs));
 
     private static long AllocatedBytesOfSecondRun(Action run)
     {
@@ -87,10 +87,10 @@ public class RequestSummaryAllocationCutTests
         var sink = new LastEventSink();
         using var controller = Controller(sink);
 
-        controller.EmitRequestSummary(
+        controller.EmitRequestSummary(TestSummaries.Inbound(
             Method, Path, StatusCode, ElapsedMs,
             queryString: string.Empty, routeParameters: new Dictionary<string, object?>(), userAgent: string.Empty,
-            clientIp: string.Empty, jti: string.Empty, forwardedFor: string.Empty);
+            clientIp: string.Empty, jti: string.Empty, forwardedFor: string.Empty));
 
         Assert.Equal(["Direction", "Method", "Path", "StatusCode", "ElapsedMs", "ClientKind", "UserAgent", "IsRequestSummary"], sink.LastEvent!.Properties.Keys);
     }

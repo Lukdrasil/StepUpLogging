@@ -23,7 +23,7 @@ public class RequestSummaryRouteValueTests
             new LoggerConfiguration().WriteTo.Sink(sink).CreateLogger());
         var routeParameters = new Dictionary<string, object?> { ["id"] = 42, ["slug"] = null, ["name"] = "orders" };
 
-        controller.EmitRequestSummary("GET", "/orders/42", 200, 1.5, routeParameters: routeParameters);
+        controller.EmitRequestSummary(TestSummaries.Inbound("GET", "/orders/42", 200, 1.5, routeParameters: routeParameters));
 
         var elements = Assert.IsType<DictionaryValue>(sink.LastEvent!.Properties["RouteParameters"]).Elements;
         Assert.Equal(

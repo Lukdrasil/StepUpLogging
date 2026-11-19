@@ -188,6 +188,35 @@ public class DrainWorkerTests
         Assert.Equal(1, meter.Total("audit_spool_dead_lettered_total"));
     }
 
+    [Fact]
+    public async Task DrainWorker_SpoolFileReadableBetweenTwoUnreadableReads_StartsCountingAgainAndKeepsItSpooled()
+    {
+        using var harness = new SpoolDrainHarness(
+            FakeAuditReceiver.Responding(HttpStatusCode.ServiceUnavailable),
+            options => options.UnreadableRetryLimit = 2);
+        await harness.SpoolAsync(AuditedOperation(at: Noon));
+        var lockedFileName = harness.SpooledFileNames()[0];
+        var lockedPath = Path.Combine(harness.SpoolOptions.SpoolDirectory, lockedFileName);
+        var unreadable = OperatingSystem.IsWindows() ? FileShare.Delete : FileShare.None;
+
+        using (new FileStream(lockedPath, FileMode.Open, FileAccess.Read, unreadable))
+        {
+            await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+        }
+
+        await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+
+        using (new FileStream(lockedPath, FileMode.Open, FileAccess.Read, unreadable))
+        {
+            await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+        }
+
+        // The limit counts consecutive unreadable reads: the read in between succeeded, so the
+        // second fault is the first of a new run, not the one that reaches the limit.
+        Assert.Equal([lockedFileName], harness.SpooledFileNames());
+        Assert.Empty(harness.DeadLetteredFileNames());
+    }
+
     /// <summary>The receiver behaviours ADR 0020 D7 calls transient: retry, never dead-letter.</summary>
     private static FakeAuditReceiver TransientlyFailing(string failure) => failure switch
     {
@@ -491,7 +520,7 @@ public class DrainWorkerTests
 
         // Not just a log line: a swallowed cycle failure must move a counter too, so a loop stuck
         // failing every cycle is something an alert can catch without matching log strings.
-        Assert.True(meter.Total("audit_spool_drain_failures_total") >= 1);
+        Assert.Equal(1, meter.Total("audit_spool_drain_failures_total"));
         await harness.Worker.StopAsync(TestContext.Current.CancellationToken);
     }
 
@@ -686,12 +715,14 @@ public class DrainWorkerTests
                 Assert.Equal(deliveredTrace, firstAttempt.TraceId);
                 Assert.Equal(default, firstAttempt.ParentSpanId);
                 Assert.Equal(ActivityStatusCode.Error, firstAttempt.Status);
+                Assert.Equal(1, firstAttempt.GetTagItem("audit.spool.failed_attempts"));
             },
             secondAttempt =>
             {
                 Assert.Equal(deliveredTrace, secondAttempt.TraceId);
                 Assert.Equal(stopped.First().SpanId, secondAttempt.ParentSpanId);
                 Assert.Equal(ActivityStatusCode.Error, secondAttempt.Status);
+                Assert.Equal(2, secondAttempt.GetTagItem("audit.spool.failed_attempts"));
             },
             delivered =>
             {

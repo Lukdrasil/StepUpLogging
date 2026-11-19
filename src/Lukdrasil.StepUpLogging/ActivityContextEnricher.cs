@@ -17,7 +17,7 @@ internal sealed class ActivityContextEnricher : ILogEventEnricher
     public void Enrich(LogEvent logEvent, ILogEventPropertyFactory propertyFactory)
     {
         var activity = Activity.Current;
-        if (activity == null || activity.IdFormat != ActivityIdFormat.W3C)
+        if (activity is null || activity.IdFormat != ActivityIdFormat.W3C)
             return;
 
         // Add ParentSpanId - critical for distributed tracing parent-child relationships
@@ -30,12 +30,7 @@ internal sealed class ActivityContextEnricher : ILogEventEnricher
 
         // Add TraceFlags - indicates sampling decisions (Recorded=1, NotRecorded=0)
         // Important for understanding if this activity was sampled for detailed tracing
-        logEvent.AddPropertyIfAbsent(activity.ActivityTraceFlags switch
-        {
-            ActivityTraceFlags.None => TraceFlagsNone,
-            ActivityTraceFlags.Recorded => TraceFlagsRecorded,
-            var flags => propertyFactory.CreateProperty("TraceFlags", ((int)flags).ToString()),
-        });
+        logEvent.AddPropertyIfAbsent(TraceFlagsOf(activity.ActivityTraceFlags));
 
         // Add TraceState if present - vendor-specific trace context
         if (!string.IsNullOrEmpty(activity.TraceStateString))
@@ -44,4 +39,7 @@ internal sealed class ActivityContextEnricher : ILogEventEnricher
                 "TraceState", activity.TraceStateString));
         }
     }
+
+    private static LogEventProperty TraceFlagsOf(ActivityTraceFlags flags)
+        => (flags & ActivityTraceFlags.Recorded) != 0 ? TraceFlagsRecorded : TraceFlagsNone;
 }

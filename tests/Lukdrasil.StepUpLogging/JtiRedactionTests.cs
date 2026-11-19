@@ -53,6 +53,7 @@ public class JtiRedactionTests
                     services.AddSingleton(Options.Create(opts));
                     services.AddSingleton(logger);
                     services.AddSingleton(sp => new StepUpLoggingController(opts, logger));
+                    services.AddSingleton(new StepUpSettings(opts));
                     var patterns = opts.RedactionRegexes
                         .Select(p => new Regex(p, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100)))
                         .ToArray();

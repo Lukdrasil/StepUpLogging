@@ -3,8 +3,6 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
-using Microsoft.Extensions.DependencyInjection;
-using Serilog;
 using Xunit;
 
 namespace Lukdrasil.StepUpLogging.Tests;
@@ -19,13 +17,6 @@ public class DiagnosticContextRegistrationTests
         builder.AddStepUpLogging(configureOptions: opts => opts.EnableOtlpExporter = false);
 
         await using var app = builder.Build();
-
-        // Serilog.AspNetCore self-registers the DiagnosticContext. The interface
-        // resolves even though this test never registers a DiagnosticContext of its
-        // own — and the library's reflective registration only ever supplied the
-        // concrete DiagnosticContext, never IDiagnosticContext. So the interface
-        // resolving here can only have come from the framework.
-        Assert.NotNull(app.Services.GetService<IDiagnosticContext>());
 
         app.UseStepUpRequestLogging();
         app.MapGet("/ping", () => "pong");

@@ -1,5 +1,7 @@
 using System;
-using System.Diagnostics;
+using System.Linq;
+using Microsoft.Extensions.Time.Testing;
+using Serilog;
 using Serilog.Events;
 
 namespace Lukdrasil.StepUpLogging.Tests;
@@ -15,18 +17,21 @@ public class StepUpControllerGenerationTests
         DurationSeconds = 300
     };
 
+    private static int StepDowns(CollectingSink output)
+        => output.Events.Count(e => e.MessageTemplate.Text.StartsWith("Logging step down", StringComparison.Ordinal));
+
     [Fact]
     public void StaleStepDownCallback_DoesNotLowerLevel()
     {
-        long ticks = Stopwatch.GetTimestamp();
-        using var controller = new StepUpLoggingController(AutoOptions(), null, () => ticks);
+        var time = new FakeTimeProvider();
+        using var controller = new StepUpLoggingController(AutoOptions(), null, time);
 
         controller.Trigger();
         var firstGen = controller.CurrentGeneration;
         Assert.True(controller.IsSteppedUp);
 
         // Advance past the rate-limit window and extend the window (bumps the generation).
-        ticks += (long)(6 * Stopwatch.Frequency);
+        time.Advance(TimeSpan.FromSeconds(6));
         controller.Trigger();
         var extendedGen = controller.CurrentGeneration;
         Assert.NotEqual(firstGen, extendedGen);
@@ -41,13 +46,14 @@ public class StepUpControllerGenerationTests
     [Fact]
     public void StaleStepDown_ThenGenuineStepDown_RestoresBase()
     {
-        long ticks = Stopwatch.GetTimestamp();
-        using var controller = new StepUpLoggingController(AutoOptions(), null, () => ticks);
+        var time = new FakeTimeProvider();
+        var output = new CollectingSink();
+        using var controller = new StepUpLoggingController(AutoOptions(), new LoggerConfiguration().WriteTo.Sink(output).CreateLogger(), time);
 
         controller.Trigger();
         var firstGen = controller.CurrentGeneration;
 
-        ticks += (long)(6 * Stopwatch.Frequency);
+        time.Advance(TimeSpan.FromSeconds(6));
         controller.Trigger();
         var currentGen = controller.CurrentGeneration;
 
@@ -59,30 +65,32 @@ public class StepUpControllerGenerationTests
         controller.InvokeStepDownForTest(currentGen);
         Assert.False(controller.IsSteppedUp);
         Assert.Equal(LogEventLevel.Warning, controller.LevelSwitch.MinimumLevel);
+        Assert.Equal(1, StepDowns(output));
 
-        // A second genuine-looking callback after step-down must be a no-op (guarded by level check),
+        // A second genuine-looking callback after step-down must be a no-op (guarded by the stepped-up flag),
         // so the active-state counter can never go negative.
         controller.InvokeStepDownForTest(controller.CurrentGeneration);
         Assert.False(controller.IsSteppedUp);
         Assert.Equal(LogEventLevel.Warning, controller.LevelSwitch.MinimumLevel);
+        Assert.Equal(1, StepDowns(output));
     }
 
     [Fact]
     public void RateLimit_UsesMonotonicClock_NotWallClock()
     {
-        long ticks = Stopwatch.GetTimestamp();
-        using var controller = new StepUpLoggingController(AutoOptions(), null, () => ticks);
+        var time = new FakeTimeProvider();
+        using var controller = new StepUpLoggingController(AutoOptions(), null, time);
 
         controller.Trigger();
         var gen1 = controller.CurrentGeneration;
 
         // Within the 5s monotonic window -> rate-limited, no extend, generation unchanged.
-        ticks += (long)(2 * Stopwatch.Frequency);
+        time.Advance(TimeSpan.FromSeconds(2));
         controller.Trigger();
         Assert.Equal(gen1, controller.CurrentGeneration);
 
         // Past the 5s monotonic window -> extend, generation advances.
-        ticks += (long)(4 * Stopwatch.Frequency);
+        time.Advance(TimeSpan.FromSeconds(4));
         controller.Trigger();
         Assert.NotEqual(gen1, controller.CurrentGeneration);
     }
@@ -90,8 +98,8 @@ public class StepUpControllerGenerationTests
     [Fact]
     public void GenuineStepDown_RestoresBaseLevel()
     {
-        long ticks = Stopwatch.GetTimestamp();
-        using var controller = new StepUpLoggingController(AutoOptions(), null, () => ticks);
+        var time = new FakeTimeProvider();
+        using var controller = new StepUpLoggingController(AutoOptions(), null, time);
 
         controller.Trigger();
         Assert.True(controller.IsSteppedUp);
@@ -105,8 +113,9 @@ public class StepUpControllerGenerationTests
     [Fact]
     public void StepDownCallback_WhenNotSteppedUp_IsNoOp()
     {
-        long ticks = Stopwatch.GetTimestamp();
-        using var controller = new StepUpLoggingController(AutoOptions(), null, () => ticks);
+        var time = new FakeTimeProvider();
+        var output = new CollectingSink();
+        using var controller = new StepUpLoggingController(AutoOptions(), new LoggerConfiguration().WriteTo.Sink(output).CreateLogger(), time);
 
         Assert.False(controller.IsSteppedUp);
 
@@ -114,5 +123,6 @@ public class StepUpControllerGenerationTests
 
         Assert.False(controller.IsSteppedUp);
         Assert.Equal(LogEventLevel.Warning, controller.LevelSwitch.MinimumLevel);
+        Assert.Equal(0, StepDowns(output));
     }
 }

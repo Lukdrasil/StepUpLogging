@@ -72,18 +72,23 @@ internal sealed class ConsoleTextFormatter(string[] properties, ConsoleTraceForm
         output.Write('"');
         foreach (var c in value)
         {
-            switch (c)
-            {
-                case '"': output.Write("\\\""); break;
-                case '\\': output.Write("\\\\"); break;
-                case '\r': output.Write("\\r"); break;
-                case '\n': output.Write("\\n"); break;
-                case '\t': output.Write("\\t"); break;
-                case < ' ' or '\u007f': output.Write($"\\u{(int)c:x4}"); break;
-                default: output.Write(c); break;
-            }
+            WriteEscaped(output, c);
         }
         output.Write('"');
+    }
+
+    private static void WriteEscaped(TextWriter output, char c)
+    {
+        switch (c)
+        {
+            case '"': output.Write("\\\""); break;
+            case '\\': output.Write("\\\\"); break;
+            case '\r': output.Write("\\r"); break;
+            case '\n': output.Write("\\n"); break;
+            case '\t': output.Write("\\t"); break;
+            case < ' ' or '\u007f': output.Write($"\\u{(int)c:x4}"); break;
+            default: output.Write(c); break;
+        }
     }
 
     private void WriteTrace(LogEvent logEvent, TextWriter output)

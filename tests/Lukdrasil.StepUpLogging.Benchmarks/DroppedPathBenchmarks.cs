@@ -25,8 +25,8 @@ public class DroppedPathBenchmarks
     private PreErrorBufferSink _buffer = null!;
     private StepUpSink _stepUpSink = null!;
     private StepUpTriggerSink _triggerSink = null!;
-    private SummarySink _summarySink = null!;
-    private ImmediateSink _immediateSink = null!;
+    private BypassSink _summarySink = null!;
+    private BypassSink _immediateSink = null!;
     private Serilog.ILogger[] _rungs = null!;
     private Activity? _activity;
 
@@ -43,8 +43,8 @@ public class DroppedPathBenchmarks
         _buffer = new PreErrorBufferSink(Logger.None, 100, 1024, _controller.StepUpLevel);
         _stepUpSink = new StepUpSink(output, _controller.LevelSwitch, _controller.BaseLevel, [], _buffer, categoryFloors: null, () => _controller.IsDiagnosticActive);
         _triggerSink = new StepUpTriggerSink(_controller);
-        _summarySink = new SummarySink(Logger.None);
-        _immediateSink = new ImmediateSink(Logger.None);
+        _summarySink = BypassSink.RequestSummaries(Logger.None);
+        _immediateSink = BypassSink.Immediate(Logger.None);
 
         _activity = InActivity ? BenchmarkFixtures.StartTrace() : null;
         var stages = Stages().ToArray();
@@ -104,11 +104,11 @@ public class DroppedPathBenchmarks
     [Benchmark]
     public void Trigger() => Debug(8);
 
-    /// <summary>Plus <see cref="SummarySink"/>.</summary>
+    /// <summary>Plus the request summary <see cref="BypassSink"/>.</summary>
     [Benchmark]
     public void Summary() => Debug(9);
 
-    /// <summary>Plus <see cref="ImmediateSink"/>: the whole root pipeline.</summary>
+    /// <summary>Plus the immediate <see cref="BypassSink"/>: the whole root pipeline.</summary>
     [Benchmark]
     public void Immediate() => Debug(10);
 

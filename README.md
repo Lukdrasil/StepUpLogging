@@ -348,7 +348,7 @@ t=17:13:45.110 l=INF tid=55b5a5163e2d4b008bfa8938d5189c3c msg="Outbound GET /v1/
 
 Not logged: `Referer`, `sub`, email and name claims, cookies, `Authorization`.
 
-Summary events are marked with the "IsRequestSummary" property and are processed by the library's SummarySink so they are exported independently of the StepUp level switch (base Warning) and the normal step-up flow.
+Summary events are marked with the "IsRequestSummary" property and are processed by the library's BypassSink so they are exported independently of the StepUp level switch (base Warning) and the normal step-up flow.
 
 ### Outbound request summary
 
@@ -551,9 +551,11 @@ app.MapPost("/stepup/trigger", (StepUpLoggingController controller) =>
 
 app.MapGet("/stepup/status", (StepUpLoggingController controller) =>
 {
-    return Results.Ok(new { active = controller.IsSteppedUp });
+    return Results.Ok(new { active = controller.IsSteppedUp, level = controller.CurrentLevel.ToString() });
 });
 ```
+
+`CurrentLevel` is the minimum level the step-up sinks export at now. The controller is created by `AddStepUpLogging`; resolve it from the container.
 
 ## Pre-Error Buffering
 
@@ -694,7 +696,7 @@ using (logger.BeginImmediateScope())
 
 Immediate-routed events are tracked by the `StepUpLogging.Immediate` meter:
 
-- `immediate_processed_total` — number of events forwarded via `ImmediateSink`
+- `immediate_processed_total` — number of events forwarded via `BypassSink`
 
 ## Audit Logging
 

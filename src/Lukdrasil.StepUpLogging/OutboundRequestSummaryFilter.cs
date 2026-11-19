@@ -1,16 +1,15 @@
 using System.Collections.Frozen;
 using Lukdrasil.StepUpLogging.Audit.EncryptedSpool;
 using Microsoft.Extensions.Http;
-using Microsoft.Extensions.Options;
 
 namespace Lukdrasil.StepUpLogging;
 
 /// <summary>
 /// Puts an <see cref="OutboundRequestSummaryHandler"/> outermost in the handler chain of every
 /// <c>IHttpClientFactory</c> client except <see cref="ExcludedClients"/> (ADR 0032 D4), so a retried call is
-/// summarized once. Registered only when <see cref="StepUpLoggingOptions.AlwaysLogOutboundRequestSummary"/> is true.
+/// summarized once. Adds nothing unless <see cref="StepUpLoggingOptions.AlwaysLogOutboundRequestSummary"/> is true.
 /// </summary>
-internal sealed class OutboundRequestSummaryFilter(StepUpLoggingController controller, CompiledRedactionPatterns patterns, IOptions<StepUpLoggingOptions> options) : IHttpMessageHandlerBuilderFilter
+internal sealed class OutboundRequestSummaryFilter(StepUpLoggingController controller, CompiledRedactionPatterns patterns, StepUpSettings settings) : IHttpMessageHandlerBuilderFilter
 {
     /// <summary>
     /// The library's own audit client and the OTLP exporter clients. The OTLP names are the ones
@@ -26,17 +25,17 @@ internal sealed class OutboundRequestSummaryFilter(StepUpLoggingController contr
         "OtlpLogExporter",
     }.ToFrozenSet(StringComparer.Ordinal);
 
-    private readonly RequestSummaryDetail _detail = options.Value.RequestSummaryDetail;
-
     /// <inheritdoc />
-    public Action<HttpMessageHandlerBuilder> Configure(Action<HttpMessageHandlerBuilder> next) => builder =>
-    {
-        next(builder);
-        if (!IsExcluded(builder.Name))
+    public Action<HttpMessageHandlerBuilder> Configure(Action<HttpMessageHandlerBuilder> next) => settings.AlwaysLogOutboundRequestSummary
+        ? builder =>
         {
-            builder.AdditionalHandlers.Insert(0, new OutboundRequestSummaryHandler(builder.Name ?? string.Empty, controller, patterns, _detail));
+            next(builder);
+            if (!IsExcluded(builder.Name))
+            {
+                builder.AdditionalHandlers.Insert(0, new OutboundRequestSummaryHandler(builder.Name ?? string.Empty, controller, patterns, settings.RequestSummaryDetail));
+            }
         }
-    };
+        : next;
 
     /// <summary>Whether the client named <paramref name="name"/> gets no outbound summary.</summary>
     internal static bool IsExcluded(string? name) => name is not null && ExcludedClients.Contains(name);

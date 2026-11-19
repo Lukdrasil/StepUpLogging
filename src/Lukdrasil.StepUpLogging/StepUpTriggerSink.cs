@@ -104,67 +104,44 @@ internal sealed class StepUpTriggerSink : ILogEventSink, IAsyncDisposable, IDisp
     /// </summary>
     public async ValueTask DisposeAsync()
     {
-        if (_disposed)
+        if (!BeginDispose())
         {
             return;
         }
 
-        _disposed = true;
-        _triggerChannel.Writer.Complete();
-        _cts.Cancel();
-
-        try
-        {
-            // Give background task time to complete gracefully
-            await _processingTask.ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            // Expected when cancellation is requested
-        }
-        catch (Exception)
-        {
-            // Suppress other exceptions during disposal
-        }
-        finally
-        {
-            _cts.Dispose();
-        }
+        await _processingTask.ConfigureAwait(false);
+        _cts.Dispose();
     }
 
     /// <summary>
-    /// Synchronous disposal fallback (converts to async internally).
+    /// Synchronous disposal: waits at most two seconds for the background task, which ends on its own once its
+    /// token is cancelled.
     /// </summary>
     public void Dispose()
     {
-        if (_disposed)
+        if (!BeginDispose())
         {
             return;
+        }
+
+        _processingTask.Wait(TimeSpan.FromSeconds(2));
+        _cts.Dispose();
+    }
+
+    /// <summary>
+    /// Stops accepting events and cancels the background task; <see langword="false"/> when already disposed. The task
+    /// never faults: it handles its own cancellation and every trigger failure, so awaiting it cannot throw.
+    /// </summary>
+    private bool BeginDispose()
+    {
+        if (_disposed)
+        {
+            return false;
         }
 
         _disposed = true;
         _triggerChannel.Writer.Complete();
         _cts.Cancel();
-
-        try
-        {
-            // Best-effort sync wait with timeout for disposal
-            if (!_processingTask.IsCompleted && !_processingTask.Wait(TimeSpan.FromSeconds(2)))
-            {
-                // Task did not complete in time - will eventually complete on app shutdown
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            // Expected
-        }
-        catch (Exception)
-        {
-            // Suppress exceptions during synchronous disposal
-        }
-        finally
-        {
-            _cts.Dispose();
-        }
+        return true;
     }
 }

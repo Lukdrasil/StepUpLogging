@@ -21,7 +21,7 @@ internal static class RequestHeaderRedaction
     /// <summary>Redacts every request header, noting each redacted one as <c>header:{Key}</c>.</summary>
     internal static Dictionary<string, object?> RedactRequestHeaders(
         IHeaderDictionary headers,
-        HashSet<string> sensitiveHeaders,
+        IReadOnlySet<string> sensitiveHeaders,
         CompiledRedactionPatterns patterns,
         Action<string> noteRedaction)
     {

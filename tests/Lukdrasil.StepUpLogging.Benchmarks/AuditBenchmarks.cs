@@ -2,7 +2,6 @@ using BenchmarkDotNet.Attributes;
 using Lukdrasil.StepUpLogging.Audit.EncryptedSpool;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
 
 namespace Lukdrasil.StepUpLogging.Benchmarks;
 
@@ -35,11 +34,12 @@ public class AuditBenchmarks
     public async Task Setup()
     {
         _logger = new AuditLogger<AuditBenchmarks>(
-            _sink,
-            NullLogger<AuditBenchmarks>.Instance,
-            new FixedHttpContextAccessor { HttpContext = WithHttpContext ? BenchmarkFixtures.Request(headerCount: 8) : null },
-            Options.Create(new StepUpLoggingOptions()),
-            BenchmarkFixtures.SamplePatterns());
+            new AuditTrail(
+                _sink,
+                new FixedHttpContextAccessor { HttpContext = WithHttpContext ? BenchmarkFixtures.Request(headerCount: 8) : null },
+                new StepUpSettings(new StepUpLoggingOptions()),
+                BenchmarkFixtures.SamplePatterns()),
+            NullLogger<AuditBenchmarks>.Instance);
         _event = SpoolBenchmarkSupport.AuditedOperation() with { Data = BenchmarkFixtures.AuditData(DataEntries) };
 
         await AuditToNullSink();

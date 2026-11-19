@@ -49,6 +49,14 @@ public class OptionsValidationTests
     [InlineData("PreErrorBufferSize", "0")]
     [InlineData("MaxContinuousStepUpSeconds", "-1")]
     [InlineData("RequestSummaryDetail", "5")]
+    [InlineData("StepUpLevel", "Warnign")]
+    [InlineData("RequestSummaryLevel", "Warnign")]
+    [InlineData("DiagnosticLevel", "Verbos")]
+    [InlineData("PreErrorMaxContexts", "0")]
+    [InlineData("MaxBodyCaptureBytes", "0")]
+    [InlineData("StepUpCooldownSeconds", "-1")]
+    [InlineData("MaxContinuousStepUpSeconds", "2")]
+    [InlineData("CategoryFloors:Contoso.Payments", "Warnign")]
     public void InvalidOption_FailsValidationNamingOnlyThatOption(string option, string value)
     {
         var ex = Assert.Throws<OptionsValidationException>(
@@ -86,13 +94,6 @@ public class OptionsValidationTests
     }
 
     [Fact]
-    public void ZeroMaxBodyCaptureBytes_FailsValidationOnStart()
-    {
-        Assert.Throws<OptionsValidationException>(
-            () => BuildHost(("SerilogStepUp:MaxBodyCaptureBytes", "0")));
-    }
-
-    [Fact]
     public void NegativeMaxBodyCaptureBytes_FailsValidationOnStart()
     {
         Assert.Throws<OptionsValidationException>(
@@ -107,15 +108,6 @@ public class OptionsValidationTests
         var opts = host.Services.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
 
         Assert.Equal(1, opts.MaxBodyCaptureBytes);
-    }
-
-    [Fact]
-    public void CapBelowDuration_FailsValidationOnStart()
-    {
-        Assert.Throws<OptionsValidationException>(
-            () => BuildHost(
-                ("SerilogStepUp:DurationSeconds", "180"),
-                ("SerilogStepUp:MaxContinuousStepUpSeconds", "60")));
     }
 
     [Fact]
@@ -141,13 +133,6 @@ public class OptionsValidationTests
     }
 
     [Fact]
-    public void NegativeCooldown_FailsValidationOnStart()
-    {
-        Assert.Throws<OptionsValidationException>(
-            () => BuildHost(("SerilogStepUp:StepUpCooldownSeconds", "-1")));
-    }
-
-    [Fact]
     public void ZeroPreErrorBufferSize_FailsValidationOnStart()
     {
         Assert.Throws<OptionsValidationException>(
@@ -159,13 +144,6 @@ public class OptionsValidationTests
     {
         Assert.Throws<OptionsValidationException>(
             () => BuildHost(("SerilogStepUp:PreErrorBufferSize", "-1")));
-    }
-
-    [Fact]
-    public void ZeroPreErrorMaxContexts_FailsValidationOnStart()
-    {
-        Assert.Throws<OptionsValidationException>(
-            () => BuildHost(("SerilogStepUp:PreErrorMaxContexts", "0")));
     }
 
     [Fact]
@@ -258,7 +236,6 @@ public class OptionsValidationTests
         Assert.Equal(30, opts.DiagnosticDurationMinutes);
         Assert.Empty(opts.AlwaysExportCategories);
         Assert.Empty(opts.NeverTriggerCategories);
-        Assert.Equal(3, (int)StepUpMode.Diagnostic);
     }
 
     [Fact]
@@ -287,13 +264,6 @@ public class OptionsValidationTests
         Assert.False(floors.ContainsKey("microsoft.aspnetcore"));
     }
 
-    [Fact]
-    public void CategoryFloorInvalidLevel_FailsValidationOnStart()
-    {
-        Assert.Throws<OptionsValidationException>(
-            () => BuildHost(("SerilogStepUp:CategoryFloors:Contoso.Payments", "Warnign")));
-    }
-
     [Theory]
     [InlineData("Error")]
     [InlineData("Fatal")]
@@ -320,22 +290,6 @@ public class OptionsValidationTests
     {
         Assert.Throws<OptionsValidationException>(
             () => BuildHostWith(o => o.CategoryFloors[key] = "Warning"));
-    }
-
-    [Fact]
-    public void InvalidCategoryFloor_FailsValidationInAlwaysOnMode()
-    {
-        Assert.Throws<OptionsValidationException>(
-            () => BuildHost(
-                ("SerilogStepUp:Mode", "AlwaysOn"),
-                ("SerilogStepUp:CategoryFloors:Contoso.Payments", "Error")));
-    }
-
-    [Fact]
-    public void InvalidDiagnosticLevel_FailsValidationOnStart()
-    {
-        Assert.Throws<OptionsValidationException>(
-            () => BuildHost(("SerilogStepUp:DiagnosticLevel", "Verbos")));
     }
 
     [Theory]
@@ -507,14 +461,6 @@ public class OptionsValidationTests
         using var host = BuildHostWith(o => o.RequestSummaryDetail = RequestSummaryDetail.Minimal);
 
         Assert.Equal(["jti", "mth", "path", "sc", "ms"], ResolveOptions(host).ConsoleTextProperties!);
-    }
-
-    [Fact]
-    public void ConsoleText_WiresWithoutError()
-    {
-        using var host = BuildHost(("SerilogStepUp:EnableConsoleLogging", "true"), ("SerilogStepUp:ConsoleFormat", "Text"));
-
-        Assert.Equal(ConsoleLogFormat.Text, ResolveOptions(host).ConsoleFormat);
     }
 
     [Fact]

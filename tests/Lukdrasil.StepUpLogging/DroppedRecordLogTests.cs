@@ -105,6 +105,19 @@ public class DroppedRecordLogTests
     }
 
     [Fact]
+    public void Dropped_AfterAStoreWithinTheSameWindow_IsHeldBackNotLoggedByName()
+    {
+        var logger = new RecordingLogger<EncryptedSpoolAuditSink>();
+        using var log = new DroppedRecordLog(Options, new FakeTimeProvider(), logger);
+        log.Dropped(First, Full);
+        log.Stored();
+
+        log.Dropped(Second, Full);
+
+        Assert.Single(logger.MessagesAt(LogLevel.Critical));
+    }
+
+    [Fact]
     public void Dispose_AfterDropsWereHeldBack_LogsTheSummarySoNoLossGoesUnreported()
     {
         var logger = new RecordingLogger<EncryptedSpoolAuditSink>();

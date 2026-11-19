@@ -177,7 +177,8 @@ public class ConfigWriteToGatingTests
                 _ = host.Services.GetRequiredService<Serilog.ILogger>();
             }
 
-            var contents = File.Exists(tempFile) ? File.ReadAllText(tempFile) : string.Empty;
+            var contents = File.ReadAllText(tempFile);
+            Assert.Contains($"StepUp logging: Mode {mode}", contents);
             Assert.DoesNotContain("not more verbose", contents);
         }
         finally
@@ -199,7 +200,7 @@ public class ConfigWriteToGatingTests
             })
             .Build();
 
-        var (root, gated) = StepUpLoggingExtensions.SplitSerilogConfiguration(appConfig);
+        var (root, gated) = StepUpPipeline.SplitSerilogConfiguration(appConfig);
 
         // Root keeps MinimumLevel + Enrich, drops WriteTo entirely.
         Assert.Equal("Information", root["Serilog:MinimumLevel:Default"]);
@@ -228,7 +229,7 @@ public class ConfigWriteToGatingTests
             })
             .Build();
 
-        var (root, gated) = StepUpLoggingExtensions.SplitSerilogConfiguration(appConfig);
+        var (root, gated) = StepUpPipeline.SplitSerilogConfiguration(appConfig);
 
         // Root: WriteTo is entirely absent when walked through GetSection/GetChildren, while the
         // MinimumLevel ancestor chain still resolves via the section API (not just the indexer).

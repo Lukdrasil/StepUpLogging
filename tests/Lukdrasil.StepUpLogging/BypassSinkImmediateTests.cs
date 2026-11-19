@@ -6,7 +6,7 @@ using Serilog.Parsing;
 
 namespace Lukdrasil.StepUpLogging.Tests;
 
-public class ImmediateSinkTests
+public class BypassSinkImmediateTests
 {
     private static LogEvent MakeEvent(LogEventLevel level, params LogEventProperty[] properties)
     {
@@ -19,7 +19,7 @@ public class ImmediateSinkTests
     {
         var collector = new CollectingSink();
         var target = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
-        using var sink = new ImmediateSink(target);
+        using var sink = BypassSink.Immediate(target);
 
         var prop = new LogEventProperty(LogProperties.IsImmediate, new ScalarValue(true));
         sink.Emit(MakeEvent(LogEventLevel.Information, prop));
@@ -32,7 +32,7 @@ public class ImmediateSinkTests
     {
         var collector = new CollectingSink();
         var target = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
-        using var sink = new ImmediateSink(target);
+        using var sink = BypassSink.Immediate(target);
 
         var prop = new LogEventProperty(LogProperties.IsImmediate, new ScalarValue(false));
         sink.Emit(MakeEvent(LogEventLevel.Information, prop));
@@ -45,7 +45,7 @@ public class ImmediateSinkTests
     {
         var collector = new CollectingSink();
         var target = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
-        using var sink = new ImmediateSink(target);
+        using var sink = BypassSink.Immediate(target);
 
         sink.Emit(MakeEvent(LogEventLevel.Warning));
 
@@ -57,7 +57,7 @@ public class ImmediateSinkTests
     {
         var collector = new CollectingSink();
         var target = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
-        using var sink = new ImmediateSink(target);
+        using var sink = BypassSink.Immediate(target);
 
         var prop = new LogEventProperty(LogProperties.IsImmediate, new ScalarValue("yes"));
         sink.Emit(MakeEvent(LogEventLevel.Information, prop));
@@ -70,7 +70,7 @@ public class ImmediateSinkTests
     {
         var collector = new CollectingSink();
         var target = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
-        using var sink = new ImmediateSink(target);
+        using var sink = BypassSink.Immediate(target);
 
         var prop = new LogEventProperty(LogProperties.IsImmediate, new ScalarValue(true));
         sink.Emit(MakeEvent(LogEventLevel.Debug, prop));
@@ -86,7 +86,7 @@ public class ImmediateSinkTests
     {
         var collector = new CollectingSink();
         var target = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
-        var sink = new ImmediateSink(target);
+        var sink = BypassSink.Immediate(target);
 
         sink.Dispose();
 
@@ -101,7 +101,7 @@ public class ImmediateSinkTests
     {
         var collector = new CollectingSink();
         var target = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
-        using var sink = new ImmediateSink(target);
+        using var sink = BypassSink.Immediate(target);
 
         var ex = Record.Exception(() => sink.Emit(null!));
         Assert.Null(ex);
@@ -110,6 +110,6 @@ public class ImmediateSinkTests
     [Fact]
     public void ImmediateSink_NullTarget_ThrowsArgumentNullException()
     {
-        Assert.Throws<ArgumentNullException>(() => new ImmediateSink(null!));
+        Assert.Throws<ArgumentNullException>(() => BypassSink.Immediate(null!));
     }
 }

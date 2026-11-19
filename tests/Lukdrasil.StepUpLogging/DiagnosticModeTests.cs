@@ -92,11 +92,16 @@ public class DiagnosticModeTests
     {
         using var run = DiagnosticHost.Start(("DiagnosticDurationMinutes", "5"));
         var started = 0;
+        var testThread = Environment.CurrentManagedThreadId;
         using var activities = new ActivityListener
         {
             ShouldListenTo = source => source.Name == StepUpLoggingExtensions.ControllerActivitySourceName,
             Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
-            ActivityStarted = _ => started++,
+            // The fake clock fires the expiry on this thread; another test's controller cannot add to the count.
+            ActivityStarted = _ =>
+            {
+                if (Environment.CurrentManagedThreadId == testThread) started++;
+            },
         };
         ActivitySource.AddActivityListener(activities);
 
@@ -173,9 +178,14 @@ public class DiagnosticModeTests
     private static object? Scalar(LogEvent logEvent, string name)
         => logEvent.Properties.TryGetValue(name, out var value) && value is ScalarValue scalar ? scalar.Value : null;
 
+    /// <summary>
+    /// The net of the measurements recorded on the thread that created it: the controller records synchronously on
+    /// the test thread (the fake clock fires its timers there), so another test's controller cannot move the value.
+    /// </summary>
     internal sealed class NetGauge : IDisposable
     {
         private readonly MeterListener _listener = new();
+        private readonly int _thread = Environment.CurrentManagedThreadId;
         private long _value;
 
         public NetGauge(string instrumentName)
@@ -187,12 +197,17 @@ public class DiagnosticModeTests
                     listener.EnableMeasurementEvents(instrument);
                 }
             };
-            _listener.SetMeasurementEventCallback<int>((_, measurement, _, _) => _value += measurement);
-            _listener.SetMeasurementEventCallback<long>((_, measurement, _, _) => _value += measurement);
+            _listener.SetMeasurementEventCallback<int>((_, measurement, _, _) => Add(measurement));
+            _listener.SetMeasurementEventCallback<long>((_, measurement, _, _) => Add(measurement));
             _listener.Start();
         }
 
         public long Value => _value;
+
+        private void Add(long measurement)
+        {
+            if (Environment.CurrentManagedThreadId == _thread) _value += measurement;
+        }
 
         public void Dispose() => _listener.Dispose();
     }

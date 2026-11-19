@@ -164,11 +164,8 @@ public class EncryptedSpoolAuditSinkTests
         using var spool = new TempSpoolDirectory();
         using var sink = CreateSink(OptionsFor(spool, options => options.SpoolMaxEntries = 1), new FakeAuditPayloadEncryptor());
         var auditLogger = new AuditLogger<EncryptedSpoolAuditSinkTests>(
-            sink,
-            NullLogger<EncryptedSpoolAuditSinkTests>.Instance,
-            new HttpContextAccessor(),
-            Options.Create(new StepUpLoggingOptions()),
-            new CompiledRedactionPatterns([]));
+            new AuditTrail(sink, new HttpContextAccessor(), new StepUpSettings(new StepUpLoggingOptions()), new CompiledRedactionPatterns([])),
+            NullLogger<EncryptedSpoolAuditSinkTests>.Instance);
         await auditLogger.AuditAsync(AuditEvent.Success("order.cancel", "user-42", "user"));
 
         using var meter = new AuditMeterTotals();

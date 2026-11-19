@@ -109,6 +109,12 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
     /// </summary>
     internal Action? AfterEnqueueTestHook { get; set; }
 
+    /// <summary>
+    /// Test-only seam invoked after a hold passed the early disposed check and before it takes its stripe lock, so a
+    /// test can dispose the sink in that window. No-op in production.
+    /// </summary>
+    internal Action? BeforeStripeLockTestHook { get; set; }
+
     private static readonly Meter Meter = new("StepUpLogging.Buffer", "1.0.0");
     private static readonly Counter<long> BufferedEventsCounter = Meter.CreateCounter<long>("buffer_events_total", unit: "count", description: "Total number of events buffered");
     private static readonly Counter<long> FlushedEventsCounter = Meter.CreateCounter<long>("buffer_flushed_events_total", unit: "count", description: "Total number of events flushed due to error");
@@ -166,7 +172,7 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
             }
 
             // Create activity span only if there are actual events to flush
-            using (StepUpLoggingExtensions.BufferActivitySource.StartActivity("FlushBufferedEvents", ActivityKind.Internal))
+            using (StepUpLoggingActivitySources.Buffer.StartActivity("FlushBufferedEvents", ActivityKind.Internal))
             {
                 foreach (var e in items)
                 {
@@ -256,6 +262,7 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
     private void BufferEvent(string key, LogEvent logEvent)
     {
         var stripe = _stripes[StripeOf(key)];
+        BeforeStripeLockTestHook?.Invoke();
         lock (stripe.Gate)
         {
             if (_disposed)

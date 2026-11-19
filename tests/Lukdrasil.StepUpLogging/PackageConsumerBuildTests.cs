@@ -9,6 +9,8 @@ namespace Lukdrasil.StepUpLogging.Tests;
 
 public sealed class PackedStepUpLoggingPackage : IAsyncLifetime
 {
+    private static readonly TimeSpan StaleRootAge = TimeSpan.FromHours(2);
+
     public string Root { get; } = Path.Combine(Path.GetTempPath(), "stepup-packtest", Guid.NewGuid().ToString("N"));
 
     public string Version { get; } = $"0.0.0-packtest{Guid.NewGuid():N}";
@@ -19,6 +21,7 @@ public sealed class PackedStepUpLoggingPackage : IAsyncLifetime
 
     public async ValueTask InitializeAsync()
     {
+        DeleteStaleRoots(Path.GetDirectoryName(Root)!);
         Directory.CreateDirectory(FeedPath);
         Directory.CreateDirectory(PackagesPath);
 
@@ -102,6 +105,29 @@ public sealed class PackedStepUpLoggingPackage : IAsyncLifetime
 
         var standardOutput = await stdout;
         return (process.ExitCode, standardOutput + await stderr, standardOutput);
+    }
+
+    /// <summary>
+    /// Deletes roots older than <see cref="StaleRootAge"/> that a killed test host left behind, best effort, so the
+    /// temp directory does not fill up across runs.
+    /// </summary>
+    private static void DeleteStaleRoots(string parent)
+    {
+        if (!Directory.Exists(parent))
+        {
+            return;
+        }
+
+        foreach (var stale in new DirectoryInfo(parent).EnumerateDirectories().Where(d => d.LastWriteTimeUtc < DateTime.UtcNow - StaleRootAge))
+        {
+            try
+            {
+                stale.Delete(recursive: true);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+            }
+        }
     }
 
     private static string FindRepositoryRoot()

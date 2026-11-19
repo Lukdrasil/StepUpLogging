@@ -44,6 +44,7 @@ public class RedactionSpanTests
                     services.AddSingleton(Options.Create(opts));
                     services.AddSingleton(logger);
                     services.AddSingleton(sp => new StepUpLoggingController(opts, logger));
+                    services.AddSingleton(new StepUpSettings(opts));
                     services.AddSingleton(new CompiledRedactionPatterns(Array.Empty<Regex>()));
                     services.AddSingleton(new DiagnosticContext(logger));
                 })
@@ -63,6 +64,9 @@ public class RedactionSpanTests
     }
 
     private static (List<Activity> Redactions, ActivityListener Listener) ListenForRedactionSpans()
+        => ListenForStoppedSpans("ApplyRedaction");
+
+    private static (List<Activity> Stopped, ActivityListener Listener) ListenForStoppedSpans(string operationName)
     {
         var activities = new List<Activity>();
         var listener = new ActivityListener
@@ -71,7 +75,7 @@ public class RedactionSpanTests
             Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
             ActivityStopped = a =>
             {
-                if (a.OperationName == "ApplyRedaction")
+                if (a.OperationName == operationName)
                 {
                     lock (activities) activities.Add(a);
                 }
@@ -127,18 +131,22 @@ public class RedactionSpanTests
         var previous = Log.Logger;
         Log.Logger = logger;
         var (redactions, listener) = ListenForRedactionSpans();
+        var (requests, requestListener) = ListenForStoppedSpans("LogRequest");
         try
         {
             using var host = await BuildServerAsync(logger);
             using var client = host.GetTestClient();
 
-            await client.GetAsync("http://localhost/test", TestContext.Current.CancellationToken);
+            var path = "/test-" + Guid.NewGuid().ToString("N");
+            await client.GetAsync("http://localhost" + path, TestContext.Current.CancellationToken);
             await Task.Delay(50, TestContext.Current.CancellationToken);
 
+            lock (requests) Assert.Single(requests, a => path.Equals(a.GetTagItem("http.target")));
             Assert.Empty(redactions);
         }
         finally
         {
+            requestListener.Dispose();
             listener.Dispose();
             Log.Logger = previous;
             logger.Dispose();

@@ -18,8 +18,7 @@ public class RequestFieldBenchmarks
         "Authorization-Token", "Proxy-Authorization", "WWW-Authenticate", "Sec-WebSocket-Key"
     };
 
-    private static readonly HashSet<string> ExcludedPaths = new(["/healthz", "/metrics", "/health"], StringComparer.OrdinalIgnoreCase);
-    private static readonly string[] ExcludedPrefixes = ["/internal"];
+    private static readonly ExcludedPaths Excluded = new(["/healthz", "/metrics", "/health", "/internal/*"]);
 
     private CompiledRedactionPatterns _patterns = null!;
     private DefaultHttpContext _context = null!;
@@ -53,13 +52,13 @@ public class RequestFieldBenchmarks
     /// <summary>Extracts and redacts the client address and the forwarded-for header.</summary>
     [Benchmark]
     public (string? ClientIp, string? ForwardedFor) ClientAddresses() =>
-        StepUpLoggingExtensions.ExtractClientAddresses(_context, trustForwardedHeaders: false, _patterns);
+        RequestClient.Addresses(_context, trustForwardedHeaders: false, _patterns);
 
     /// <summary>Extracts the user agent.</summary>
     [Benchmark]
-    public string? UserAgent() => StepUpLoggingExtensions.ExtractUserAgent(_context.Request);
+    public string? UserAgent() => RequestClient.UserAgent(_context.Request);
 
     /// <summary>Checks the request path against the default excluded paths and one wildcard prefix.</summary>
     [Benchmark]
-    public bool ExcludedPath() => StepUpLoggingExtensions.IsExcludedPath(BenchmarkFixtures.RequestPath, ExcludedPaths, ExcludedPrefixes);
+    public bool ExcludedPath() => Excluded.Contains(BenchmarkFixtures.RequestPath);
 }

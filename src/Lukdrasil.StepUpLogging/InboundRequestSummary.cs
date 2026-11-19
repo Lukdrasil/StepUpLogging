@@ -11,15 +11,12 @@ namespace Lukdrasil.StepUpLogging;
 /// </summary>
 internal static class InboundRequestSummary
 {
-    // Zero patterns: Redact returns its input, for values the caller has already redacted.
-    private static readonly CompiledRedactionPatterns AlreadyRedacted = new([]);
-
     /// <summary>The summary of the request in <paramref name="context"/>.</summary>
     internal static RequestSummary From(HttpContext context, string path, int statusCode, double elapsedMs, RequestSummaryDetail detail, bool trustForwardedHeaders, CompiledRedactionPatterns patterns)
     {
         var redactedPath = patterns.Redact(path);
-        var (clientIp, forwardedFor) = StepUpLoggingExtensions.ExtractClientAddresses(context, trustForwardedHeaders, patterns);
-        var summary = new RequestSummary(RequestSummary.Inbound, context.Request.Method, redactedPath, statusCode, elapsedMs, StepUpLoggingExtensions.ExtractUserAgent(context.Request), patterns, detail == RequestSummaryDetail.Minimal)
+        var (clientIp, forwardedFor) = RequestClient.Addresses(context, trustForwardedHeaders, patterns);
+        var summary = new RequestSummary(RequestSummary.Inbound, context.Request.Method, redactedPath, statusCode, elapsedMs, RequestClient.UserAgent(context.Request), patterns, detail == RequestSummaryDetail.Minimal)
             .With("Route", RouteOf(context))
             .WithTrue("Aborted", context.RequestAborted.IsCancellationRequested)
             .With("ClientId", Redacted(patterns, "ClientId", ClientIdOf(context.User)));
@@ -27,21 +24,6 @@ internal static class InboundRequestSummary
         if (detail == RequestSummaryDetail.Full)
         {
             AddFull(summary, context, path, redactedPath, forwardedFor, patterns);
-        }
-
-        return summary;
-    }
-
-    /// <summary>
-    /// The summary of the public <c>EmitRequestSummary</c> arguments, which the caller has already redacted.
-    /// </summary>
-    internal static RequestSummary FromArguments(string method, string path, int statusCode, double elapsedMs, string? queryString, IReadOnlyDictionary<string, object?>? routeParameters, string? userAgent, string? clientIp, string? jti, string? forwardedFor, RequestSummaryDetail detail)
-    {
-        var summary = new RequestSummary(RequestSummary.Inbound, method, path, statusCode, elapsedMs, userAgent, AlreadyRedacted, detail == RequestSummaryDetail.Minimal);
-        AddSharedCompact(summary, clientIp, jti);
-        if (detail == RequestSummaryDetail.Full)
-        {
-            AddSharedFull(summary, queryString, routeParameters, forwardedFor);
         }
 
         return summary;

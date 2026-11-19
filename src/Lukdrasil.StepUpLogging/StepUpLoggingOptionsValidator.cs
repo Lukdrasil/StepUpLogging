@@ -74,8 +74,8 @@ internal sealed class StepUpLoggingOptionsValidator(string sectionName) : IValid
     private void RequireExemptionsMatchAFloor(StepUpLoggingOptions options, List<string> failures)
     {
         var floorKeys = (options.CategoryFloors ?? []).Keys;
-        var defaults = StepUpLoggingExtensions.FrameworkDefaultsFor(options.FrameworkCategoryDefaults);
-        foreach (var exempt in (options.DiagnosticExemptCategories ?? []).Where(e => !string.IsNullOrWhiteSpace(e)))
+        var defaults = StepUpSettings.FrameworkDefaultsFor(options.FrameworkCategoryDefaults);
+        foreach (var exempt in StepUpSettings.NonBlank(options.DiagnosticExemptCategories))
         {
             var matches = floorKeys.Any(k => CategoryPrefix.Matches(exempt, k)) || defaults.Any(r => CategoryPrefix.Matches(exempt, r.Prefix));
             Require(matches, nameof(StepUpLoggingOptions.DiagnosticExemptCategories), exempt,
@@ -85,7 +85,7 @@ internal sealed class StepUpLoggingOptionsValidator(string sectionName) : IValid
 
     private void RequirePatterns(string[] patterns, List<string> failures)
     {
-        foreach (var pattern in patterns.Where(p => !string.IsNullOrWhiteSpace(p)))
+        foreach (var pattern in StepUpSettings.NonBlank(patterns))
         {
             Require(Parses(pattern), nameof(StepUpLoggingOptions.RedactionRegexes), pattern, "entries must be valid regular expressions", failures);
         }

@@ -112,6 +112,18 @@ public class OutboundRequestSummaryRegistrationTests
     }
 
     [Fact]
+    public void FlagSetThroughServicesConfigure_AfterAddStepUpLogging_AddsTheHandler()
+    {
+        using var host = Build(alwaysLogOutbound: false, b =>
+        {
+            b.Services.AddHttpClient(ClientName);
+            b.Services.Configure<StepUpLoggingOptions>(o => o.AlwaysLogOutboundRequestSummary = true);
+        });
+
+        Assert.Equal(1, SummaryHandlers(host, ClientName));
+    }
+
+    [Fact]
     public void FlagOn_NamedClient_HasTheHandlerOnce()
     {
         using var host = Build(alwaysLogOutbound: true, b => b.Services.AddHttpClient(ClientName));

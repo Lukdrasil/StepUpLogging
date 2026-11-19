@@ -83,7 +83,7 @@ public class ShutdownFlushOrderingTests
         controller.Dispose();
 
         var ex = Record.Exception(() =>
-            controller.EmitRequestSummary("GET", "/health", 200, 1.2));
+            controller.EmitRequestSummary(TestSummaries.Inbound("GET", "/health", 200, 1.2)));
         Assert.Null(ex);
     }
 }

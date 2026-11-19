@@ -24,9 +24,6 @@ public class InboundRequestSummaryTests
     private static readonly string[] FullOnlyKeys =
         ["Protocol", "Scheme", "Host", "RequestContentLength", "ResponseContentLength", "IsAuthenticated", "AuthScheme", "EndpointName", "QueryString", "RouteParameters", "ForwardedFor"];
 
-    private static readonly string[] EarlierKeys =
-        ["Method", "Path", "StatusCode", "ElapsedMs", "ForwardedFor", "Jti", "ClientIp", "UserAgent", "RouteParameters", "QueryString", "IsRequestSummary"];
-
     private static DefaultHttpContext Context(
         string path = Path,
         string userAgent = "curl/8.5.0",
@@ -72,12 +69,6 @@ public class InboundRequestSummaryTests
         => InboundRequestSummary.From(context, path, 200, 1.5, detail, false, patterns ?? NoPatterns)
             .ToLogEvent(LogEventLevel.Information, Logger);
 
-    private static LogEvent FromArguments(RequestSummaryDetail detail)
-        => InboundRequestSummary.FromArguments(
-                "GET", Path, 200, 1.5, "?page=2", new Dictionary<string, object?> { ["id"] = "42" }, "curl/8.5.0",
-                "198.51.100.7", "jti-1", "203.0.113.9", detail)
-            .ToLogEvent(LogEventLevel.Information, Logger);
-
     private static object? Scalar(LogEvent logEvent, string name) => ((ScalarValue)logEvent.Properties[name]).Value;
 
     [Fact]
@@ -104,14 +95,6 @@ public class InboundRequestSummaryTests
     }
 
     [Fact]
-    public void FromArguments_Minimal_WritesShortKeys()
-    {
-        var logEvent = FromArguments(RequestSummaryDetail.Minimal);
-
-        Assert.Equal(["dir", "mth", "path", "sc", "ms", "ck", "ua", "ip", "jti", "IsRequestSummary"], logEvent.Properties.Keys);
-    }
-
-    [Fact]
     public void Full_WritesEveryField()
     {
         var logEvent = From(Context(), RequestSummaryDetail.Full);
@@ -128,14 +111,9 @@ public class InboundRequestSummaryTests
     }
 
     [Fact]
-    public void DefaultOptions_AreFull_AndKeepEveryEarlierProperty()
+    public void DefaultOptions_AreFull()
     {
-        var detail = new StepUpLoggingOptions().RequestSummaryDetail;
-
-        var logEvent = From(Context(), detail);
-
-        Assert.Equal(RequestSummaryDetail.Full, detail);
-        Assert.All(EarlierKeys, key => Assert.Contains(key, logEvent.Properties.Keys));
+        Assert.Equal(RequestSummaryDetail.Full, new StepUpLoggingOptions().RequestSummaryDetail);
     }
 
     [Fact]
@@ -216,25 +194,13 @@ public class InboundRequestSummaryTests
     }
 
     [Fact]
-    public void FromArguments_Compact_WritesOnlyClientIpAndJtiOfTheOptionals()
-    {
-        var logEvent = FromArguments(RequestSummaryDetail.Compact);
-
-        Assert.Equal(
-            ["Direction", "Method", "Path", "StatusCode", "ElapsedMs", "ClientKind", "UserAgent", "ClientIp", "Jti", "IsRequestSummary"],
-            logEvent.Properties.Keys);
-    }
-
-    [Fact]
-    public void FromAndFromArguments_Full_ShareTheTrailingFieldOrder()
+    public void Full_EndsWithTheSharedTrailingFieldOrder()
     {
         string[] trailing = ["QueryString", "RouteParameters", "ForwardedFor", "IsRequestSummary"];
 
-        foreach (var logEvent in new[] { From(Context(), RequestSummaryDetail.Full), FromArguments(RequestSummaryDetail.Full) })
-        {
-            var keys = logEvent.Properties.Keys.ToList();
-            Assert.Equal(trailing, keys.TakeLast(trailing.Length));
-            Assert.True(keys.IndexOf("ClientIp") < keys.IndexOf("Jti"), string.Join(", ", keys));
-        }
+        var keys = From(Context(), RequestSummaryDetail.Full).Properties.Keys.ToList();
+
+        Assert.Equal(trailing, keys.TakeLast(trailing.Length));
+        Assert.True(keys.IndexOf("ClientIp") < keys.IndexOf("Jti"), string.Join(", ", keys));
     }
 }

@@ -1,3 +1,43 @@
+# Migrating to v8.0.0
+
+No option, log output or audit wire format changed. The public surface shrank to the members an application uses.
+
+## `StepUpLoggingController` is created only by `AddStepUpLogging`
+
+**What changed.** The public constructors, `SetSummaryLogger`, the string overload of `EmitRequestSummary` and the
+`LevelSwitch` property are no longer public.
+
+**Why.** A controller constructed outside the container shares no state with the logging pipeline, so triggering it
+changed nothing. The level switch let callers set a level the controller did not know about.
+
+**Migrate.** Resolve `StepUpLoggingController` from the container. Read the level from `CurrentLevel` instead of
+`LevelSwitch.MinimumLevel`. Raise it with `Trigger()`.
+
+## The activity sources are names, not instances
+
+**What changed.** `StepUpLoggingExtensions.RequestLoggingActivitySource`, `ControllerActivitySource` and
+`BufferActivitySource` are replaced by `RequestLoggingActivitySourceName`, `ControllerActivitySourceName` and
+`BufferActivitySourceName`.
+
+**Why.** Starting activities on the library's sources from application code mixed them into its spans. Exporting needs
+only the name.
+
+**Migrate.** Pass the name to `AddSource`, for example
+`tracing.AddSource(StepUpLoggingExtensions.RequestLoggingActivitySourceName)`. The values are unchanged.
+
+## The outbound request summary filter is always registered
+
+**What changed.** `AddStepUpLogging` registers its `IHttpMessageHandlerBuilderFilter` whether or not
+`AlwaysLogOutboundRequestSummary` is set. The filter reads the option when a client's handler pipeline is built and
+adds nothing when it is off.
+
+**Why.** The option was read once at registration, so setting it later through `services.Configure` or a
+configuration source added after `AddStepUpLogging` had no effect. It now follows the options pipeline like every
+other option.
+
+**Migrate.** Nothing to do. A test that counts the registered `IHttpMessageHandlerBuilderFilter` instances sees one
+more.
+
 # Migrating to v7.0.0
 
 ## The package targets .NET 11
