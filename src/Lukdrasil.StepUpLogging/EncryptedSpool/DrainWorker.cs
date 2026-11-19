@@ -33,6 +33,15 @@ namespace Lukdrasil.StepUpLogging.Audit.EncryptedSpool;
 /// automatically turns this POST into a body-less GET before the worker ever sees the 3xx, and a 2xx
 /// on that GET would read as delivery of a record that was never sent (B09 hand-off).
 /// </para>
+/// <para>
+/// A record whose delivery attempt fails becomes a stuck record with a record trace: its retry
+/// Warnings, its dead-letter Critical and the Information entry logged once it is finally delivered
+/// all share one TraceId, on spans of the
+/// <see cref="StepUpLoggingEncryptedSpoolExtensions.AuditDeliveryActivitySourceName"/> source
+/// (ADR 0037). The pre-error buffer holds and flushes these entries per record trace like any traced
+/// event; list this worker's category in <c>AlwaysExportCategories</c> to export them at once. The
+/// state is kept in memory only, so a restart forgets it.
+/// </para>
 /// </remarks>
 internal sealed class DrainWorker(
     IOptions<EncryptedSpoolOptions> options,
@@ -60,6 +69,12 @@ internal sealed class DrainWorker(
     /// plain dictionary is enough — nothing else touches it concurrently.
     /// </summary>
     private readonly Dictionary<string, int> _unreadableAttempts = [];
+
+    /// <summary>
+    /// The stuck records and their record traces. Cycles run one at a time on this worker, so
+    /// nothing else touches it concurrently.
+    /// </summary>
+    private readonly StuckRecordTraces _stuckRecords = new();
 
     /// <summary>
     /// Cuts the spool, oldest first, into deliveries: runs of up to <paramref name="batchSize"/>
@@ -291,7 +306,7 @@ internal sealed class DrainWorker(
                 return await RejectedAsync(client, batch, attempt, cancellationToken).ConfigureAwait(false);
 
             default:
-                ReportUndelivered(batch[0].FilePath, attempt.Description);
+                ReportUndelivered(batch, attempt.Description);
                 return false;
         }
     }
@@ -443,6 +458,22 @@ internal sealed class DrainWorker(
         File.Delete(entry.FilePath);
         usageTracker.Released(token, entry.Contents.Length);
         EncryptedSpoolMetrics.DrainedCounter.Add(1);
+        ReportDeliveredAfterFailures(entry.FilePath);
+    }
+
+    private void ReportDeliveredAfterFailures(string spoolFilePath)
+    {
+        if (_stuckRecords.Settled(spoolFilePath) is not { } settled)
+        {
+            return;
+        }
+
+        using (settled)
+        {
+            logger.LogInformation(
+                "Audit record {SpoolFile} was delivered after {FailedAttempts} failed attempts and removed from the spool; {SpooledRecords} records remain spooled.",
+                Path.GetFileName(spoolFilePath), settled.FailedAttempts, usageTracker.Snapshot.Records);
+        }
     }
 
     private void DeadLetterAndRelease(SpoolEntry entry, DeadLetterReason reason, string description)
@@ -476,19 +507,21 @@ internal sealed class DrainWorker(
         var deadLetterPath = deadLetterBox.Deposit(spoolFilePath);
         EncryptedSpoolMetrics.DeadLetteredCounter.Add(1, new KeyValuePair<string, object?>(DeadLetterReason.TagName, reason.Tag));
 
+        using var span = _stuckRecords.Settled(spoolFilePath);
         logger.LogCritical(
             "Audit record {SpoolFile} was dead-lettered to {DeadLetterFile}: {Reason}. It never reached the audit store, nothing will retry it, and nothing removes it — investigate it and clear the directory by hand.",
             Path.GetFileName(spoolFilePath), deadLetterPath, description);
     }
 
-    private void ReportUndelivered(string spoolFilePath, string reason)
+    private void ReportUndelivered(IReadOnlyList<SpoolEntry> batch, string reason)
     {
         reachability.AttemptFailed();
         EncryptedSpoolMetrics.DrainFailureCounter.Add(1);
 
+        using var span = _stuckRecords.AttemptFailed(batch, reason);
         logger.LogWarning(
             "Audit record {SpoolFile} is still waiting to be delivered: {Reason}. It stays in the spool, as does everything behind it, and the next attempt follows in {RetryDelay} — {ConsecutiveFailures} attempts in a row have failed now.",
-            Path.GetFileName(spoolFilePath), reason, RetryDelayFor(reachability.ConsecutiveFailures, _options), reachability.ConsecutiveFailures);
+            Path.GetFileName(batch[0].FilePath), reason, RetryDelayFor(reachability.ConsecutiveFailures, _options), reachability.ConsecutiveFailures);
     }
 
     /// <summary>

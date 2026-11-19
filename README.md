@@ -1053,6 +1053,20 @@ Under the same `StepUpLogging.Audit` meter as the rest of audit logging:
 - `audit_spool_dead_lettered_total` — records moved to `dead-letter/`, tagged `reason`: `rejected` (the receiver refused it), `corrupt` (the spool file does not parse) or `unreadable` (the file could not be read within `UnreadableRetryLimit`).
 - `audit_encryption_failures_total` — `IAuditPayloadEncryptor` calls that threw (the exception still propagates; this only counts that it happened).
 
+### Logs and traces
+
+A record whose delivery attempt failed is a stuck record. When the drain worker finally delivers it, it logs one Information entry:
+
+```
+Audit record {SpoolFile} was delivered after {FailedAttempts} failed attempts and removed from the spool; {SpooledRecords} records remain spooled.
+```
+
+A record delivered on its first attempt logs nothing. The closing entry shares one TraceId with the record's retry Warnings and, if it is dead-lettered instead, its Critical, so a log search on that TraceId shows the record's whole story. In a batch, every record of a failed batch joins the head's trace unless it already has its own.
+
+- With `BaseLevel` at `Warning`, the Information entry is not exported by default. Add `Lukdrasil.StepUpLogging.Audit.EncryptedSpool.DrainWorker` to `AlwaysExportCategories` to see it. The pre-error buffer holds entries in a record trace and flushes them per record trace like any traced event; `AlwaysExportCategories` also keeps them out of the buffer and exports them at once.
+- The spans of that trace (`audit.spool.deliver`, one per failed attempt and one when the record is settled) are on the activity source `StepUpLoggingEncryptedSpoolExtensions.AuditDeliveryActivitySourceName` (`Lukdrasil.StepUpLogging.Audit.Delivery`). The library never registers it; pass it to `AddSource` to export the spans. Log correlation works without it.
+- The stuck-record state is in memory only: after a restart, a record delivered on its first attempt in the new process logs nothing.
+
 ### The fsync cost
 
 Every audit write through this sink costs one `fsync`: the record is flushed to the device, not
