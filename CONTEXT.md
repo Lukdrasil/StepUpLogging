@@ -23,3 +23,7 @@ Domain terms of `Lukdrasil.StepUpLogging`.
   URL property.
 - **native image**: (ADR 0035) a consumer app published with `PublishAot=true`, where
   `RuntimeFeature.IsDynamicCodeSupported` is false and reflection-based JSON is off. Avoid: AOT build, trimmed app.
+- **stuck record**: (ADR 0037) a spooled audit record with at least one failed delivery attempt in this
+  process, still in the spool. Avoid: failed record, pending record.
+- **record trace**: (ADR 0037) the trace a stuck record's retry warnings and its closing entry share.
+  Avoid: delivery trace, spool trace.
