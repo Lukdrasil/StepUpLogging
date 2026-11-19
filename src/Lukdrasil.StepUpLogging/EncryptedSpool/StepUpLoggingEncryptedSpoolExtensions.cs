@@ -19,6 +19,9 @@ public static class StepUpLoggingEncryptedSpoolExtensions
     /// <summary>The encrypted spool's health check name.</summary>
     public const string HealthCheckName = "encrypted-spool-audit";
 
+    /// <summary>The name of the activity source the drain worker traces stuck records on.</summary>
+    public const string AuditDeliveryActivitySourceName = "Lukdrasil.StepUpLogging.Audit.Delivery"; // af-stub
+
     /// <summary>
     /// Adds the encrypted spooling audit sink: <see cref="EncryptedSpoolAuditSink"/>,
     /// <see cref="DrainWorker"/>, and the combined health check. Calls
