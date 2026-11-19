@@ -6,6 +6,21 @@ Releases from 1.8.0 onward are recorded here. Entries backfilled from each relea
 `PackageReleaseNotes` and, where those were not updated per release, from the commits between tags.
 Tags before 1.8.0 predate this file.
 
+## [8.0.0] - 2026-11-19
+
+### Changed
+- **Breaking: `StepUpLoggingController` is created only by `AddStepUpLogging()`.** Its constructors, `SetSummaryLogger`, the string overload of `EmitRequestSummary` and the `LevelSwitch` property are no longer public. Resolve the controller from the container, read the level from `CurrentLevel` and raise it with `Trigger()`. See MIGRATION.md.
+- **Breaking: the activity sources are names, not instances.** `StepUpLoggingExtensions.RequestLoggingActivitySource`, `ControllerActivitySource` and `BufferActivitySource` are replaced by `RequestLoggingActivitySourceName`, `ControllerActivitySourceName` and `BufferActivitySourceName`; pass the name to `AddSource`. The values are unchanged.
+- `AddStepUpLogging()` always registers its outbound request summary `IHttpMessageHandlerBuilderFilter`; it adds nothing while `AlwaysLogOutboundRequestSummary` is off.
+- Options are read once through the options pipeline (`IOptions<StepUpLoggingOptions>`) by one internal settings object; no option, log output or audit wire format changed.
+
+### Added
+- **A stuck audit record gets its own trace (#104).** A spooled record with at least one failed delivery attempt starts a trace on its first failure. Its retry Warnings are logged inside it, text unchanged, and one Information entry closes it when the record is delivered: "Audit record {SpoolFile} was delivered after {FailedAttempts} failed attempts and removed from the spool; {SpooledRecords} records remain spooled." A dead-lettered record's Critical entry closes it instead. Spans come from `Lukdrasil.StepUpLogging.Audit.Delivery` (`StepUpLoggingEncryptedSpoolExtensions.AuditDeliveryActivitySourceName`), which the library does not register. The state is in memory only. A record delivered on the first attempt logs nothing new. See ADR 0037.
+
+### Fixed
+- `AlwaysLogOutboundRequestSummary` set through `services.Configure` or a configuration source added after `AddStepUpLogging()` now takes effect; it was read once at registration.
+- The `TraceFlags` property is always `0` or `1` (the W3C sampled bit). On .NET 10 and 11 a new root activity also carries the random-trace-id flag, and the property was written as `2` or `3`.
+
 ## [7.4.0] - 2026-11-13
 
 ### Added
