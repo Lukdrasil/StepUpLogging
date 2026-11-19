@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text.Json;
 using Lukdrasil.StepUpLogging.Audit.EncryptedSpool;
+using Microsoft.Extensions.Logging;
 
 namespace Lukdrasil.StepUpLogging.Tests;
 
@@ -210,5 +211,58 @@ public class BatchedDrainTests
         await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(0, harness.Tracker.Snapshot.Records);
+    }
+
+    [Fact]
+    public async Task DrainAsync_BatchFailedThenDelivered_LogsOneEntryPerRecordInTheWarningsTrace()
+    {
+        using var harness = new SpoolDrainHarness(
+            FakeAuditReceiver.Responding(HttpStatusCode.ServiceUnavailable, HttpStatusCode.OK),
+            BatchesOf(64));
+        await SpoolInOrderAsync(harness, 3);
+        var files = harness.SpooledFileNames();
+
+        await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+        await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+
+        // Every record of the failed batch failed an attempt, so each closes with its own entry (Q4).
+        Assert.Equal(
+            [
+                $"Audit record {files[0]} was delivered after 1 failed attempts and removed from the spool; 2 records remain spooled.",
+                $"Audit record {files[1]} was delivered after 1 failed attempts and removed from the spool; 1 records remain spooled.",
+                $"Audit record {files[2]} was delivered after 1 failed attempts and removed from the spool; 0 records remain spooled."
+            ],
+            harness.Logger.MessagesAt(LogLevel.Information));
+        var warningTrace = Assert.Single(harness.Logger.TraceIdsAt(LogLevel.Warning));
+        Assert.NotEqual(default, warningTrace);
+        Assert.Equal([warningTrace, warningTrace, warningTrace], harness.Logger.TraceIdsAt(LogLevel.Information));
+    }
+
+    [Fact]
+    public async Task DrainAsync_FailedBatchThenRejected_LogsTheRedeliveredAndDeadLetteredRecordsInTheWarningsTrace()
+    {
+        using var harness = new SpoolDrainHarness(
+            FakeAuditReceiver.Responding(
+                HttpStatusCode.ServiceUnavailable,
+                HttpStatusCode.UnprocessableEntity,
+                HttpStatusCode.OK,
+                HttpStatusCode.UnprocessableEntity,
+                HttpStatusCode.OK),
+            BatchesOf(64));
+        await SpoolInOrderAsync(harness, 3);
+        var files = harness.SpooledFileNames();
+
+        await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+        await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+
+        Assert.Collection(
+            harness.Logger.MessagesAt(LogLevel.Information),
+            first => Assert.Contains(files[0], first),
+            third => Assert.Contains(files[2], third));
+        Assert.Contains(files[1], Assert.Single(harness.Logger.MessagesAt(LogLevel.Critical)));
+        var warningTrace = Assert.Single(harness.Logger.TraceIdsAt(LogLevel.Warning));
+        Assert.NotEqual(default, warningTrace);
+        Assert.Equal([warningTrace, warningTrace], harness.Logger.TraceIdsAt(LogLevel.Information));
+        Assert.Equal([warningTrace], harness.Logger.TraceIdsAt(LogLevel.Critical));
     }
 }

@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net;
 using Lukdrasil.StepUpLogging.Audit.EncryptedSpool;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
@@ -514,5 +516,212 @@ public class DrainWorkerTests
         Assert.NotEmpty(harness.Logger.MessagesAt(LogLevel.Error));
         Assert.NotNull(harness.Worker.ExecuteTask);
         Assert.False(harness.Worker.ExecuteTask.IsFaulted);
+    }
+
+    [Fact]
+    public async Task DrainWorker_RecordDeliveredAfterTwoFailures_LogsOneInformationNamingFileAndCount()
+    {
+        using var harness = new SpoolDrainHarness(FakeAuditReceiver.Responding(
+            HttpStatusCode.ServiceUnavailable, HttpStatusCode.ServiceUnavailable, HttpStatusCode.OK));
+        await harness.SpoolAsync(AuditedOperation(at: Noon));
+        var stuckFileName = harness.SpooledFileNames()[0];
+
+        await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+        await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+        await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            [$"Audit record {stuckFileName} was delivered after 2 failed attempts and removed from the spool; 0 records remain spooled."],
+            harness.Logger.MessagesAt(LogLevel.Information));
+    }
+
+    [Fact]
+    public async Task DrainWorker_RecordDeliveredAfterOneFailure_CountsOnlyTheRecordsStillSpooled()
+    {
+        using var harness = new SpoolDrainHarness(FakeAuditReceiver.Responding(
+            HttpStatusCode.ServiceUnavailable, HttpStatusCode.OK, HttpStatusCode.OK));
+        await harness.SpoolAsync(AuditedOperation(at: Noon));
+        await harness.SpoolAsync(AuditedOperation(at: Noon.AddMinutes(1)));
+        var stuckFileName = harness.SpooledFileNames()[0];
+
+        await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+        await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+
+        // Read after the delivered record left the tally: the record behind it is the one left.
+        Assert.Equal(
+            [$"Audit record {stuckFileName} was delivered after 1 failed attempts and removed from the spool; 1 records remain spooled."],
+            harness.Logger.MessagesAt(LogLevel.Information));
+    }
+
+    [Fact]
+    public async Task DrainWorker_StuckRecordDeliveredAfterARestart_LogsNothingNew()
+    {
+        using var harness = new SpoolDrainHarness(FakeAuditReceiver.Responding(HttpStatusCode.ServiceUnavailable, HttpStatusCode.OK));
+        await harness.SpoolAsync(AuditedOperation(at: Noon));
+        await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+
+        await harness.StartedOver().DrainAsync(TestContext.Current.CancellationToken);
+
+        // The failed attempts are known only to the process that made them (ADR 0037).
+        Assert.Empty(harness.SpooledFileNames());
+        Assert.Empty(harness.Logger.MessagesAt(LogLevel.Information));
+    }
+
+    [Fact]
+    public async Task DrainWorker_RecordDeliveredAfterFailures_WarningsAndDeliveredEntryShareOneTraceId()
+    {
+        using var harness = new SpoolDrainHarness(FakeAuditReceiver.Responding(
+            HttpStatusCode.ServiceUnavailable, HttpStatusCode.ServiceUnavailable, HttpStatusCode.OK));
+        await harness.SpoolAsync(AuditedOperation(at: Noon));
+
+        await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+        await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+        await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+
+        var deliveredTrace = Assert.Single(harness.Logger.TraceIdsAt(LogLevel.Information));
+        Assert.NotEqual(default, deliveredTrace);
+        Assert.Equal([deliveredTrace, deliveredTrace], harness.Logger.TraceIdsAt(LogLevel.Warning));
+    }
+
+    [Fact]
+    public async Task DrainWorker_TwoRecordsStuckOneAfterTheOther_EachGetsItsOwnTrace()
+    {
+        using var harness = new SpoolDrainHarness(FakeAuditReceiver.Responding(
+            HttpStatusCode.ServiceUnavailable, HttpStatusCode.OK, HttpStatusCode.ServiceUnavailable, HttpStatusCode.OK));
+        await harness.SpoolAsync(AuditedOperation(at: Noon));
+
+        await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+        await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+        await harness.SpoolAsync(AuditedOperation(at: Noon.AddMinutes(1)));
+        await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+        await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+
+        var warningTraces = harness.Logger.TraceIdsAt(LogLevel.Warning);
+        Assert.Equal(warningTraces, harness.Logger.TraceIdsAt(LogLevel.Information));
+        Assert.DoesNotContain(default, warningTraces);
+        Assert.NotEqual(warningTraces[0], warningTraces[1]);
+    }
+
+    [Fact]
+    public async Task DrainWorker_RecordDeliveredOnFirstAttempt_LogsNothingNew()
+    {
+        using var harness = new SpoolDrainHarness(FakeAuditReceiver.Responding(HttpStatusCode.OK));
+        await harness.SpoolAsync(AuditedOperation(at: Noon));
+
+        await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+
+        Assert.Empty(harness.SpooledFileNames());
+        Assert.Empty(harness.Logger.MessagesAt(LogLevel.Information));
+        Assert.Empty(harness.Logger.MessagesAt(LogLevel.Warning));
+    }
+
+    [Fact]
+    public async Task DrainWorker_RecordBehindARecoveredRecord_LogsNothingNew()
+    {
+        using var harness = new SpoolDrainHarness(FakeAuditReceiver.Responding(
+            HttpStatusCode.ServiceUnavailable, HttpStatusCode.OK, HttpStatusCode.OK));
+        await harness.SpoolAsync(AuditedOperation(at: Noon));
+        await harness.SpoolAsync(AuditedOperation(at: Noon.AddMinutes(1)));
+        var behindFileName = harness.SpooledFileNames()[1];
+
+        await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+        await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+
+        Assert.Empty(harness.SpooledFileNames());
+        Assert.DoesNotContain(harness.Logger.MessagesAt(LogLevel.Information), message => message.Contains(behindFileName));
+    }
+
+    [Fact]
+    public async Task DrainWorker_RecordRejectedAfterAFailure_LogsTheDeadLetterCriticalInTheRecordsTrace()
+    {
+        using var harness = new SpoolDrainHarness(FakeAuditReceiver.Responding(
+            HttpStatusCode.ServiceUnavailable, HttpStatusCode.UnprocessableEntity));
+        await harness.SpoolAsync(AuditedOperation(at: Noon));
+
+        await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+        await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+
+        var warningTrace = Assert.Single(harness.Logger.TraceIdsAt(LogLevel.Warning));
+        Assert.NotEqual(default, warningTrace);
+        Assert.Equal([warningTrace], harness.Logger.TraceIdsAt(LogLevel.Critical));
+        Assert.Empty(harness.Logger.MessagesAt(LogLevel.Information));
+    }
+
+    [Fact]
+    public async Task DrainWorker_RecordRejectedOnFirstAttempt_LogsTheCriticalOutsideAnyRecordTrace()
+    {
+        using var harness = new SpoolDrainHarness(FakeAuditReceiver.Responding(HttpStatusCode.UnprocessableEntity));
+        await harness.SpoolAsync(AuditedOperation(at: Noon));
+
+        await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal([default(ActivityTraceId)], harness.Logger.TraceIdsAt(LogLevel.Critical));
+        Assert.Empty(harness.Logger.MessagesAt(LogLevel.Information));
+    }
+
+    [Fact]
+    public async Task DrainWorker_RecordDeliveredAfterFailures_ExportsTheAttemptsAsOneTraceOnTheDeliverySource()
+    {
+        var stopped = new ConcurrentQueue<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == StepUpLoggingEncryptedSpoolExtensions.AuditDeliveryActivitySourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = stopped.Enqueue,
+        };
+        ActivitySource.AddActivityListener(listener);
+        using var harness = new SpoolDrainHarness(FakeAuditReceiver.Responding(
+            HttpStatusCode.ServiceUnavailable, HttpStatusCode.ServiceUnavailable, HttpStatusCode.OK));
+        await harness.SpoolAsync(AuditedOperation(at: Noon));
+
+        await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+        await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+        await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+
+        var deliveredTrace = Assert.Single(harness.Logger.TraceIdsAt(LogLevel.Information));
+        Assert.Collection(
+            stopped,
+            firstAttempt =>
+            {
+                Assert.Equal(deliveredTrace, firstAttempt.TraceId);
+                Assert.Equal(default, firstAttempt.ParentSpanId);
+                Assert.Equal(ActivityStatusCode.Error, firstAttempt.Status);
+            },
+            secondAttempt =>
+            {
+                Assert.Equal(deliveredTrace, secondAttempt.TraceId);
+                Assert.Equal(stopped.First().SpanId, secondAttempt.ParentSpanId);
+                Assert.Equal(ActivityStatusCode.Error, secondAttempt.Status);
+            },
+            delivered =>
+            {
+                Assert.Equal(deliveredTrace, delivered.TraceId);
+                Assert.Equal(stopped.First().SpanId, delivered.ParentSpanId);
+                Assert.Equal(2, delivered.GetTagItem("audit.spool.failed_attempts"));
+            });
+    }
+
+    [Fact]
+    public async Task DrainWorker_DeliverySourceSampledOut_LogEntriesStillShareOneTraceId()
+    {
+        var started = 0;
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == StepUpLoggingEncryptedSpoolExtensions.AuditDeliveryActivitySourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.None,
+            ActivityStarted = _ => started++,
+        };
+        ActivitySource.AddActivityListener(listener);
+        using var harness = new SpoolDrainHarness(FakeAuditReceiver.Responding(HttpStatusCode.ServiceUnavailable, HttpStatusCode.OK));
+        await harness.SpoolAsync(AuditedOperation(at: Noon));
+
+        await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+        await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+
+        // Log correlation does not depend on anyone exporting the source (ADR 0037 D3).
+        Assert.Equal(0, started);
+        var warningTrace = Assert.Single(harness.Logger.TraceIdsAt(LogLevel.Warning));
+        Assert.NotEqual(default, warningTrace);
+        Assert.Equal([warningTrace], harness.Logger.TraceIdsAt(LogLevel.Information));
     }
 }
