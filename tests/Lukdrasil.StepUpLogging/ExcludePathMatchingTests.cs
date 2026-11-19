@@ -1,6 +1,8 @@
 using System.Collections.Generic;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Serilog.Events;
@@ -10,9 +12,6 @@ namespace Lukdrasil.StepUpLogging.Tests;
 
 public class ExcludePathMatchingTests
 {
-    private static readonly IReadOnlySet<string> NoExact = new HashSet<string>();
-    private static readonly IReadOnlyList<string> NoPrefixes = System.Array.Empty<string>();
-
     [Theory]
     [InlineData("/api", true)]
     [InlineData("/api/x", true)]
@@ -22,9 +21,7 @@ public class ExcludePathMatchingTests
     [InlineData("/other", false)]
     public void IsExcludedPath_WildcardPrefix_MatchesSegmentBoundaryOnly(string path, bool expected)
     {
-        var prefixes = new[] { "/api" };
-
-        Assert.Equal(expected, StepUpLoggingExtensions.IsExcludedPath(path, NoExact, prefixes));
+        Assert.Equal(expected, new ExcludedPaths(["/api/*"]).Contains(path));
     }
 
     [Theory]
@@ -33,18 +30,29 @@ public class ExcludePathMatchingTests
     [InlineData("/health/live", false)]
     public void IsExcludedPath_ExactEntry_MatchesWholePathOnly(string path, bool expected)
     {
-        var exact = new HashSet<string>(System.StringComparer.OrdinalIgnoreCase) { "/health" };
-
-        Assert.Equal(expected, StepUpLoggingExtensions.IsExcludedPath(path, exact, NoPrefixes));
+        Assert.Equal(expected, new ExcludedPaths(["/health"]).Contains(path));
     }
 
     [Fact]
     public void IsExcludedPath_MatchesRegardlessOfCase()
     {
-        var exact = new HashSet<string>(System.StringComparer.OrdinalIgnoreCase) { "/health" };
+        var excluded = new ExcludedPaths(["/health", "/api/*"]);
 
-        Assert.True(StepUpLoggingExtensions.IsExcludedPath("/HEALTH", exact, NoPrefixes));
-        Assert.True(StepUpLoggingExtensions.IsExcludedPath("/API/X", NoExact, new[] { "/api" }));
+        Assert.True(excluded.Contains("/HEALTH"));
+        Assert.True(excluded.Contains("/API/X"));
+    }
+
+    [Theory]
+    [InlineData(null, "")]
+    [InlineData("/", "/")]
+    [InlineData("/health/", "/health")]
+    [InlineData("/api/x//", "/api/x")]
+    public void NormalizedPath_TrimsTrailingSlashesExceptForTheRoot(string? path, string expected)
+    {
+        var context = new DefaultHttpContext();
+        context.Features.Get<IHttpRequestFeature>()!.Path = path!;
+
+        Assert.Equal(expected, ExcludedPaths.NormalizedPath(context.Request));
     }
 
     [Fact]
@@ -75,7 +83,7 @@ public class ExcludePathMatchingTests
 
                 await app.StartAsync(TestContext.Current.CancellationToken);
                 using var client = app.GetTestClient();
-                foreach (var path in new[] { "/health", "/.well-known/ogham-sealing-keys.json", "/ping" })
+                foreach (var path in new[] { "/health", "/health/", "/.well-known/ogham-sealing-keys.json", "/ping" })
                 {
                     using var response = await client.GetAsync(path, TestContext.Current.CancellationToken);
                 }

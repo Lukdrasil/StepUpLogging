@@ -167,6 +167,34 @@ public class PrebufferStripeTests
         Assert.Empty(collector.Events);
     }
 
+    [Fact]
+    public void Dispose_WhileAHoldWaitsForItsStripeLock_LeavesNoContext()
+    {
+        Activity.Current = null;
+        var collector = new Collector();
+        var sink = new PreErrorBufferSink(BypassInto(collector), capacityPerContext: 5, maxContexts: 128, minimumLevel: LogEventLevel.Information);
+        var parked = new ManualResetEventSlim();
+        var release = new ManualResetEventSlim();
+        sink.BeforeStripeLockTestHook = ParkFirstHold(parked, release);
+
+        var parkedHold = StartBackground(() => sink.Hold(Held("parked-trace", "parked")));
+        try
+        {
+            Assert.True(parked.Wait(Bounded, TestContext.Current.CancellationToken), "the hold never reached the stripe lock hook");
+            sink.Dispose();
+        }
+        finally
+        {
+            release.Set();
+            parkedHold.Join(Bounded);
+        }
+
+        sink.Emit(Error("parked-trace"));
+
+        Assert.Equal(0, sink.ContextCount);
+        Assert.Empty(collector.Events);
+    }
+
     /// <summary>
     /// An enqueue hook that parks the first hold to reach it until <paramref name="release"/> is set (at most
     /// <see cref="Bounded"/>), signalling <paramref name="parked"/>; every later hold passes straight through.

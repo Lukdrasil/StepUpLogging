@@ -23,7 +23,7 @@ public class RedactionPerPatternBenchmarks
     [GlobalSetup]
     public void Setup()
     {
-        _pattern = new CompiledRedactionPatterns([StepUpLoggingExtensions.CompilePattern(BenchmarkFixtures.PatternSources[PatternIndex])]);
+        _pattern = new CompiledRedactionPatterns([CompiledRedactionPatterns.CompilePattern(BenchmarkFixtures.PatternSources[PatternIndex])]);
 
         BenchmarkFixtures.Require(!_pattern.HasPrefilter, "a single pattern built a prefilter");
         BenchmarkFixtures.Require(ReferenceEquals(ShortNoMatch(), ShortValue), "the short value was changed");

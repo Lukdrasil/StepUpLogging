@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Net.Http;
 using System.Security.Claims;
 using System.Threading.Tasks;
@@ -8,6 +10,7 @@ using Microsoft.AspNetCore.Http;
 using System.Text.RegularExpressions;
 using Lukdrasil.StepUpLogging;
 using Serilog.Extensions.Hosting;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
@@ -22,62 +25,52 @@ namespace Lukdrasil.StepUpLogging.Tests
     {
         private sealed class CaptureSink : ILogEventSink
         {
-            public LogEvent? LastEvent { get; private set; }
-            public void Emit(LogEvent logEvent)
-            {
-                LastEvent = logEvent;
-            }
+            private readonly ConcurrentQueue<LogEvent> _events = new();
+            public LogEvent[] Summaries => _events.Where(e => LogProperties.HasFlag(e, LogProperties.IsRequestSummary)).ToArray();
+            public void Emit(LogEvent logEvent) => _events.Enqueue(logEvent);
         }
 
-        [Fact(DisplayName = "Middleware_EmitsRequestSummary_WhenAlwaysLogEnabled")]
-        public async Task Middleware_EmitsRequestSummary_WhenAlwaysLogEnabled()
+        [Fact(DisplayName = "RequestSummaryLevel_FromConfiguration_IsTheLevelOfTheExportedSummary")]
+        public async Task RequestSummaryLevel_FromConfiguration_IsTheLevelOfTheExportedSummary()
         {
-            var capture = new CaptureSink();
-            var summaryLogger = new LoggerConfiguration().WriteTo.Sink(capture).CreateLogger();
+            var captureKey = Guid.NewGuid().ToString("N");
+            var settings = new Dictionary<string, string?>
+            {
+                ["SerilogStepUp:EnableOtlpExporter"] = "false",
+                ["SerilogStepUp:AlwaysLogRequestSummary"] = "true",
+                ["SerilogStepUp:RequestSummaryLevel"] = "Debug",
+                ["Serilog:Using:0"] = typeof(KeyedCaptureSink).Assembly.GetName().Name,
+                ["Serilog:WriteTo:0:Name"] = nameof(KeyedCaptureSink.StepUpCapture),
+                ["Serilog:WriteTo:0:Args:key"] = captureKey,
+            };
 
-            using var host = new HostBuilder()
-                .ConfigureWebHost(web => web
-                    .UseTestServer()
-                    .ConfigureServices(services =>
-                    {
-                        // Register options with AlwaysLogRequestSummary true
-                        var opts = new StepUpLoggingOptions { AlwaysLogRequestSummary = true, RequestSummaryLevel = "Information" };
-                        services.AddSingleton(Options.Create(opts));
-                        services.AddSingleton<Serilog.ILogger>(summaryLogger);
-                        services.AddSingleton(sp => new StepUpLoggingController(opts, summaryLogger));
-                        // Register compiled redaction patterns required by middleware
-                        var patterns = opts.RedactionRegexes
-                            .Where(p => !string.IsNullOrWhiteSpace(p))
-                            .Select(p => new Regex(p, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100)))
-                            .ToArray();
-                        services.AddSingleton(new CompiledRedactionPatterns(patterns));
-                        // Register Serilog DiagnosticContext required by Serilog.AspNetCore.RequestLoggingMiddleware
-                        services.AddSingleton(new DiagnosticContext(summaryLogger));
-                    })
-                    .Configure(app =>
-                    {
-                        // Add middleware
-                        app.UseStepUpRequestLogging();
+            try
+            {
+                var builder = WebApplication.CreateBuilder();
+                builder.WebHost.UseTestServer();
+                builder.Configuration.AddInMemoryCollection(settings);
+                builder.AddStepUpLogging();
 
-                        app.Run(async ctx =>
-                        {
-                            ctx.Response.StatusCode = 200;
-                            await ctx.Response.WriteAsync("ok");
-                        });
-                    }))
-                .Build();
+                await using (var app = builder.Build())
+                {
+                    app.UseStepUpRequestLogging();
+                    app.MapGet("/ping", () => "pong");
 
-            await host.StartAsync(TestContext.Current.CancellationToken);
-            using var client = host.GetTestClient();
+                    await app.StartAsync(TestContext.Current.CancellationToken);
+                    using var client = app.GetTestClient();
+                    using var response = await client.GetAsync("/ping", TestContext.Current.CancellationToken);
 
-            var res = await client.GetAsync("/api/test", TestContext.Current.CancellationToken);
-            res.EnsureSuccessStatusCode();
+                    await Task.Delay(200, TestContext.Current.CancellationToken);
+                    await app.StopAsync(TestContext.Current.CancellationToken);
+                }
 
-            // Allow some time for logging to propagate
-            await Task.Delay(50, TestContext.Current.CancellationToken);
-
-            Assert.NotNull(capture.LastEvent);
-            Assert.True(capture.LastEvent!.Properties.ContainsKey("IsRequestSummary"));
+                var summary = Assert.Single(KeyedCaptureSink.Events(captureKey), e => LogProperties.HasFlag(e, LogProperties.IsRequestSummary));
+                Assert.Equal(LogEventLevel.Debug, summary.Level);
+            }
+            finally
+            {
+                KeyedCaptureSink.Forget(captureKey);
+            }
         }
 
         private static async Task<IHost> BuildHostWithSummary(CaptureSink capture, Action<HttpContext>? configureContext = null)
@@ -92,6 +85,7 @@ namespace Lukdrasil.StepUpLogging.Tests
                         services.AddSingleton(Options.Create(opts));
                         services.AddSingleton<Serilog.ILogger>(summaryLogger);
                         services.AddSingleton(sp => new StepUpLoggingController(opts, summaryLogger));
+                        services.AddSingleton(new StepUpSettings(opts));
                         var patterns = opts.RedactionRegexes
                             .Where(p => !string.IsNullOrWhiteSpace(p))
                             .Select(p => new Regex(p, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100)))
@@ -136,8 +130,8 @@ namespace Lukdrasil.StepUpLogging.Tests
             await client.GetAsync("/api/test", TestContext.Current.CancellationToken);
             await Task.Delay(50, TestContext.Current.CancellationToken);
 
-            Assert.NotNull(capture.LastEvent);
-            Assert.True(capture.LastEvent!.Properties.TryGetValue("Jti", out var jtiProp));
+            var summary = Assert.Single(capture.Summaries);
+            Assert.True(summary.Properties.TryGetValue("Jti", out var jtiProp));
             Assert.Equal("\"test-jti-abc\"", jtiProp.ToString());
         }
 
@@ -155,8 +149,8 @@ namespace Lukdrasil.StepUpLogging.Tests
             await client.GetAsync("/api/test", TestContext.Current.CancellationToken);
             await Task.Delay(50, TestContext.Current.CancellationToken);
 
-            Assert.NotNull(capture.LastEvent);
-            Assert.False(capture.LastEvent!.Properties.ContainsKey("Jti"));
+            var summary = Assert.Single(capture.Summaries);
+            Assert.False(summary.Properties.ContainsKey("Jti"));
         }
 
         [Fact(DisplayName = "AlwaysLogSummary_OmitsJti_WhenUnauthenticated")]
@@ -169,8 +163,8 @@ namespace Lukdrasil.StepUpLogging.Tests
             await client.GetAsync("/api/test", TestContext.Current.CancellationToken);
             await Task.Delay(50, TestContext.Current.CancellationToken);
 
-            Assert.NotNull(capture.LastEvent);
-            Assert.False(capture.LastEvent!.Properties.ContainsKey("Jti"));
+            var summary = Assert.Single(capture.Summaries);
+            Assert.False(summary.Properties.ContainsKey("Jti"));
         }
     }
 }

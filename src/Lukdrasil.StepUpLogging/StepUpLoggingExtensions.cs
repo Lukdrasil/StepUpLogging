@@ -1,86 +1,30 @@
-using System;
-using System.Collections.Generic;
-using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
-using System.Diagnostics.Metrics;
-using System.Globalization;
-using System.IO;
-using System.Linq;
-using System.Text;
-using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Http.Features;
-using Serilog.Exceptions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Http;
 using Microsoft.Extensions.Options;
-using OpenTelemetry;
-using OpenTelemetry.Exporter;
 using OpenTelemetry.Metrics;
-using OpenTelemetry.Trace;
 using Serilog;
-using Serilog.Configuration;
-using Serilog.Core;
-using Serilog.Enrichers.OpenTelemetry;
-using Serilog.Formatting;
-using Serilog.Formatting.Compact;
-using Serilog.Events;
-using Serilog.Sinks.File;
-using Serilog.Sinks.OpenTelemetry;
-using Serilog.Enrichers.CallStack;
 
 namespace Lukdrasil.StepUpLogging;
 
+/// <summary>
+/// The entry points of StepUp logging: <c>AddStepUpLogging</c> and <c>AddAuditLogging</c> on the host builder,
+/// <c>UseStepUpRequestLogging</c> on the app, and the activity source and meter names to subscribe to.
+/// </summary>
 public static class StepUpLoggingExtensions
 {
-    /// <summary>
-    /// ActivitySource for request logging operations (instrumentation can be disabled via EnableActivityInstrumentation).
-    /// Activities:
-    /// - LogRequest: Main request processing
-    /// - CaptureRequestBody: Body capture for POST/PUT/PATCH
-    /// - ApplyRedaction: Sensitive data redaction operations
-    /// </summary>
-    public static readonly ActivitySource RequestLoggingActivitySource = new("Lukdrasil.StepUpLogging.RequestLogging", "1.0.0");
-
-    /// <summary>
-    /// ActivitySource for controller state transitions.
-    /// Activities:
-    /// - TriggerStepUp: When logging level steps up on error
-    /// - PerformStepDown: When logging level steps down after timeout
-    /// </summary>
-    public static readonly ActivitySource ControllerActivitySource = new("Lukdrasil.StepUpLogging.Controller", "1.0.0");
-
-    /// <summary>
-    /// ActivitySource for buffer operations.
-    /// Activities:
-    /// - FlushBufferedEvents: When buffer is flushed due to error
-    /// - BufferEvent: Individual event buffering (use sparingly)
-    /// </summary>
-    public static readonly ActivitySource BufferActivitySource = new("Lukdrasil.StepUpLogging.Buffer", "1.0.0");
-
-    /// <summary>ActivitySource name for request logging (for explicit registration).</summary>
+    /// <summary>ActivitySource name for request logging (LogRequest, ApplyRedaction, CaptureRequestBody), for explicit registration.</summary>
     public const string RequestLoggingActivitySourceName = "Lukdrasil.StepUpLogging.RequestLogging";
 
-    /// <summary>ActivitySource name for controller operations (for explicit registration).</summary>
+    /// <summary>ActivitySource name for controller state transitions (TriggerStepUp, PerformStepDown), for explicit registration.</summary>
     public const string ControllerActivitySourceName = "Lukdrasil.StepUpLogging.Controller";
 
-    /// <summary>ActivitySource name for buffer operations (for explicit registration).</summary>
+    /// <summary>ActivitySource name for pre-error buffer flushes (FlushBufferedEvents), for explicit registration.</summary>
     public const string BufferActivitySourceName = "Lukdrasil.StepUpLogging.Buffer";
-
-    private static readonly Meter RequestMeter = new("StepUpLogging.RequestLogging", "1.0.0");
-    private static readonly Counter<long> BodyCaptureCounter = RequestMeter.CreateCounter<long>("request_body_captured_total", "count", "Number of requests with captured body");
-    private static readonly Counter<long> RedactionCounter = RequestMeter.CreateCounter<long>("request_redaction_applied_total", "count", "Number of requests with redaction applied");
-
-    // Built-in sensitive headers (static to avoid allocation on every request)
-    private static readonly HashSet<string> BuiltInSensitiveHeaders = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "Authorization", "Cookie", "X-API-Key", "X-Auth-Token", "X-Access-Token",
-        "Authorization-Token", "Proxy-Authorization", "WWW-Authenticate", "Sec-WebSocket-Key"
-    };
 
     /// <summary>
     /// Adds StepUp logging with OpenTelemetry as the primary export mechanism.
@@ -192,6 +136,7 @@ public static class StepUpLoggingExtensions
         builder.Services.AddHttpContextAccessor();
         builder.Services.Add(new ServiceDescriptor(typeof(IAuditEventSink), typeof(TSink), sinkLifetime));
         // Scoped regardless of the sink's lifetime: the audit logger reads per-request context.
+        builder.Services.AddScoped<AuditTrail>();
         builder.Services.AddScoped(typeof(IAuditLogger<>), typeof(AuditLogger<>));
 
         // The prerequisite is checked through the service provider rather than through
@@ -199,12 +144,15 @@ public static class StepUpLoggingExtensions
         // start-up validation, as for StepUpLoggingOptions).
         builder.Services.AddOptions<AuditLoggingPrerequisites>()
             .Validate<IServiceProvider>(
-                (_, services) => services.GetService<CompiledRedactionPatterns>() is not null,
+                (_, services) => IsStepUpLoggingRegistered(services),
                 "AddAuditLogging requires AddStepUpLogging: audit records resolve the client IP with the same rule as request logging (ADR 0008), and only AddStepUpLogging registers it. Add builder.AddStepUpLogging() in Program.cs — the order of the two calls does not matter.")
             .ValidateOnStart();
 
         return builder;
     }
+
+    private static bool IsStepUpLoggingRegistered(IServiceProvider services)
+        => services.GetService<StepUpSettings>() is not null && services.GetService<CompiledRedactionPatterns>() is not null;
 
     private static IHostApplicationBuilder AddStepUpLoggingInternal(
         IHostApplicationBuilder builder,
@@ -213,355 +161,56 @@ public static class StepUpLoggingExtensions
         string configSectionName,
         string? logFilePath)
     {
-        var configSnapshot = new StepUpLoggingOptions();
-        builder.Configuration.GetSection(configSectionName).Bind(configSnapshot);
-        configureOptions?.Invoke(configSnapshot);
-
-        if (configSnapshot.EnableOtlpExporter)
+        var optionsSection = builder.Configuration.GetSection(configSectionName);
+        var atRegistration = ReadAtRegistration(optionsSection, configureOptions);
+        if (atRegistration.EnableOtlpExporter)
         {
-            if (IsOpenTelemetryRegistered(builder.Services))
-            {
-                AddOtlpExportersUnlessAppHasOne(builder.Services);
-            }
-            else
-            {
-                // Align with Aspire defaults: ensure OTLP exporter is registered when OTLP logging is enabled
-                builder.Services.AddOpenTelemetry().UseOtlpExporter();
-            }
+            OtlpExport.Register(builder.Services);
         }
 
         // Standard options pipeline: bind the section, apply the caller's overrides, then validate at
         // startup so a misconfiguration (invalid level string, non-positive duration) fails fast rather
         // than silently degrading to a fallback (ADR 0007).
         builder.Services.AddOptions<StepUpLoggingOptions>()
-            .Bind(builder.Configuration.GetSection(configSectionName))
+            .Bind(optionsSection)
             .Configure(options => configureOptions?.Invoke(options))
-            .PostConfigure(options =>
-            {
-                options.ExcludePaths ??= ["/healthz", "/metrics", "/health"];
-                if (options.AdditionalExcludePaths is { Length: > 0 } extra)
-                {
-                    options.ExcludePaths = [.. options.ExcludePaths, .. extra];
-                }
-                options.NeverStepUpCategories ??= ["Microsoft.EntityFrameworkCore.Database.Command"];
-                string[] textProperties = [LogProperties.Jti, "Method", "Path", "StatusCode", "ElapsedMs"];
-                options.ConsoleTextProperties ??= options.RequestSummaryDetail == RequestSummaryDetail.Minimal
-                    ? [.. textProperties.Select(p => RequestSummary.MinimalKeys[p])]
-                    : textProperties;
-            })
+            .PostConfigure(StepUpSettings.ApplyDefaults)
             .ValidateOnStart();
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IValidateOptions<StepUpLoggingOptions>>(new StepUpLoggingOptionsValidator(configSectionName)));
-        if (configSnapshot.AlwaysLogOutboundRequestSummary)
-        {
-            // Outermost in every IHttpClientFactory client but the excluded ones (ADR 0032 D4).
-            builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IHttpMessageHandlerBuilderFilter, OutboundRequestSummaryFilter>());
-        }
+        builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IHttpMessageHandlerBuilderFilter, OutboundRequestSummaryFilter>());
 
         builder.Services.ConfigureOpenTelemetryMeterProvider(metrics =>
             metrics.AddStepUpLoggingMeters());
 
-        builder.Services.AddSingleton(sp =>
-        {
-            var opts = sp.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
-            var patterns = opts.RedactionRegexes
-                .Where(p => !string.IsNullOrWhiteSpace(p))
-                .Select(CompilePattern)
-                .ToArray();
-            return new CompiledRedactionPatterns(patterns, opts.RedactionExemptProperties);
-        });
-
-        builder.Services.AddSingleton<StepUpLoggingController>(sp =>
-        {
-            var opts = sp.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
-            return new StepUpLoggingController(opts, null, Stopwatch.GetTimestamp, sp.GetService<TimeProvider>());
-        });
+        builder.Services.AddSingleton(sp => new StepUpSettings(sp.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value));
+        builder.Services.AddSingleton(sp => CompiledRedactionPatterns.From(sp.GetRequiredService<StepUpSettings>().Options));
+        builder.Services.AddSingleton(sp => new StepUpLoggingController(
+            sp.GetRequiredService<StepUpSettings>(), null, sp.GetService<TimeProvider>() ?? TimeProvider.System));
 
         builder.Services.AddSerilog((services, lc) =>
-        {
-            var stepUpController = services.GetRequiredService<StepUpLoggingController>();
-            var opts = services.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
-            var redactionPatterns = services.GetRequiredService<CompiledRedactionPatterns>();
-
-            // Split configuration so user-declared Serilog:WriteTo sinks attach to the gated inner
-            // logger (behind the LevelSwitch) instead of the Verbose root — otherwise they would
-            // export everything at Verbose and bypass step-up entirely (ADR 0005). The root still
-            // reads MinimumLevel/Enrich/Using/etc. so the buffer/trigger sinks and enrichment are
-            // unchanged.
-            var (rootConfig, gatedConfig) = SplitSerilogConfiguration(builder.Configuration);
-
-            SerilogConfigurationAssemblies.ReadSerilogSection(lc, rootConfig)
-              .MinimumLevel.Verbose();
-
-            var needsEnrichment = EnrichmentGate.For(stepUpController.LevelSwitch, stepUpController.StepUpLevel, configure, builder.Configuration);
-            ApplyRootEnrichers(lc, builder, opts, redactionPatterns, needsEnrichment);
-
-            // Bypass logger: exports at full verbosity independent of LevelSwitch.
-            // Built directly here (not via DI) to avoid a circular deadlock:
-            // AddSerilog registers Serilog.ILogger as a factory that depends on ILoggerFactory,
-            // which in turn depends on this very callback — resolving it inside the callback deadlocks.
-            var bypassLogger = CreateBypassLogger(builder, logFilePath, opts, gatedConfig, redactionPatterns);
-            try { stepUpController.SetSummaryLogger(bypassLogger); } catch { }
-            StartupReport.Write(bypassLogger, opts, builder.Configuration.GetSection(configSectionName), logFilePath);
-
-            // ADR 0007 warn-not-fail: in Auto or Diagnostic mode a StepUpLevel that is not strictly more verbose than
-            // BaseLevel (numerically >= it, since a more verbose level is a LOWER LogEventLevel) means a
-            // trigger cannot raise verbosity. AlwaysOn/Disabled ignore the ordering, so they never warn.
-            if ((opts.Mode is StepUpMode.Auto or StepUpMode.Diagnostic) && stepUpController.StepUpLevel >= stepUpController.BaseLevel)
-            {
-                bypassLogger.Warning(
-                    "StepUpLevel {StepUpLevel} is not more verbose than BaseLevel {BaseLevel}; step-up cannot increase verbosity in {Mode:l} mode.",
-                    stepUpController.StepUpLevel, stepUpController.BaseLevel, opts.Mode.ToString());
-            }
-
-            if (opts.Mode is StepUpMode.Diagnostic)
-            {
-                if (stepUpController.DiagnosticLevel >= stepUpController.BaseLevel)
-                {
-                    bypassLogger.Warning(
-                        "DiagnosticLevel {DiagnosticLevel} is not more verbose than BaseLevel {BaseLevel}; Diagnostic mode cannot increase verbosity.",
-                        stepUpController.DiagnosticLevel, stepUpController.BaseLevel);
-                }
-
-                bypassLogger.Warning(
-                    "StepUp Diagnostic mode active at {DiagnosticLevel} for {DurationMinutes} min until {ExpiresAt}",
-                    stepUpController.DiagnosticLevel, opts.DiagnosticDurationMinutes, stepUpController.DiagnosticExpiresAt);
-            }
-
-            // Step-up sink: gated by LevelSwitch, drops bypass-marked events to prevent duplication.
-            var stepUpInnerCfg = new LoggerConfiguration();
-            // Config-declared WriteTo sinks join the library's own output sinks behind the LevelSwitch.
-            // gatedConfig carries only WriteTo + Using (no MinimumLevel/Enrich), so the inner logger
-            // stays Verbose and does not double-enrich (events arrive already enriched from the root).
-            SerilogConfigurationAssemblies.ReadSerilogSection(stepUpInnerCfg, gatedConfig);
-            ConfigureOutputSinks(stepUpInnerCfg, builder, logFilePath, opts);
-            stepUpInnerCfg.MinimumLevel.Verbose();
-            // AlwaysOn never steps up (Trigger() no-ops, the switch starts at StepUpLevel), so nothing
-            // needs suppressing — and a developer running it locally wants the SQL. A blank prefix is a
-            // config typo: it matches dot-rooted SourceContexts and costs a comparison on every event,
-            // so drop blanks (the same treatment RedactionRegexes gets).
-            var neverStepUp = opts.Mode == StepUpMode.AlwaysOn
-                ? []
-                : (opts.NeverStepUpCategories ?? []).Where(c => !string.IsNullOrWhiteSpace(c)).ToArray();
-
-            // Pre-error buffer: holds events StepUpSink did not export, at/above StepUpLevel per trace, except excluded
-            // categories below Warning; flushes to bypass logger on Error/Fatal.
-            var preErrorBuffer = opts.EnablePreErrorBuffering
-                ? new PreErrorBufferSink(
-                    bypassLogger,
-                    opts.PreErrorBufferSize,
-                    opts.PreErrorMaxContexts,
-                    stepUpController.StepUpLevel,
-                    (opts.PreErrorBufferExcludeCategories ?? []).Where(c => !string.IsNullOrWhiteSpace(c)).ToArray())
-                : null;
-
-            var floors = (opts.CategoryFloors ?? [])
-                .Where(f => !string.IsNullOrWhiteSpace(f.Key))
-                .ToDictionary(f => f.Key, f => Enum.Parse<LogEventLevel>(f.Value, ignoreCase: true), StringComparer.Ordinal);
-            // AlwaysOn skips the framework defaults for the same reason it skips the NeverStepUp list (ADR 0029).
-            var frameworkDefaults = opts.Mode == StepUpMode.AlwaysOn ? [] : FrameworkDefaultsFor(opts.FrameworkCategoryDefaults);
-            var categoryFloors = floors.Count == 0 && frameworkDefaults.Length == 0
-                ? null
-                : new CategoryFloorMap(floors, (opts.DiagnosticExemptCategories ?? []).Where(c => !string.IsNullOrWhiteSpace(c)).ToArray(), frameworkDefaults);
-
-            lc.WriteTo.Sink(new StepUpSink(
-                stepUpInnerCfg.CreateLogger(),
-                stepUpController.LevelSwitch,
-                stepUpController.BaseLevel,
-                neverStepUp,
-                preErrorBuffer,
-                categoryFloors,
-                () => stepUpController.IsDiagnosticActive));
-
-            if (preErrorBuffer is not null)
-            {
-                lc.WriteTo.Sink(preErrorBuffer);
-            }
-
-            // Trigger sink: observes Error/Fatal events and calls controller.Trigger() asynchronously.
-            lc.WriteTo.Sink(new StepUpTriggerSink(
-                stepUpController,
-                (opts.NeverTriggerCategories ?? []).Where(c => !string.IsNullOrWhiteSpace(c)).ToArray()));
-
-            // Summary sink: routes IsRequestSummary=true events to bypass logger.
-            lc.WriteTo.Sink(new SummarySink(bypassLogger));
-
-            // Immediate sink: routes IsImmediate=true events to bypass logger.
-            lc.WriteTo.Sink(new ImmediateSink(bypassLogger));
-
-            configure?.Invoke(services, lc);
-
-            // Registered last, after the consumer hook above and the library's own enrichers, so a
-            // property a consumer's own enricher just added is swept too (ADR 0022 D5). Root-only:
-            // enrichment here precedes every sink, so PreErrorBufferSink already buffers redacted
-            // events and needs no second pass.
-            ApplyRedactionEnricher(lc, opts, redactionPatterns, needsEnrichment);
-        }, preserveStaticLogger: !configSnapshot.SetStaticLogger, writeToProviders: false);
+            new StepUpPipeline(builder, services.GetRequiredService<StepUpSettings>(), services.GetRequiredService<CompiledRedactionPatterns>(), logFilePath)
+                .Configure(lc, services.GetRequiredService<StepUpLoggingController>(), services, configure, optionsSection),
+            preserveStaticLogger: !atRegistration.SetStaticLogger, writeToProviders: false);
 
         return builder;
     }
 
     /// <summary>
-    /// Partitions the application configuration into two Serilog views so that config-declared
-    /// <c>Serilog:WriteTo</c> sinks can be attached to the step-up-gated inner logger rather than the
-    /// Verbose root (ADR 0005).
-    /// <para>
-    /// <c>Root</c> is the app config with every <c>Serilog:WriteTo:*</c> leaf removed, so the root reader
-    /// attaches no output sinks but keeps <c>MinimumLevel</c> (incl. <c>Override</c>), <c>Enrich</c>,
-    /// <c>Using</c>, <c>Properties</c>, <c>Filter</c> and <c>Destructure</c> exactly as before.
-    /// </para>
-    /// <para>
-    /// <c>Gated</c> contains only <c>Serilog:WriteTo:*</c> and <c>Serilog:Using:*</c> leaves (Using lets
-    /// Serilog resolve the declared sink assemblies); it carries no <c>MinimumLevel</c>/<c>Enrich</c>, so
-    /// the inner logger stays Verbose and does not double-enrich.
-    /// </para>
+    /// The options for the two choices made while services are registered, before <c>IOptions</c> can be resolved:
+    /// whether OTLP export is registered and whether <c>AddSerilog</c> replaces <c>Log.Logger</c>. It binds the same
+    /// section and runs the same overrides as the options pipeline. Every other option is read at runtime through
+    /// <see cref="StepUpSettings"/>.
     /// </summary>
-    internal static (IConfiguration Root, IConfiguration Gated) SplitSerilogConfiguration(IConfiguration appConfig)
+    private static StepUpLoggingOptions ReadAtRegistration(IConfigurationSection section, Action<StepUpLoggingOptions>? configureOptions)
     {
-        // A path is "in" a section if it equals the section itself (so ancestor sections resolve) or
-        // starts with "<section>:" (so a hypothetical sibling like "Serilog:WriteToFoo" doesn't match).
-        // All comparisons are case-insensitive because configuration keys are.
-        const string writeToSection = "Serilog:WriteTo";
-        const string usingSection = "Serilog:Using";
-        const string serilogSection = "Serilog";
-
-        static bool InSubtree(string path, string section)
-            => path.Equals(section, StringComparison.OrdinalIgnoreCase)
-               || path.StartsWith(section + ":", StringComparison.OrdinalIgnoreCase);
-
-        bool RootVisible(string path) => !InSubtree(path, writeToSection);
-
-        bool GatedVisible(string path)
-            => InSubtree(path, writeToSection)
-               || InSubtree(path, usingSection)
-               || path.Equals(serilogSection, StringComparison.OrdinalIgnoreCase);
-
-        var root = new PrefixFilteredConfiguration(appConfig, RootVisible);
-        var gated = new PrefixFilteredConfiguration(appConfig, GatedVisible);
-        return (root, gated);
+        var options = new StepUpLoggingOptions();
+        section.Bind(options);
+        configureOptions?.Invoke(options);
+        return options;
     }
 
-    internal static FrameworkCategoryRule[] FrameworkDefaultsFor(FrameworkCategoryPreset preset)
-        => preset == FrameworkCategoryPreset.Recommended ? FrameworkCategoryDefaultTable.Recommended : [];
-
-    /// <summary>
-    /// Compiles a redaction pattern with <see cref="RegexOptions.NonBacktracking"/> so matching is
-    /// linear-time and catastrophic backtracking is structurally impossible. Patterns using lookaround
-    /// or backreferences are unsupported by that engine and throw <see cref="NotSupportedException"/> at
-    /// construction; those fall back to <see cref="RegexOptions.Compiled"/>. <c>NonBacktracking</c> cannot
-    /// be combined with <c>Compiled</c>, so the fallback swaps the option rather than adding to it. The
-    /// 100 ms timeout stays on both branches as a backstop (ADR 0001 amendment).
-    /// </summary>
-    internal static Regex CompilePattern(string pattern)
-    {
-        try
-        {
-            return new Regex(pattern, RegexOptions.NonBacktracking | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100));
-        }
-        catch (NotSupportedException)
-        {
-            return new Regex(pattern, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100));
-        }
-    }
-
-    /// <summary>
-    /// Applies the root pipeline enrichers (ADR 0026). <c>FromLogContext</c> and <see cref="AlwaysExportEnricher"/>
-    /// run first and ungated, in that order: a <c>SourceContext</c> or marker pushed through <c>LogContext</c> must
-    /// reach the always-export match and the gate. Every other enricher runs only when
-    /// <paramref name="needsEnrichment"/> accepts the event.
-    /// </summary>
-    internal static void ApplyRootEnrichers(LoggerConfiguration lc, IHostApplicationBuilder builder, StepUpLoggingOptions opts, CompiledRedactionPatterns redactionPatterns, Func<LogEvent, bool> needsEnrichment)
-    {
-        lc.Enrich.FromLogContext();
-
-        var alwaysExport = (opts.AlwaysExportCategories ?? []).Where(c => !string.IsNullOrWhiteSpace(c)).ToArray();
-        if (alwaysExport.Length > 0)
-        {
-            lc.Enrich.With(new AlwaysExportEnricher(alwaysExport));
-        }
-
-        lc.Enrich.When(needsEnrichment, enrich => ApplyCommonEnrichers(enrich, builder, opts, redactionPatterns));
-    }
-
-    /// <summary>
-    /// Registers the property redaction enricher (ADR 0022 D5) behind <paramref name="needsEnrichment"/>: an event the
-    /// gate drops is exported by no sink, so sweeping its properties would be wasted work. With no pattern to apply
-    /// the enricher would walk every event's properties to no effect, so the flag alone does not earn the sweep; the
-    /// pattern array is fixed at startup, so this decision cannot go stale.
-    /// </summary>
-    internal static void ApplyRedactionEnricher(LoggerConfiguration lc, StepUpLoggingOptions opts, CompiledRedactionPatterns redactionPatterns, Func<LogEvent, bool> needsEnrichment)
-    {
-        if (!opts.RedactLogEventProperties || redactionPatterns.Patterns.Length == 0) return;
-        lc.Enrich.When(needsEnrichment, enrich => enrich.With(new RedactionEnricher(redactionPatterns)));
-    }
-
-    /// <summary>
-    /// Applies all configured enrichers to <paramref name="enrich"/>. Called on both the root
-    /// pipeline and the bypass logger to keep enrichment consistent. <c>FromLogContext</c> is not part of it: the
-    /// root applies it ungated, the bypass logger applies it first. Each enricher is its own call on
-    /// <paramref name="enrich"/>: a chained <c>.Enrich.</c> inside <c>When</c> would reach the logger
-    /// configuration and escape the gate.
-    /// </summary>
-    private static void ApplyCommonEnrichers(LoggerEnrichmentConfiguration enrich, IHostApplicationBuilder builder, StepUpLoggingOptions opts, CompiledRedactionPatterns redactionPatterns)
-    {
-        if (redactionPatterns.Patterns.Length > 0)
-        {
-            enrich.With(new PathPropertyRedactionEnricher(redactionPatterns));
-        }
-
-        enrich.WithOpenTelemetryTraceId();
-        enrich.WithOpenTelemetrySpanId();
-        enrich.With<ActivityContextEnricher>();
-        enrich.WithProperty("Application", builder.Environment.ApplicationName);
-
-        foreach (var add in OptionalEnrichers(builder, opts))
-        {
-            add(enrich);
-        }
-    }
-
-    private static IEnumerable<Action<LoggerEnrichmentConfiguration>> OptionalEnrichers(IHostApplicationBuilder builder, StepUpLoggingOptions opts)
-    {
-        (bool On, Action<LoggerEnrichmentConfiguration> Add)[] table =
-        [
-            (opts.EnrichWithExceptionDetails && opts.StructuredExceptionDetails, e => e.WithExceptionDetails()),
-            (opts.EnrichWithEnvironment, e => e.WithProperty("Environment", builder.Environment.EnvironmentName)),
-            (opts.EnrichWithThreadId, e => e.WithThreadId()),
-            (opts.EnrichWithProcessId, e => e.WithProcessId()),
-            (opts.EnrichWithMachineName, e => e.WithMachineName()),
-            (opts.EnrichWithCallStack, e => e.WithCallStack()),
-            (!string.IsNullOrWhiteSpace(opts.ServiceVersion), e => e.WithProperty("ServiceVersion", (object?)opts.ServiceVersion)),
-            (!string.IsNullOrWhiteSpace(opts.ServiceInstanceId), e => e.WithProperty("ServiceInstanceId", (object?)opts.ServiceInstanceId)),
-        ];
-        return table.Where(row => row.On).Select(row => row.Add);
-    }
-
-    /// <summary>
-    /// Creates the bypass/summary logger that exports events independently of the main LevelSwitch.
-    /// The config-declared <c>Serilog:WriteTo</c> sinks (<paramref name="gatedConfig"/>) are attached
-    /// alongside the library's own output sinks so bypass-routed events — immediate, request-summary,
-    /// and pre-error-buffer flushes — still reach user WriteTo sinks even when the OTLP exporter is off.
-    /// </summary>
-    /// <remarks>
-    /// A config-declared File sink now attaches to both the gated and the bypass logger. Without
-    /// <c>shared:true</c> the two writers contend for the file lock and one silently drops its output
-    /// (ADR 0003); config File sinks must set <c>shared:true</c>.
-    /// </remarks>
-    private static Serilog.ILogger CreateBypassLogger(
-        IHostApplicationBuilder builder,
-        string? logFilePath,
-        StepUpLoggingOptions opts,
-        IConfiguration gatedConfig,
-        CompiledRedactionPatterns redactionPatterns)
-    {
-        var cfg = new LoggerConfiguration().MinimumLevel.Verbose();
-        cfg.Enrich.FromLogContext();
-        ApplyCommonEnrichers(cfg.Enrich, builder, opts, redactionPatterns);
-        SerilogConfigurationAssemblies.ReadSerilogSection(cfg, gatedConfig);
-        ConfigureOutputSinks(cfg, builder, logFilePath, opts);
-        return cfg.CreateLogger();
-    }
-
+    /// <summary>Adds the library's meters to <paramref name="builder"/>; <c>AddStepUpLogging</c> already does it for the host's meter provider.</summary>
     public static MeterProviderBuilder AddStepUpLoggingMeters(this MeterProviderBuilder builder)
     {
         return builder
@@ -581,248 +230,8 @@ public static class StepUpLoggingExtensions
     public static IApplicationBuilder UseStepUpRequestLogging(this IApplicationBuilder app)
     {
         var services = app.ApplicationServices;
-        var opts = services.GetRequiredService<IOptions<StepUpLoggingOptions>>().Value;
-        var stepUpController = services.GetRequiredService<StepUpLoggingController>();
-        var compiledPatterns = services.GetRequiredService<CompiledRedactionPatterns>();
-        var env = services.GetRequiredService<IHostEnvironment>();
-
-        var exclude = new HashSet<string>(opts.ExcludePaths ?? Array.Empty<string>(), StringComparer.OrdinalIgnoreCase);
-        var excludePrefixes = (opts.ExcludePaths ?? Array.Empty<string>())
-            .Where(p => p.EndsWith("*", StringComparison.Ordinal))
-            .Select(p => p.TrimEnd('*').TrimEnd('/'))
-            .ToArray();
-
-        var sensitiveHeaders = new HashSet<string>(BuiltInSensitiveHeaders, StringComparer.OrdinalIgnoreCase);
-        if (opts.AdditionalSensitiveHeaders?.Length > 0)
-        {
-            foreach (var header in opts.AdditionalSensitiveHeaders)
-            {
-                sensitiveHeaders.Add(header);
-            }
-        }
-
-        if (opts.AlwaysLogRequestSummary)
-        {
-            app.Use(async (httpContext, next) =>
-            {
-                var sw = Stopwatch.StartNew();
-                var failed = false;
-                try
-                {
-                    await next();
-                }
-                catch
-                {
-                    // An unhandled exception must not swallow the request summary — the failing
-                    // requests are the ones worth summarizing. Emit with 500, then rethrow.
-                    failed = true;
-                    throw;
-                }
-                finally
-                {
-                    sw.Stop();
-
-                    var rawPath = httpContext.Request.Path.Value ?? string.Empty;
-                    var path = rawPath.Length > 1 ? rawPath.TrimEnd('/') : rawPath;
-
-                    if (!IsExcludedPath(path, exclude, excludePrefixes))
-                    {
-                        try
-                        {
-                            var statusCode = failed ? StatusCodes.Status500InternalServerError : (httpContext.Response?.StatusCode ?? 0);
-                            stepUpController.EmitRequestSummary(InboundRequestSummary.From(
-                                httpContext, path, statusCode, sw.Elapsed.TotalMilliseconds, opts.RequestSummaryDetail, opts.TrustForwardedHeaders, compiledPatterns));
-                        }
-                        catch
-                        {
-                            // Never let summary emission mask the original request outcome.
-                        }
-                    }
-                }
-            });
-        }
-
-        if (opts.CaptureRequestBody)
-        {
-            // Enable request buffering BEFORE the endpoint reads the body, so the enricher can rewind
-            // and re-read it at request completion. Doing this inside the enricher (after the pipeline)
-            // was too late: the body had already been consumed from a non-buffered stream (ADR 0004).
-            app.Use(async (httpContext, next) =>
-            {
-                var method = httpContext.Request.Method;
-                if (method is "POST" or "PUT" or "PATCH")
-                {
-                    httpContext.Request.EnableBuffering();
-                }
-                await next();
-            });
-        }
-
-        app.UseSerilogRequestLogging(options =>
-        {
-            options.Logger = services.GetService<Serilog.ILogger>();
-            options.EnrichDiagnosticContext = (diagnosticContext, httpContext) =>
-            {
-                using var activity = opts.EnableActivityInstrumentation
-                    ? RequestLoggingActivitySource.StartActivity("LogRequest", ActivityKind.Server)
-                    : null;
-
-                activity?.SetTag("http.method", httpContext.Request.Method);
-                activity?.SetTag("http.target", compiledPatterns.Redact(httpContext.Request.Path.Value ?? string.Empty));
-                activity?.SetTag("http.scheme", httpContext.Request.Scheme);
-                activity?.SetTag("http.host", httpContext.Request.Host.Value);
-
-                // One aggregate ApplyRedaction span per request (ADR 0009), started lazily on the first
-                // redaction so a request with nothing to redact creates no span at all.
-                Activity? redactionActivity = null;
-                var redactionCount = 0;
-                var redactionTargets = opts.EnableActivityInstrumentation ? new List<string>() : null;
-
-                void NoteRedaction(string target)
-                {
-                    RedactionCounter.Add(1);
-                    redactionCount++;
-                    if (!opts.EnableActivityInstrumentation) return;
-                    redactionActivity ??= RequestLoggingActivitySource.StartActivity("ApplyRedaction", ActivityKind.Internal);
-                    redactionTargets!.Add(target);
-                }
-
-                Action<string> noteRedaction = NoteRedaction;
-
-                var rawPath = httpContext.Request.Path.Value ?? string.Empty;
-                var path = rawPath.Length > 1 ? rawPath.TrimEnd('/') : rawPath;
-                var redactedPath = compiledPatterns.Redact(path);
-                if (!string.Equals(redactedPath, path, StringComparison.Ordinal))
-                {
-                    NoteRedaction("path");
-                }
-                diagnosticContext.Set("RequestPath", redactedPath);
-
-                var qs = httpContext.Request.QueryString.HasValue ? httpContext.Request.QueryString.Value! : string.Empty;
-                var redactedQs = compiledPatterns.Redact(qs);
-                if (!string.Equals(redactedQs, qs, StringComparison.Ordinal))
-                {
-                    NoteRedaction("query_string");
-                }
-                diagnosticContext.Set("QueryString", redactedQs);
-
-                if (httpContext.Request.RouteValues?.Count > 0)
-                {
-                    var routeParams = RequestPathRedaction.RedactRouteValues(httpContext.Request.RouteValues, path, redactedPath, compiledPatterns, noteRedaction);
-                    diagnosticContext.Set("RouteParameters", routeParams);
-                }
-
-                diagnosticContext.Set("Headers", RequestHeaderRedaction.RedactRequestHeaders(httpContext.Request.Headers, sensitiveHeaders, compiledPatterns, noteRedaction));
-
-                var (clientIp, _) = ExtractClientAddresses(httpContext, opts.TrustForwardedHeaders, compiledPatterns);
-                if (clientIp is not null)
-                    diagnosticContext.Set("ClientIp", clientIp);
-
-                if (redactionActivity is not null)
-                {
-                    redactionActivity.SetTag("security.redaction_applied", true);
-                    redactionActivity.SetTag("security.redaction_count", redactionCount);
-                    redactionActivity.SetTag("security.redaction_targets", string.Join(",", redactionTargets!));
-                    activity?.SetTag("security.redaction_applied", true);
-                    redactionActivity.Dispose();
-                }
-
-                var jtiClaim = httpContext.User?.FindFirst("jti")?.Value;
-                if (!string.IsNullOrEmpty(jtiClaim))
-                    diagnosticContext.Set(LogProperties.Jti, compiledPatterns.RedactProperty(LogProperties.Jti, jtiClaim));
-
-                // The step-up trigger sink is asynchronous, so the request whose Error CAUSES the
-                // step-up is still not stepped-up when this enricher runs at request completion.
-                // A 5xx status is knowable synchronously here, so capture the failing request too.
-                if (opts.CaptureRequestBody && (stepUpController.IsSteppedUp || httpContext.Response?.StatusCode >= 500))
-                {
-                    var method = httpContext.Request.Method;
-                    // Body.CanSeek is true only when the early buffering middleware ran for this request.
-                    if ((method is "POST" or "PUT" or "PATCH") && httpContext.Request.Body.CanSeek)
-                    {
-                        try
-                        {
-                            using (opts.EnableActivityInstrumentation
-                                ? RequestLoggingActivitySource.StartActivity("CaptureRequestBody", ActivityKind.Internal)
-                                : null)
-                            {
-                                // The enricher is synchronous; Kestrel forbids sync reads by default, so opt
-                                // this request in. The body is a rewindable buffered stream at this point.
-                                var bodyControl = httpContext.Features.Get<IHttpBodyControlFeature>();
-                                if (bodyControl is not null) bodyControl.AllowSynchronousIO = true;
-
-                                httpContext.Request.Body.Position = 0;
-                                // Read a margin beyond the limit so a secret straddling the cut still
-                                // matches its pattern; redact the margin-extended text, then truncate the
-                                // redacted result (ADR 0009 F2).
-                                const int RedactionMargin = 256;
-                                var limit = opts.MaxBodyCaptureBytes;
-                                var buffer = new char[limit + RedactionMargin];
-                                using var sr = new StreamReader(httpContext.Request.Body, Encoding.UTF8, true, 1024, leaveOpen: true);
-                                // ReadBlock loops until the buffer is filled or EOF; a single Read can
-                                // return short when the underlying stream hands back a partial chunk,
-                                // silently truncating a large body.
-                                var read = sr.ReadBlock(buffer, 0, buffer.Length);
-                                httpContext.Request.Body.Position = 0;
-
-                                if (read > 0)
-                                {
-                                    var redacted = compiledPatterns.Redact(new string(buffer, 0, read));
-                                    if (redacted.Length > limit) redacted = redacted[..limit];
-                                    diagnosticContext.Set("RequestBody", redacted);
-                                    BodyCaptureCounter.Add(1);
-                                }
-                                else
-                                {
-                                    diagnosticContext.Set("RequestBody", "[EMPTY]");
-                                }
-                            }
-                        }
-                        catch
-                        {
-                            diagnosticContext.Set("RequestBody", "[UNAVAILABLE]");
-                        }
-                    }
-                }
-            };
-
-            options.GetLevel = (httpContext, elapsed, ex) =>
-            {
-                var rawPath = httpContext.Request.Path.Value ?? string.Empty;
-                var path = rawPath.Length > 1 ? rawPath.TrimEnd('/') : rawPath;
-                if (IsExcludedPath(path, exclude, excludePrefixes))
-                {
-                    return LogEventLevel.Verbose;
-                }
-
-                // A client that drops the connection is not an application failure. Logging it at Error
-                // would let any caller — anonymous ones included — flush the pre-error buffer and step
-                // the instance up just by disconnecting. Information keeps the record visible at a normal
-                // BaseLevel without triggering step-up. A real exception on an also-aborted request still
-                // falls through to Error below.
-                if (httpContext.RequestAborted.IsCancellationRequested && ex is null or OperationCanceledException)
-                {
-                    return LogEventLevel.Information;
-                }
-
-                if (ex != null) return LogEventLevel.Error;
-                var status = httpContext.Response?.StatusCode ?? 0;
-                // A 5xx with no exception is often a backend failure relayed by a proxy, not this
-                // application's; TreatServerErrorStatusAsError = false keeps those out of the trigger path.
-                if (status >= 500) return opts.TreatServerErrorStatusAsError ? LogEventLevel.Error : LogEventLevel.Warning;
-                if (status >= 400) return LogEventLevel.Warning;
-                return LogEventLevel.Information;
-            };
-
-            options.GetMessageTemplateProperties = (httpContext, _, elapsedMs, statusCode) =>
-            [
-                new LogEventProperty("RequestMethod", new ScalarValue(httpContext.Request.Method)),
-                new LogEventProperty("RequestPath", new ScalarValue(compiledPatterns.Redact(httpContext.Request.Path.Value ?? string.Empty))),
-                new LogEventProperty("StatusCode", new ScalarValue(statusCode)),
-                new LogEventProperty("Elapsed", new ScalarValue(elapsedMs)),
-            ];
-        });
-
+        new StepUpRequestLogging(services.GetRequiredService<StepUpSettings>(), services.GetRequiredService<StepUpLoggingController>(), services.GetRequiredService<CompiledRedactionPatterns>())
+            .UseIn(app, services.GetService<Serilog.ILogger>());
         return app;
     }
 
@@ -833,249 +242,6 @@ public static class StepUpLoggingExtensions
     {
         ((IApplicationBuilder)app).UseStepUpRequestLogging();
         return app;
-    }
-
-    /// <summary>
-    /// Extracts the client's connection address and the raw <c>X-Forwarded-For</c> header of a request.
-    /// </summary>
-    /// <remarks>
-    /// SECURITY: <c>X-Forwarded-For</c> is client-supplied and trivially spoofable. By default the returned
-    /// <c>ClientIp</c> is <c>Connection.RemoteIpAddress</c>, which the client cannot forge; the raw header is
-    /// returned separately as <c>ForwardedFor</c> (redacted, since it is client-supplied). Only when
-    /// <paramref name="trustForwardedHeaders"/> is <c>true</c> — which you should enable solely behind a
-    /// reverse proxy you control with <c>ForwardedHeadersMiddleware</c> configured — is the first XFF entry
-    /// used as <c>ClientIp</c>.
-    /// </remarks>
-    internal static (string? ClientIp, string? ForwardedFor) ExtractClientAddresses(
-        HttpContext httpContext, bool trustForwardedHeaders, CompiledRedactionPatterns patterns)
-    {
-        try
-        {
-            var (forwardedFor, firstEntry) = RedactedForwardedFor(httpContext.Request.Headers, patterns);
-            var clientIp = trustForwardedHeaders && firstEntry is not null
-                ? firstEntry
-                : httpContext.Connection.RemoteIpAddress?.ToString();
-
-            return (clientIp, forwardedFor);
-        }
-        catch
-        {
-            return (null, null);
-        }
-    }
-
-    // The redacted raw X-Forwarded-For header and its redacted first entry; null when absent or blank.
-    private static (string? ForwardedFor, string? FirstEntry) RedactedForwardedFor(IHeaderDictionary headers, CompiledRedactionPatterns patterns)
-    {
-        var rawValue = headers.TryGetValue("X-Forwarded-For", out var header) && header.Count > 0 ? header[0] : null;
-        if (string.IsNullOrWhiteSpace(rawValue))
-        {
-            return (null, null);
-        }
-
-        var forwardedFor = patterns.Redact(rawValue);
-        var comma = rawValue.IndexOf(',');
-        var candidate = (comma < 0 ? rawValue : rawValue[..comma]).Trim();
-        return (forwardedFor, string.IsNullOrWhiteSpace(candidate) ? null : patterns.Redact(candidate));
-    }
-
-    /// <summary>Extract the User-Agent header from the request.</summary>
-    internal static string? ExtractUserAgent(HttpRequest request)
-    {
-        try
-        {
-            if (request.Headers.TryGetValue("User-Agent", out var userAgentValue))
-            {
-                var userAgent = userAgentValue.Count > 0 ? userAgentValue[0] : null;
-                return !string.IsNullOrWhiteSpace(userAgent) ? userAgent : null;
-            }
-            return null;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private static bool IsOpenTelemetryRegistered(IServiceCollection services)
-    {
-        // OTel SDK renamed OpenTelemetrySdkHostedService to TelemetryHostedService in v1.15.0 and moved it to the
-        // Implementation namespace; match both names under any OpenTelemetry.Extensions.Hosting namespace.
-        return services.Any(sd =>
-            sd.ServiceType == typeof(IHostedService) &&
-            sd.ImplementationType is { Namespace: { } ns, Name: "OpenTelemetrySdkHostedService" or "TelemetryHostedService" } &&
-            ns.StartsWith("OpenTelemetry.Extensions.Hosting", StringComparison.Ordinal));
-    }
-
-    // The app registered the OpenTelemetry SDK first. Whether it exports over OTLP itself is decided when a provider
-    // is built, against the final service collection, so its UseOtlpExporter or AddOtlpExporter is seen whether it
-    // comes before or after AddStepUpLogging, and no second UseOtlpExporter registration makes OpenTelemetry throw.
-    private static void AddOtlpExportersUnlessAppHasOne(IServiceCollection services)
-    {
-        services.ConfigureOpenTelemetryTracerProvider((_, tracing) =>
-        {
-            if (HasOtlpExporterRegistration(services)) return;
-            var options = new OtlpExporterOptions();
-            var batch = options.BatchExportProcessorOptions;
-            tracing.AddProcessor(new BatchActivityExportProcessor(
-                new OtlpTraceExporter(options),
-                batch.MaxQueueSize,
-                batch.ScheduledDelayMilliseconds,
-                batch.ExporterTimeoutMilliseconds,
-                batch.MaxExportBatchSize));
-        });
-        services.ConfigureOpenTelemetryMeterProvider((_, metrics) =>
-        {
-            if (HasOtlpExporterRegistration(services)) return;
-            var reader = new PeriodicExportingMetricReaderOptions();
-            metrics.AddReader(new PeriodicExportingMetricReader(
-                new OtlpMetricExporter(new OtlpExporterOptions()),
-                reader.ExportIntervalMilliseconds ?? 60000,
-                reader.ExportTimeoutMilliseconds ?? 30000));
-        });
-    }
-
-    private static bool HasOtlpExporterRegistration(IServiceCollection services)
-        => services.Any(sd =>
-            sd.ServiceType == typeof(IOptionsFactory<OtlpExporterOptions>) ||
-            sd.ServiceType.FullName == "OpenTelemetry.Exporter.UseOtlpExporterRegistration");
-
-    /// <summary>Parse OTEL_EXPORTER_OTLP_HEADERS environment variable (W3C Baggage-style list of percent-encoded key=value pairs, per the OTel spec).</summary>
-    internal static Dictionary<string, string> ParseOtlpHeaders(string? headerString)
-    {
-        var headers = new Dictionary<string, string>();
-        foreach (var (key, value) in ParseBaggageStylePairs(headerString)) headers[key] = value;
-        return headers;
-    }
-
-    /// <summary>Parse OTEL_RESOURCE_ATTRIBUTES environment variable (W3C Baggage-style list of percent-encoded key=value pairs, per the OTel spec).</summary>
-    internal static Dictionary<string, object> ParseResourceAttributes(string? attributeString)
-    {
-        var attributes = new Dictionary<string, object>();
-        foreach (var (key, value) in ParseBaggageStylePairs(attributeString)) attributes[key] = value;
-        return attributes;
-    }
-
-    /// <summary>Splits a comma-separated, percent-encoded key=value list, percent-decoding both sides and skipping malformed pairs or empty keys.</summary>
-    private static IEnumerable<(string Key, string Value)> ParseBaggageStylePairs(string? input)
-    {
-        if (string.IsNullOrWhiteSpace(input)) yield break;
-
-        foreach (var pair in input.Split(','))
-        {
-            var parts = pair.Split('=', 2);
-            if (parts.Length != 2) continue;
-            var key = Uri.UnescapeDataString(parts[0].Trim());
-            var value = Uri.UnescapeDataString(parts[1].Trim());
-            if (key.Length > 0) yield return (key, value);
-        }
-    }
-
-    /// <summary>
-    /// Decides whether <paramref name="path"/> is excluded from request logging. A path matches when it
-    /// is in the <paramref name="exact"/> set, or when it equals one of the <paramref name="prefixes"/> or
-    /// sits under it on a segment boundary (<c>prefix + "/"</c>). Matching on the boundary keeps a
-    /// wildcard like <c>/api/*</c> from swallowing an unrelated sibling such as <c>/apifoo</c>.
-    /// </summary>
-    internal static bool IsExcludedPath(string path, IReadOnlySet<string> exact, IReadOnlyList<string> prefixes)
-    {
-        if (exact.Contains(path)) return true;
-
-        foreach (var prefix in prefixes)
-        {
-            if (path.Equals(prefix, StringComparison.OrdinalIgnoreCase)
-                || path.StartsWith(prefix + "/", StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /// <summary>
-    /// Resolves the OTLP wire protocol from the <c>OTEL_EXPORTER_OTLP_PROTOCOL</c> value. Both
-    /// <c>"http"</c> and the spec-canonical <c>"http/protobuf"</c> map to
-    /// <see cref="OtlpProtocol.HttpProtobuf"/> (case-insensitive); <c>"grpc"</c>, empty, null, or any
-    /// unrecognized value fall back to <see cref="OtlpProtocol.Grpc"/>.
-    /// </summary>
-    internal static OtlpProtocol ResolveOtlpProtocol(string? protocol)
-        => protocol?.Trim().ToLowerInvariant() switch
-        {
-            "http" or "http/protobuf" => OtlpProtocol.HttpProtobuf,
-            _ => OtlpProtocol.Grpc,
-        };
-
-    /// <summary>
-    /// Resolves the longest wait for one OTLP export from the <c>OTEL_EXPORTER_OTLP_TIMEOUT</c> value in
-    /// milliseconds. A missing, unparseable or non-positive value falls back to the spec default of 10 s.
-    /// </summary>
-    internal static TimeSpan ResolveOtlpTimeout(string? milliseconds)
-        => int.TryParse(milliseconds, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) && value > 0
-            ? TimeSpan.FromMilliseconds(value)
-            : TimeSpan.FromSeconds(10);
-
-    /// <summary>
-    /// The console formatter for <paramref name="format"/>: compact JSON, or one line with the keyed trace id in
-    /// <paramref name="traceFormat"/>, the rendered message and the <paramref name="textProperties"/> the event has,
-    /// under short line keys when <paramref name="detail"/> is <see cref="RequestSummaryDetail.Minimal"/> (ADR 0034).
-    /// The OTLP and file sinks do not use it and stay structured.
-    /// </summary>
-    internal static ITextFormatter CreateConsoleFormatter(ConsoleLogFormat format, string[] textProperties, ConsoleTraceFormat traceFormat, RequestSummaryDetail detail) => format switch
-    {
-        ConsoleLogFormat.Text => new ConsoleTextFormatter([.. textProperties.Where(p => !string.IsNullOrWhiteSpace(p))], traceFormat, detail == RequestSummaryDetail.Minimal),
-        _ => new CompactJsonFormatter(),
-    };
-
-    private static void ConfigureOutputSinks(LoggerConfiguration lc,
-        IHostApplicationBuilder builder,
-        string? logFilePath,
-        StepUpLoggingOptions opts)
-    {
-        if (opts.EnableOtlpExporter)
-        {
-            lc.WriteTo.Async(a => a.OpenTelemetry(otlpOptions =>
-            {
-                var endpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT");
-                var protocol = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_PROTOCOL");
-
-                otlpOptions.Endpoint = endpoint;
-                otlpOptions.Protocol = ResolveOtlpProtocol(protocol);
-                otlpOptions.HttpMessageHandler = new OtlpExportTimeoutHandler(
-                    ResolveOtlpTimeout(Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_TIMEOUT")));
-
-                var headers = ParseOtlpHeaders(Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_HEADERS"));
-                foreach (var header in headers)
-                {
-                    otlpOptions.Headers[header.Key] = header.Value;
-                }
-
-                var attributes = ParseResourceAttributes(Environment.GetEnvironmentVariable("OTEL_RESOURCE_ATTRIBUTES"));
-                foreach (var attr in attributes)
-                {
-                    otlpOptions.ResourceAttributes[attr.Key] = attr.Value;
-                }
-            }));
-        }
-
-        if (opts.EnableConsoleLogging)
-        {
-            lc.WriteTo.Async(a => a.Console(CreateConsoleFormatter(opts.ConsoleFormat, opts.ConsoleTextProperties ?? [], opts.ConsoleTraceFormat, opts.RequestSummaryDetail)));
-        }
-
-        if (!string.IsNullOrWhiteSpace(logFilePath))
-        {
-            var absolutePath = Path.IsPathRooted(logFilePath)
-                ? logFilePath
-                : Path.Combine(builder.Environment.ContentRootPath, logFilePath);
-
-            lc.WriteTo.Async(a => a.File(
-                formatter: new CompactJsonFormatter(),
-                path: absolutePath!,
-                rollingInterval: RollingInterval.Day,
-                retainedFileCountLimit: 30,
-                shared: true));
-        }
     }
 }
 

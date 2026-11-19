@@ -5,9 +5,9 @@ namespace Lukdrasil.StepUpLogging.Benchmarks;
 
 /// <summary>
 /// What <see cref="StepUpLoggingController.EmitRequestSummary"/> costs to build and write one request
-/// summary to a logger that only counts, with the four required values alone and with every optional
-/// field the middleware passes: query string, route parameters, user agent, client address, token
-/// identifier and forwarded-for header.
+/// summary to a logger that only counts, with the four required values alone and with the optional
+/// fields: query string, route parameters, user agent, client address, token identifier and
+/// forwarded-for header.
 /// </summary>
 [MemoryDiagnoser]
 [BenchmarkCategory("Logging")]
@@ -23,6 +23,8 @@ public class RequestSummaryBenchmarks
         ["itemId"] = "42",
         ["token"] = "[REDACTED]",
     };
+
+    private static readonly CompiledRedactionPatterns NoPatterns = new([]);
 
     private readonly NullLogEventSink _summaries = new();
     private StepUpLoggingController _controller = null!;
@@ -51,14 +53,17 @@ public class RequestSummaryBenchmarks
     [Benchmark]
     public void EmitRequestSummary() =>
         _controller.EmitRequestSummary(
-            Method,
-            BenchmarkFixtures.RequestPath,
-            StatusCode,
-            ElapsedMs,
-            queryString: AllFields ? "?page=2&sort=asc" : null,
-            routeParameters: AllFields ? RouteParameters : null,
-            userAgent: AllFields ? "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36" : null,
-            clientIp: AllFields ? "203.0.113.7" : null,
-            jti: AllFields ? "4d2f0c1e-6a52-4b6a-9c3b-0f6c2d9a77e1" : null,
-            forwardedFor: AllFields ? "203.0.113.7, 10.0.0.1" : null);
+            new RequestSummary(
+                    RequestSummary.Inbound,
+                    Method,
+                    BenchmarkFixtures.RequestPath,
+                    StatusCode,
+                    ElapsedMs,
+                    AllFields ? "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36" : null,
+                    NoPatterns)
+                .With("ClientIp", AllFields ? "203.0.113.7" : null)
+                .With(LogProperties.Jti, AllFields ? "4d2f0c1e-6a52-4b6a-9c3b-0f6c2d9a77e1" : null)
+                .With("QueryString", AllFields ? "?page=2&sort=asc" : null)
+                .With("RouteParameters", AllFields ? RouteParameters : null)
+                .With("ForwardedFor", AllFields ? "203.0.113.7, 10.0.0.1" : null));
 }

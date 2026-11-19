@@ -22,7 +22,7 @@ are those of `Compact`; only the keys change:
 | `HttpClientName`, `Host` (outbound) | `hc`, `host` |
 
 The template is `{dir} {mth} {path} {sc} {ms} ms {ck} {ua}`, so the rendered message is the same as in the other
-modes. `IsRequestSummary` keeps its name: `SummarySink` routes on it. The keys are not `@`-prefixed: CLEF escapes a
+modes. `IsRequestSummary` keeps its name: `BypassSink` routes on it. The keys are not `@`-prefixed: CLEF escapes a
 property starting with `@` to `@@`.
 
 **D2. The renaming is in `RequestSummary`.** The builders add fields under their long names; `RequestSummary` maps

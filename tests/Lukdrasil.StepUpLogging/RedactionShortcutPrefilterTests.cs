@@ -77,7 +77,7 @@ public class RedactionShortcutPrefilterTests
     public void HasPrefilter_PatternWithHash_IsFalse()
     {
         var patterns = new CompiledRedactionPatterns(
-            [StepUpLoggingExtensions.CompilePattern("(?x)a#c"), StepUpLoggingExtensions.CompilePattern("b")]);
+            [CompiledRedactionPatterns.CompilePattern("(?x)a#c"), CompiledRedactionPatterns.CompilePattern("b")]);
 
         Assert.False(patterns.HasPrefilter);
     }
@@ -85,7 +85,7 @@ public class RedactionShortcutPrefilterTests
     [Fact]
     public void HasPrefilter_LookaheadFallbackWithSample_IsFalse()
     {
-        var lookahead = StepUpLoggingExtensions.CompilePattern("secret(?=!)");
+        var lookahead = CompiledRedactionPatterns.CompilePattern("secret(?=!)");
         Assert.False(lookahead.Options.HasFlag(RegexOptions.NonBacktracking));
 
         var patterns = new CompiledRedactionPatterns([lookahead, Sample(0)]);
@@ -144,7 +144,7 @@ public class RedactionShortcutPrefilterTests
     public void Redact_LaterPatternSeesEarlierRedaction()
     {
         var patterns = new CompiledRedactionPatterns(
-            [StepUpLoggingExtensions.CompilePattern("secret"), StepUpLoggingExtensions.CompilePattern(@"x\[REDACTED\]")]);
+            [CompiledRedactionPatterns.CompilePattern("secret"), CompiledRedactionPatterns.CompilePattern(@"x\[REDACTED\]")]);
 
         Assert.Equal("[REDACTED]", patterns.Redact("xsecret"));
     }
@@ -159,10 +159,33 @@ public class RedactionShortcutPrefilterTests
     }
 
     [Fact]
+    public void Redact_PrefilterNoMatch_SkipsThePerPatternLoop()
+    {
+        var patterns = new CompiledRedactionPatterns(
+            [new LoopProbeRegex("alpha", TimeSpan.FromMilliseconds(100)), new LoopProbeRegex("beta", TimeSpan.FromMilliseconds(100))]);
+        Assert.True(patterns.HasPrefilter);
+
+        Assert.Equal(CompiledRedactionPatterns.RedactionError, patterns.Redact("alpha"));
+        const string input = "nothing to hide here";
+        Assert.Same(input, patterns.Redact(input));
+    }
+
+    [Fact]
+    public void Redact_PrefilterTimesOut_RunsThePerPatternLoop()
+    {
+        var patterns = new CompiledRedactionPatterns(
+            [new LoopProbeRegex(@"\b\d{16}\b", TimeSpan.FromTicks(1)), new LoopProbeRegex(@"api[_-]?key=[^&]+", TimeSpan.FromTicks(1))]);
+        Assert.True(patterns.HasPrefilter);
+        var input = new string('x', 4_000_000);
+
+        Assert.Equal(CompiledRedactionPatterns.RedactionError, patterns.Redact(input));
+    }
+
+    [Fact]
     public void Redact_MixedEngines_RedactsLikeLoop()
     {
         var patterns = new CompiledRedactionPatterns(
-            [Sample(0), StepUpLoggingExtensions.CompilePattern("secret(?=!)")]);
+            [Sample(0), CompiledRedactionPatterns.CompilePattern("secret(?=!)")]);
         const string input = "token/abc/ secret! secret?";
 
         var redacted = patterns.Redact(input);
@@ -171,12 +194,34 @@ public class RedactionShortcutPrefilterTests
         Assert.Equal(SequentialRedact(patterns.Patterns, input), redacted);
     }
 
+    /// <summary>
+    /// A NonBacktracking-flagged pattern whose own matching always throws, so a result of
+    /// <see cref="CompiledRedactionPatterns.RedactionError"/> shows the per-pattern loop ran. The prefilter
+    /// unions its source text into a real regex, which matches normally.
+    /// </summary>
+    private sealed class LoopProbeRegex : Regex
+    {
+        public LoopProbeRegex(string source, TimeSpan timeout)
+        {
+            pattern = source;
+            roptions = RegexOptions.NonBacktracking | RegexOptions.IgnoreCase;
+            internalMatchTimeout = timeout;
+            factory = new ThrowingRunnerFactory();
+            capsize = 1;
+        }
+
+        private sealed class ThrowingRunnerFactory : RegexRunnerFactory
+        {
+            protected override RegexRunner CreateInstance() => throw new InvalidOperationException("The per-pattern loop ran.");
+        }
+    }
+
     /// <summary>Compiles the sample pattern at <paramref name="index"/> the way the host compiles configured patterns.</summary>
-    private static Regex Sample(int index) => StepUpLoggingExtensions.CompilePattern(SamplePatternSources[index]);
+    private static Regex Sample(int index) => CompiledRedactionPatterns.CompilePattern(SamplePatternSources[index]);
 
     /// <summary>All five sample patterns, compiled the way the host compiles them.</summary>
     private static CompiledRedactionPatterns AllSamples()
-        => new(SamplePatternSources.Select(StepUpLoggingExtensions.CompilePattern).ToArray());
+        => new(SamplePatternSources.Select(CompiledRedactionPatterns.CompilePattern).ToArray());
 
     /// <summary>Concatenates one to <see cref="MaxFragmentsPerInput"/> random <see cref="Fragments"/>.</summary>
     private static string RandomInput(Random random)

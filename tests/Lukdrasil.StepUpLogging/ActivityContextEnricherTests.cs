@@ -7,17 +7,18 @@ namespace Lukdrasil.StepUpLogging.Tests;
 
 public class ActivityContextEnricherTests
 {
-    [Fact]
-    public void Enrich_WithW3CActivity_AddsTraceFlags()
+    [Theory]
+    [InlineData(0x01, "1")]
+    [InlineData(0x03, "1")]
+    [InlineData(0x02, "0")]
+    public void Enrich_TraceFlags_AddsTheSampledBitOnly(int flags, string expected)
     {
-        // Arrange
-        var parentActivity = new Activity("Parent");
-        parentActivity.Start();
-
-        var activity = new Activity("Child");
+        Activity.Current = null;
+        using var activity = new Activity("Recorded");
         activity.Start();
-        activity.ActivityTraceFlags = ActivityTraceFlags.Recorded;
-        
+        // Assigned after Start, which may add the W3C random-trace-id flag to a new root.
+        activity.ActivityTraceFlags = (ActivityTraceFlags)flags;
+
         var parser = new MessageTemplateParser();
         var logEvent = new LogEvent(
             DateTimeOffset.UtcNow,
@@ -26,15 +27,9 @@ public class ActivityContextEnricherTests
             messageTemplate: parser.Parse("test"),
             properties: Array.Empty<LogEventProperty>());
 
-        var enricher = new ActivityContextEnricher();
+        new ActivityContextEnricher().Enrich(logEvent, new SimpleLogEventPropertyFactory());
 
-        // Act
-        enricher.Enrich(logEvent, new SimpleLogEventPropertyFactory());
-
-        // Assert
-        Assert.True(logEvent.Properties.ContainsKey("TraceFlags"));
-        activity.Dispose();
-        parentActivity.Dispose();
+        Assert.Equal(expected, ((ScalarValue)logEvent.Properties["TraceFlags"]).Value);
     }
 
     [Fact]
@@ -62,12 +57,13 @@ public class ActivityContextEnricherTests
     }
 
     [Fact]
-    public void Enrich_WithActivity_AddsTraceContext()
+    public void Enrich_UnrecordedActivity_AddsTraceFlagsZero()
     {
-        // Arrange
-        var activity = new Activity("TestActivity");
-        activity.ActivityTraceFlags = ActivityTraceFlags.Recorded;
+        Activity.Current = null;
+        using var activity = new Activity("NotRecorded");
         activity.Start();
+        // Assigned after Start, which may add the W3C random-trace-id flag to a new root.
+        activity.ActivityTraceFlags = ActivityTraceFlags.None;
 
         var parser = new MessageTemplateParser();
         var logEvent = new LogEvent(
@@ -77,26 +73,19 @@ public class ActivityContextEnricherTests
             messageTemplate: parser.Parse("test"),
             properties: Array.Empty<LogEventProperty>());
 
-        var enricher = new ActivityContextEnricher();
+        new ActivityContextEnricher().Enrich(logEvent, new SimpleLogEventPropertyFactory());
 
-        // Act
-        enricher.Enrich(logEvent, new SimpleLogEventPropertyFactory());
-
-        // Assert
-        // Should add TraceFlags from activity
-        Assert.True(logEvent.Properties.ContainsKey("TraceFlags"));
-        activity.Dispose();
+        Assert.Equal("0", ((ScalarValue)logEvent.Properties["TraceFlags"]).Value);
     }
 
     [Fact]
     public void Enrich_WithChildActivity_AddsParentSpanId()
     {
-        // Arrange - create parent activity first
-        var parentActivity = new Activity("ParentActivity");
+        Activity.Current = null;
+        using var parentActivity = new Activity("ParentActivity");
         parentActivity.Start();
 
-        // Create child activity which will have parent span ID
-        var childActivity = new Activity("ChildActivity");
+        using var childActivity = new Activity("ChildActivity");
         childActivity.Start();
 
         var parser = new MessageTemplateParser();
@@ -107,20 +96,9 @@ public class ActivityContextEnricherTests
             messageTemplate: parser.Parse("test"),
             properties: Array.Empty<LogEventProperty>());
 
-        var enricher = new ActivityContextEnricher();
+        new ActivityContextEnricher().Enrich(logEvent, new SimpleLogEventPropertyFactory());
 
-        // Act
-        enricher.Enrich(logEvent, new SimpleLogEventPropertyFactory());
-
-        // Assert
-        // Child activity should have parent span ID
-        if (childActivity.ParentSpanId != default)
-        {
-            Assert.True(logEvent.Properties.ContainsKey("ParentSpanId"));
-        }
-
-        childActivity.Dispose();
-        parentActivity.Dispose();
+        Assert.Equal(parentActivity.SpanId.ToHexString(), ((ScalarValue)logEvent.Properties["ParentSpanId"]).Value);
     }
 
     [Fact]

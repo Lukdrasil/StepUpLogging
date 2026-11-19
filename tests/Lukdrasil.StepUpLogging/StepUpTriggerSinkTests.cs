@@ -1,4 +1,7 @@
 using System;
+using System.Collections.Concurrent;
+using System.Diagnostics.Metrics;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Serilog.Events;
@@ -8,6 +11,36 @@ namespace Lukdrasil.StepUpLogging.Tests;
 
 public class StepUpTriggerSinkTests
 {
+    /// <summary>
+    /// Counts the sink's counter measurements an action records on the calling thread, so a measurement the
+    /// background processor or another sink records meanwhile is not counted.
+    /// </summary>
+    private sealed class SinkCounters : IDisposable
+    {
+        private readonly MeterListener _listener = new();
+        private readonly ConcurrentQueue<int> _threads = new();
+
+        public SinkCounters()
+        {
+            _listener.InstrumentPublished = (instrument, listener) =>
+            {
+                if (instrument.Meter.Name == "StepUpLogging.Sink") listener.EnableMeasurementEvents(instrument);
+            };
+            _listener.SetMeasurementEventCallback<long>((_, _, _, _) => _threads.Enqueue(Environment.CurrentManagedThreadId));
+            _listener.Start();
+        }
+
+        public int RecordedDuring(Action action)
+        {
+            var thread = Environment.CurrentManagedThreadId;
+            var before = _threads.Count(t => t == thread);
+            action();
+            return _threads.Count(t => t == thread) - before;
+        }
+
+        public void Dispose() => _listener.Dispose();
+    }
+
     [Fact]
     public async Task Emit_Error_TriggersController()
     {
@@ -160,10 +193,40 @@ public class StepUpTriggerSinkTests
             messageTemplate: parser.Parse("err"),
             properties: Array.Empty<LogEventProperty>());
 
-        sink.Emit(logEvent);
+        using var counters = new SinkCounters();
+        Assert.Equal(0, counters.RecordedDuring(() => sink.Emit(logEvent)));
         await Task.Delay(100, TestContext.Current.CancellationToken);
 
         Assert.False(controller.IsSteppedUp);
+    }
+
+    [Fact]
+    public async Task DisposeAsync_IgnoresLaterEvents_AndASecondDisposeIsANoOp()
+    {
+        var triggers = 0;
+        var sink = new StepUpTriggerSink(() => triggers++);
+        var logEvent = new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Error, exception: null,
+            messageTemplate: new MessageTemplateParser().Parse("err"),
+            properties: Array.Empty<LogEventProperty>());
+
+        using var counters = new SinkCounters();
+        await sink.DisposeAsync();
+        Assert.Equal(0, counters.RecordedDuring(() => sink.Emit(logEvent)));
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, triggers);
+        await sink.DisposeAsync();
+        sink.Dispose();
+    }
+
+    [Fact]
+    public void Dispose_Twice_IsANoOp()
+    {
+        var sink = new StepUpTriggerSink(() => { });
+
+        sink.Dispose();
+
+        Assert.Null(Record.Exception(sink.Dispose));
     }
 
     [Fact]

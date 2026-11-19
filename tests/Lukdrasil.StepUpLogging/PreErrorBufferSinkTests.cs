@@ -83,8 +83,13 @@ public class PreErrorBufferSinkTests
 
         sink.Hold(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Debug, null, parser.Parse("x"), Array.Empty<LogEventProperty>()));
         sink.Hold(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Warning, null, parser.Parse("w"), Array.Empty<LogEventProperty>()));
+        sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Warning, null, parser.Parse("warn"), Array.Empty<LogEventProperty>()));
 
         Assert.Empty(collector.Events);
+
+        sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Error, null, parser.Parse("err"), Array.Empty<LogEventProperty>()));
+
+        Assert.Equal(["x", "w"], collector.Events.Select(e => e.MessageTemplate.Text));
     }
 
     [Fact]
@@ -362,7 +367,12 @@ public class PreErrorBufferSinkTests
                 listener.EnableMeasurementEvents(instrument);
             }
         };
-        meterListener.SetMeasurementEventCallback<long>((instrument, measurement, tags, state) => measurements.Add(measurement));
+        // Hold records on the calling thread; ignore measurements other threads' sinks record meanwhile.
+        var testThread = Environment.CurrentManagedThreadId;
+        meterListener.SetMeasurementEventCallback<long>((instrument, measurement, tags, state) =>
+        {
+            if (Environment.CurrentManagedThreadId == testThread) measurements.Add(measurement);
+        });
         meterListener.Start();
 
         try

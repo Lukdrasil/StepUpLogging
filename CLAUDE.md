@@ -31,24 +31,32 @@ dotnet pack src/Lukdrasil.StepUpLogging/Lukdrasil.StepUpLogging.csproj --configu
 
 | File | Role |
 |---|---|
-| `StepUpLoggingController` | Public. Thread-safe state machine owning the `LoggingLevelSwitch`, a `Timer` for step-down, OTel counters, and a reference to the bypass logger. `Trigger()` raises the level; a timer callback lowers it after `DurationSeconds`. In `Mode=Diagnostic` the switch starts at `DiagnosticLevel` and a `TimeProvider` timer returns it to Auto at `BaseLevel` after `DiagnosticDurationMinutes`; `Trigger()` is a no-op until then. |
+| `StepUpLoggingController` | Public, created only by `AddStepUpLogging` (constructors internal). Callers use `Trigger()`, `IsSteppedUp` and `CurrentLevel`. Thread-safe state machine owning the internal `LoggingLevelSwitch`, a `Timer` for step-down, OTel counters, and a reference to the bypass logger. `Trigger()` raises the level; a timer callback lowers it after `DurationSeconds`. In `Mode=Diagnostic` the switch starts at `DiagnosticLevel` and a `TimeProvider` timer returns it to Auto at `BaseLevel` after `DiagnosticDurationMinutes`; `Trigger()` is a no-op until then. |
 | `StepUpTriggerSink` | Internal Serilog sink. Observes `Error`/`Fatal` events, skips those whose `SourceContext` matches a `NeverTriggerCategories` prefix, and enqueues to a bounded `Channel<bool>` processed by a background `Task` that calls `controller.Trigger()`. Non-blocking so it never stalls the logging pipeline. |
 | `PreErrorBufferSink` | Internal Serilog sink. Maintains a per-context ring buffer keyed by W3C TraceId (`Activity.Current`), buffering only held-back events `StepUpSink` hands it through `Hold` (events it did not export), at/above the resolved `StepUpLevel`, except events below `Warning` from `PreErrorBufferExcludeCategories` prefixes. Dropped without export on dispose. On `Error`/`Fatal`, flushes buffered events to the bypass logger and clears the buffer. LRU eviction bounds memory. |
 | `CategoryFloorMap` | Internal. Resolves the floor of a `SourceContext`, built once at wiring and passed to `StepUpSink`, which exports at `max(switch, NeverStepUp pin, floor)`. The `CategoryFloors` entries decide first (most specific key wins); only when none matches do the `FrameworkCategoryDefaults` rules of `FrameworkCategoryDefaultTable` apply (ADR 0029), and a default rule not kept in the buffer makes `StepUpSink` pass `categoryExcluded` to `PreErrorBufferSink.Hold`. While diagnostic is active only sources under a `DiagnosticExemptCategories` prefix get a floor. Allocation-free lookup. |
 | `RequestSummary` | Internal. One inbound or outbound summary event, template `{Direction} {Method} {Path} {StatusCode} {ElapsedMs} ms {ClientKind} {UserAgent}`; classifies the raw User-Agent (`ClientKind`) before redacting it. `InboundRequestSummary` builds it from `HttpContext` per `RequestSummaryDetail` (ADR 0032). |
-| `OutboundRequestSummaryFilter` | Internal `IHttpMessageHandlerBuilderFilter`, registered only with `AlwaysLogOutboundRequestSummary`. Puts `OutboundRequestSummaryHandler` outermost in every factory client except the audit and OTLP exporter clients (`ExcludedClients`). |
-| `SummarySink` | Internal Serilog sink. Forwards any event tagged `IsRequestSummary=true` to the bypass logger, so request summaries export at their own level independently of the step-up `LevelSwitch`. |
+| `OutboundRequestSummaryFilter` | Internal `IHttpMessageHandlerBuilderFilter`, always registered; it reads `AlwaysLogOutboundRequestSummary` from `StepUpSettings` and, when set, puts `OutboundRequestSummaryHandler` outermost in every factory client except the audit and OTLP exporter clients (`ExcludedClients`). |
+| `BypassSink` | Internal Serilog sink, two instances: `RequestSummaries` forwards events tagged `IsRequestSummary=true` and `Immediate` forwards events tagged `IsImmediate=true` to the bypass logger, so they export independently of the step-up `LevelSwitch`. |
 | `ActivityContextEnricher` | Adds `ParentSpanId`, `TraceFlags`, `TraceState` from `Activity.Current` — fields not provided by `Serilog.Enrichers.OpenTelemetry`. |
-| `StepUpLoggingExtensions` | Public static class. Exposes `AddStepUpLogging()` and `UseStepUpRequestLogging()`, all three `ActivitySource` instances, `AddStepUpLoggingMeters()`, and `CompiledRedactionPatterns`. All Serilog pipeline wiring happens here. |
-| `AlwaysExportEnricher` | Internal root enricher, registered only when `AlwaysExportCategories` has a non-blank entry. Sets `IsImmediate=true` on a matching `SourceContext`, so `ImmediateSink` exports it once and `StepUpSink` and the pre-error buffer skip it. |
+| `StepUpLoggingExtensions` | Public static class. Exposes `AddStepUpLogging()`, `AddAuditLogging()`, `UseStepUpRequestLogging()`, `AddStepUpLoggingMeters()` and the three activity source names (`*ActivitySourceName`). Registers the options pipeline and services; the Serilog wiring is in `StepUpPipeline`. |
+| `StepUpSettings` | Internal. The options resolved once from `IOptions<StepUpLoggingOptions>` (typed levels, durations, prefix lists, floors, `ExcludedPaths`, sensitive headers, request logging flags). The only runtime reader of the options: per-event and per-request modules read its typed members; its raw `Options` is read only while the logger is built (pipeline, output sinks, redaction patterns, startup report). |
+| `StepUpPipeline` | Internal. Builds the root logger, its gated enrichers, the gated output logger, the bypass logger and the root sinks in their fixed order. The only place that sets that order. |
+| `OutputSinks` | Internal static class. The OTLP, console and file sinks, each async-wrapped, written to both output loggers. |
+| `OtlpExport` | Internal static class. Registers the OTel SDK trace and metric exporters and configures the Serilog OTLP sink from the `OTEL_*` environment variables. |
+| `StepUpRequestLogging` | Internal. The inbound request middleware: request summary, early body buffering and the Serilog completion event with redacted fields. |
+| `RequestClient` | Internal static class. The one client-address and User-Agent rule (ADR 0008), shared by request logging, the summary and the audit trail. |
+| `ExcludedPaths` | Internal. Matches `ExcludePaths` entries: exact, or a `*` prefix on a segment boundary, ignoring case. |
+| `StepUpLoggingActivitySources` | Internal static class. The `ActivitySource` instances, so only the library starts activities under its names. |
+| `AlwaysExportEnricher` | Internal root enricher, registered only when `AlwaysExportCategories` has a non-blank entry. Sets `IsImmediate=true` on a matching `SourceContext`, so `BypassSink.Immediate` exports it once and `StepUpSink` and the pre-error buffer skip it. |
 | `EnrichmentGate` | Internal. `Needs(LogEvent)` is true when the level is at or above `min(live LevelSwitch, StepUpLevel, Error)` or the event carries `IsImmediate` or `IsRequestSummary`; `For(...)` returns the predicate the root enrichers run behind (`Enrich.When`), or always-true when the `configure` hook is set or `Serilog:AuditTo` has an entry (ADR 0026). |
 | `CategoryPrefix` | Internal static class. The one `SourceContext` prefix rule for every category option (ADR 0021 D3): ordinal equal, or starts with prefix + `.`. |
-| `StepUpLoggingOptions` | All configuration knobs with defaults. Bound from `"SerilogStepUp"` appsettings section. |
+| `StepUpLoggingOptions` | All configuration knobs with defaults. Bound from the `"SerilogStepUp"` section through `AddOptions().Bind().Configure().PostConfigure().ValidateOnStart()`. Read at runtime only through `StepUpSettings`; `EnableOtlpExporter` and `SetStaticLogger` are also read once at registration, because they decide which services and which `AddSerilog` call are registered. |
 | `StepUpLoggingOptionsValidator` | Internal `IValidateOptions`. One failure message per invalid option, naming the key and its value; checks enums, level names, ranges, floors, Diagnostic exemptions and that each `RedactionRegexes` entry parses. |
 | `StartupReport` | Internal. Written once through the bypass logger when the logger is built: an Information summary of the effective configuration, a Warning per unknown key under the options section, and a Warning per option set to a value with no effect. |
 | `SerilogConfigurationAssemblies` | Internal static class. The single `ReadFrom.Configuration` entry point (`ReadSerilogSection`) for all three call sites. Under JIT the call is unchanged; when `RuntimeFeature.IsDynamicCodeSupported` is false it hands the reader explicit assemblies: `ConfigurationLibraryAssemblies` plus each non-blank `Serilog:Using` entry (ADR 0035 D1). Every Serilog assembly the library references is either in that table or in `DeliberateExclusions` (with a reason), guarded by a test. |
 
-### Serilog pipeline (wired in `AddStepUpLoggingInternal`)
+### Serilog pipeline (wired in `StepUpPipeline`)
 
 The root logger is deliberately set to `MinimumLevel.Verbose()` so the buffer and trigger sinks see every event regardless of the current level. Actual export is gated inside sub-loggers. The root's library enrichers (`ApplyCommonEnrichers`) run behind the `EnrichmentGate`, so a Debug event nobody will export is not enriched; `AlwaysExportEnricher` runs before the gate, `RedactionEnricher` stays last and ungated, and the bypass logger enriches ungated. Inside `Enrich.When` make one call per enricher on the `LoggerEnrichmentConfiguration`; a chained `.Enrich.` escapes the gate (ADR 0026):
 
@@ -57,14 +65,15 @@ Root (Verbose)
  ├─ Sub-logger: gated by LevelSwitch (the step-up switch), IsRequestSummary filtered out → OTLP / Console / File
  ├─ PreErrorBufferSink (held-back events from StepUpSink, floored at StepUpLevel) → bypass logger (on Error)
  ├─ StepUpTriggerSink → StepUpLoggingController.Trigger()
- └─ SummarySink → bypass logger (for IsRequestSummary=true events)
+ ├─ BypassSink.RequestSummaries → bypass logger (for IsRequestSummary=true events)
+ └─ BypassSink.Immediate → bypass logger (for IsImmediate=true events)
 ```
 
 **Bypass logger**: created directly inside the `AddSerilog` callback (not via DI) to avoid a circular deadlock. `AddSerilog` registers `Serilog.ILogger` as a factory that depends on `ILoggerFactory`, which in turn depends on this very callback, so calling `GetRequiredService<Serilog.ILogger>()` inside the callback deadlocks.
 
 ### Audit pipeline
 
-Audit writes bypass Serilog entirely (ADR 0016 D1): `IAuditLogger<T>.AuditAsync()` calls `IAuditEventSink.WriteAsync()` directly. `EncryptedSpoolAuditSink` → spool (write-ahead, fsync, atomic rename) → `DrainWorker` → configured endpoint; the delivery contract (which status codes are durable, permanent, or transient) is defined in ADR 0020 D7.
+Audit writes bypass Serilog entirely (ADR 0016 D1): `IAuditLogger<T>.AuditAsync()` goes through the internal `AuditTrail`, which enriches the record and calls `IAuditEventSink.WriteAsync()` directly. `EncryptedSpoolAuditSink` → spool (write-ahead, fsync, atomic rename) → `DrainWorker` → configured endpoint; the delivery contract (which status codes are durable, permanent, or transient) is defined in ADR 0020 D7.
 
 ### Encrypted spool sink (`src/Lukdrasil.StepUpLogging/EncryptedSpool/`)
 

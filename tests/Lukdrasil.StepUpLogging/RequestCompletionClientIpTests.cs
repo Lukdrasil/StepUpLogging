@@ -38,6 +38,7 @@ public class RequestCompletionClientIpTests
                     services.AddSingleton(Options.Create(opts));
                     services.AddSingleton(logger);
                     services.AddSingleton(sp => new StepUpLoggingController(opts, logger));
+                    services.AddSingleton(new StepUpSettings(opts));
                     services.AddSingleton(new CompiledRedactionPatterns([]));
                     services.AddSingleton(new DiagnosticContext(logger));
                 })

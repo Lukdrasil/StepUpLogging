@@ -48,6 +48,7 @@ public class RequestBodyCaptureTests
                     services.AddSingleton(Options.Create(options));
                     services.AddSingleton(logger);
                     services.AddSingleton(sp => new StepUpLoggingController(options, logger));
+                    services.AddSingleton(new StepUpSettings(options));
                     var patterns = options.RedactionRegexes
                         .Select(p => new Regex(p, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100)))
                         .ToArray();
@@ -218,6 +219,7 @@ public class RequestBodyCaptureTests
             await client.PostAsync("/api/test", new StringContent(body, Encoding.UTF8, "application/json"), TestContext.Current.CancellationToken);
             await Task.Delay(50, TestContext.Current.CancellationToken);
 
+            Assert.Single(capture.Events, e => e.Properties.ContainsKey("Elapsed") && e.Properties.ContainsKey("RequestMethod"));
             var captured = FindRequestBody(capture);
             Assert.Null(captured);
         }
@@ -278,6 +280,7 @@ public class RequestBodyCaptureTests
                         services.AddSingleton(Options.Create(opts));
                         services.AddSingleton(logger);
                         services.AddSingleton(sp => new StepUpLoggingController(opts, logger));
+                        services.AddSingleton(new StepUpSettings(opts));
                         var patterns = opts.RedactionRegexes
                             .Select(p => new Regex(p, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100)))
                             .ToArray();
@@ -368,6 +371,7 @@ public class RequestBodyCaptureTests
                         services.AddSingleton(Options.Create(opts));
                         services.AddSingleton(logger);
                         services.AddSingleton(sp => new StepUpLoggingController(opts, logger));
+                        services.AddSingleton(new StepUpSettings(opts));
                         var patterns = opts.RedactionRegexes
                             .Select(p => new Regex(p, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100)))
                             .ToArray();

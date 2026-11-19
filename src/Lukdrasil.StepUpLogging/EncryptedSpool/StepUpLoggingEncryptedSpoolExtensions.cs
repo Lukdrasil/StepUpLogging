@@ -183,7 +183,7 @@ public static class StepUpLoggingEncryptedSpoolExtensions
             // invalid, that failure is already reported under its own name, and constructing a
             // sink from options that are not even well-formed would only add a second, noisier
             // failure about the same misconfiguration.
-            _ = services.GetRequiredService<IOptionsMonitor<EncryptedSpoolOptions>>().CurrentValue;
+            _ = services.GetRequiredService<IOptions<EncryptedSpoolOptions>>().Value;
         }
         catch (OptionsValidationException)
         {

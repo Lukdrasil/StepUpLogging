@@ -150,7 +150,7 @@ public class RedactionShortcutGateTests
     {
         var collector = new CollectingSink();
         var lc = new LoggerConfiguration().MinimumLevel.Verbose();
-        StepUpLoggingExtensions.ApplyRedactionEnricher(lc, opts, Patterns(), needsEnrichment);
+        new StepUpPipeline(TestHosts.NewBuilder(), new StepUpSettings(opts), Patterns(), null).ApplyRedactionEnricher(lc, needsEnrichment);
         using (var logger = lc.WriteTo.Sink(collector).CreateLogger())
         {
             scenario(logger);
@@ -167,7 +167,7 @@ public class RedactionShortcutGateTests
     private static StepUpLoggingOptions RedactionOn() => new() { RedactLogEventProperties = true };
 
     /// <summary>The single token pattern, compiled the way the host compiles it.</summary>
-    private static CompiledRedactionPatterns Patterns() => new([StepUpLoggingExtensions.CompilePattern(TokenPattern)]);
+    private static CompiledRedactionPatterns Patterns() => new([CompiledRedactionPatterns.CompilePattern(TokenPattern)]);
 
     /// <summary>An output logger writing every level to <paramref name="collector"/>.</summary>
     private static Logger Inner(CollectingSink collector)

@@ -50,7 +50,7 @@ public class OtlpExportTimeoutTests
     [InlineData("10s", 10000)]
     public void ResolveOtlpTimeout_ReadsMillisecondsOrFallsBackToTheSpecDefault(string? value, int expectedMilliseconds)
     {
-        Assert.Equal(TimeSpan.FromMilliseconds(expectedMilliseconds), StepUpLoggingExtensions.ResolveOtlpTimeout(value));
+        Assert.Equal(TimeSpan.FromMilliseconds(expectedMilliseconds), OtlpExport.ResolveOtlpTimeout(value));
     }
 
     internal sealed class SilentCollector : IDisposable

@@ -157,7 +157,7 @@ public class EnrichmentGateTests
     {
         var collector = new CollectingSink();
         var lc = new LoggerConfiguration().MinimumLevel.Verbose();
-        StepUpLoggingExtensions.ApplyRootEnrichers(lc, TestHosts.NewBuilder(), opts, new CompiledRedactionPatterns([]), needsEnrichment);
+        new StepUpPipeline(TestHosts.NewBuilder(), new StepUpSettings(opts), new CompiledRedactionPatterns([]), null).ApplyRootEnrichers(lc, needsEnrichment);
         using var logger = lc.WriteTo.Sink(collector).CreateLogger();
         scenario(logger);
         return collector;

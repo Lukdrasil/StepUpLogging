@@ -19,7 +19,7 @@ public class ConsoleFormatTests
     private static string Format(ConsoleLogFormat format, ConsoleTraceFormat traceFormat, RequestSummaryDetail detail, LogEvent logEvent, params string[] textProperties)
     {
         using var output = new StringWriter();
-        StepUpLoggingExtensions.CreateConsoleFormatter(format, textProperties, traceFormat, detail).Format(logEvent, output);
+        OutputSinks.CreateConsoleFormatter(format, textProperties, traceFormat, detail).Format(logEvent, output);
         return output.ToString();
     }
 

@@ -10,7 +10,7 @@ namespace Lukdrasil.StepUpLogging;
 /// <remarks>
 /// The marker is applied via <see cref="ILogger.BeginScope{TState}"/> with a property named
 /// <c>IsImmediate=true</c>. Serilog's MEL provider translates the scope dictionary into a
-/// log-event property, which <see cref="ImmediateSink"/> detects and forwards to the bypass logger.
+/// log-event property, which <see cref="BypassSink.Immediate"/> detects and forwards to the bypass logger.
 /// </remarks>
 public static class ImmediateLoggerExtensions
 {

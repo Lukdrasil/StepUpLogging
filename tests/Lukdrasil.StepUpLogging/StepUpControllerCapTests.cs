@@ -1,11 +1,11 @@
-using System.Diagnostics;
+using Microsoft.Extensions.Time.Testing;
+using Serilog;
 using Serilog.Events;
 
 namespace Lukdrasil.StepUpLogging.Tests;
 
 public class StepUpControllerCapTests
 {
-    private static long Seconds(double s) => (long)(s * Stopwatch.Frequency);
 
     private static StepUpLoggingOptions CappedOptions(int cap = 120, int cooldown = 300, int duration = 60, StepUpMode mode = StepUpMode.Auto) => new()
     {
@@ -20,7 +20,7 @@ public class StepUpControllerCapTests
     [Fact]
     public void CapDisabled_ContinuousTriggering_NeverForcesStepDown()
     {
-        long ticks = Stopwatch.GetTimestamp();
+        var time = new FakeTimeProvider();
         var opts = new StepUpLoggingOptions
         {
             Mode = StepUpMode.Auto,
@@ -28,14 +28,14 @@ public class StepUpControllerCapTests
             StepUpLevel = "Information",
             DurationSeconds = 300
         };
-        using var controller = new StepUpLoggingController(opts, null, () => ticks);
+        using var controller = new StepUpLoggingController(opts, null, time);
 
         controller.Trigger();
         Assert.True(controller.IsSteppedUp);
 
         for (int i = 0; i < 100; i++)
         {
-            ticks += Seconds(6);
+            time.Advance(TimeSpan.FromSeconds(6));
             controller.Trigger();
             Assert.True(controller.IsSteppedUp);
         }
@@ -44,15 +44,15 @@ public class StepUpControllerCapTests
     [Fact]
     public void CapEnabled_ContinuousTriggeringPastCap_ForcesStepDown()
     {
-        long ticks = Stopwatch.GetTimestamp();
-        using var controller = new StepUpLoggingController(CappedOptions(), null, () => ticks);
+        var time = new FakeTimeProvider();
+        using var controller = new StepUpLoggingController(CappedOptions(), null, time);
 
         controller.Trigger();
         Assert.True(controller.IsSteppedUp);
 
         for (int i = 0; i < 25; i++)
         {
-            ticks += Seconds(6);
+            time.Advance(TimeSpan.FromSeconds(6));
             controller.Trigger();
         }
 
@@ -63,23 +63,22 @@ public class StepUpControllerCapTests
     [Fact]
     public void DuringCooldown_TriggerDoesNotStepUp_AfterCooldownItDoes()
     {
-        long ticks = Stopwatch.GetTimestamp();
-        using var controller = new StepUpLoggingController(CappedOptions(), null, () => ticks);
+        var time = new FakeTimeProvider();
+        using var controller = new StepUpLoggingController(CappedOptions(), null, time);
 
         controller.Trigger();
         for (int i = 0; i < 25; i++)
         {
-            ticks += Seconds(6);
+            time.Advance(TimeSpan.FromSeconds(6));
             controller.Trigger();
         }
         Assert.False(controller.IsSteppedUp);
-        Assert.True(controller.IsInCooldown);
 
-        ticks += Seconds(10);
+        time.Advance(TimeSpan.FromSeconds(10));
         controller.Trigger();
         Assert.False(controller.IsSteppedUp);
 
-        ticks += Seconds(310);
+        time.Advance(TimeSpan.FromSeconds(310));
         controller.Trigger();
         Assert.True(controller.IsSteppedUp);
         Assert.Equal(LogEventLevel.Information, controller.LevelSwitch.MinimumLevel);
@@ -88,35 +87,41 @@ public class StepUpControllerCapTests
     [Fact]
     public void CapForcedStepDown_ThenStaleCallback_NoDoubleStepDown()
     {
-        long ticks = Stopwatch.GetTimestamp();
-        using var controller = new StepUpLoggingController(CappedOptions(), null, () => ticks);
+        var time = new FakeTimeProvider();
+        var output = new CollectingSink();
+        using var controller = new StepUpLoggingController(CappedOptions(), new LoggerConfiguration().WriteTo.Sink(output).CreateLogger(), time);
 
         controller.Trigger();
-        var staleGeneration = controller.CurrentGeneration;
 
-        for (int i = 0; i < 25; i++)
+        // The forced step-down does not advance the generation, so a callback armed by the last extension still
+        // carries the current generation and passes the generation check; only the stepped-up guard stops it.
+        long generationBeforeCap;
+        do
         {
-            ticks += Seconds(6);
+            generationBeforeCap = controller.CurrentGeneration;
+            time.Advance(TimeSpan.FromSeconds(6));
             controller.Trigger();
         }
-        Assert.False(controller.IsSteppedUp);
+        while (controller.IsSteppedUp);
+        Assert.Equal(generationBeforeCap, controller.CurrentGeneration);
 
-        controller.InvokeStepDownForTest(staleGeneration);
+        controller.InvokeStepDownForTest(generationBeforeCap);
 
         Assert.False(controller.IsSteppedUp);
         Assert.Equal(LogEventLevel.Warning, controller.LevelSwitch.MinimumLevel);
+        Assert.Single(output.Events, e => e.MessageTemplate.Text.StartsWith("Logging step down", StringComparison.Ordinal));
     }
 
     [Fact]
     public void AlwaysOnMode_IgnoresCap()
     {
-        long ticks = Stopwatch.GetTimestamp();
-        using var controller = new StepUpLoggingController(CappedOptions(mode: StepUpMode.AlwaysOn), null, () => ticks);
+        var time = new FakeTimeProvider();
+        using var controller = new StepUpLoggingController(CappedOptions(mode: StepUpMode.AlwaysOn), null, time);
 
         Assert.True(controller.IsSteppedUp);
         for (int i = 0; i < 50; i++)
         {
-            ticks += Seconds(6);
+            time.Advance(TimeSpan.FromSeconds(6));
             controller.Trigger();
         }
         Assert.True(controller.IsSteppedUp);
@@ -125,13 +130,13 @@ public class StepUpControllerCapTests
     [Fact]
     public void DisabledMode_IgnoresCap()
     {
-        long ticks = Stopwatch.GetTimestamp();
-        using var controller = new StepUpLoggingController(CappedOptions(mode: StepUpMode.Disabled), null, () => ticks);
+        var time = new FakeTimeProvider();
+        using var controller = new StepUpLoggingController(CappedOptions(mode: StepUpMode.Disabled), null, time);
 
         Assert.False(controller.IsSteppedUp);
         for (int i = 0; i < 50; i++)
         {
-            ticks += Seconds(6);
+            time.Advance(TimeSpan.FromSeconds(6));
             controller.Trigger();
         }
         Assert.False(controller.IsSteppedUp);

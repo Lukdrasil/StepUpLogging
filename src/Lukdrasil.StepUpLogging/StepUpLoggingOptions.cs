@@ -273,6 +273,8 @@ public sealed class StepUpLoggingOptions
     /// environment variable is set and <see langword="false"/> otherwise; set it to <see langword="true"/> to export to
     /// the default <c>localhost:4317</c> without the variable. The endpoint, protocol and headers come from
     /// <c>OTEL_EXPORTER_OTLP_ENDPOINT</c>, <c>OTEL_EXPORTER_OTLP_PROTOCOL</c> and <c>OTEL_EXPORTER_OTLP_HEADERS</c>.
+    /// Whether the SDK exporter is registered is read once at registration from the configuration section and
+    /// <c>configureOptions</c>.
     /// </summary>
     public bool EnableOtlpExporter { get; set; } = OtlpEndpointIsSet(Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT"));
 

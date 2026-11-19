@@ -5,7 +5,7 @@ namespace Lukdrasil.StepUpLogging;
 
 /// <summary>
 /// Marks events from the listed <c>SourceContext</c> prefixes with <c>IsImmediate=true</c>, so
-/// <see cref="ImmediateSink"/> exports them once at any level while <see cref="StepUpSink"/> and the
+/// <see cref="BypassSink.Immediate"/> exports them once at any level while <see cref="StepUpSink"/> and the
 /// pre-error buffer skip them (ADR 0024).
 /// </summary>
 internal sealed class AlwaysExportEnricher(string[] categories) : ILogEventEnricher

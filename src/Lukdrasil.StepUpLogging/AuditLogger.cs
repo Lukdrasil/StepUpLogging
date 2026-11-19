@@ -2,35 +2,20 @@ using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 
 namespace Lukdrasil.StepUpLogging;
 
 /// <summary>
-/// Writes audit records straight to the registered <see cref="IAuditEventSink"/>, bypassing
-/// Serilog so the write can be awaited and its failure propagated to the business call site.
+/// The <see cref="IAuditLogger{T}"/> of category <typeparamref name="T"/>: writes through the <see cref="AuditTrail"/>
+/// and writes the companion log to the category's logger.
 /// </summary>
-/// <remarks>
-/// The dependency on <see cref="CompiledRedactionPatterns"/> is what makes
-/// <see cref="StepUpLoggingExtensions.AddAuditLogging{TSink}"/> require
-/// <see cref="StepUpLoggingExtensions.AddStepUpLogging(Microsoft.Extensions.Hosting.IHostApplicationBuilder, Action{StepUpLoggingOptions}?, string, string?)"/>:
-/// only the latter registers it, rather than silently deriving client addresses by a second,
-/// weaker rule (ADR 0008). An application that forgot it fails at host start, where
-/// <c>AddAuditLogging</c>'s start-up validation reports it; a container resolved without ever
-/// starting a host still fails here, on the missing dependency.
-/// </remarks>
-internal sealed class AuditLogger<T>(
-    IAuditEventSink sink,
-    ILogger<T> logger,
-    IHttpContextAccessor httpContextAccessor,
-    IOptions<StepUpLoggingOptions> options,
-    CompiledRedactionPatterns redactionPatterns) : IAuditLogger<T>
+internal sealed class AuditLogger<T>(AuditTrail trail, ILogger<T> logger) : IAuditLogger<T>
 {
     /// <inheritdoc />
     public ValueTask AuditAsync(AuditEvent auditEvent)
     {
         ArgumentNullException.ThrowIfNull(auditEvent);
-        return WriteThenLogAsync(auditEvent, companionLog: null);
+        return trail.WriteThenLogAsync(auditEvent, logger, companionLog: null);
     }
 
     /// <inheritdoc />
@@ -38,10 +23,34 @@ internal sealed class AuditLogger<T>(
     {
         ArgumentNullException.ThrowIfNull(auditEvent);
         ArgumentNullException.ThrowIfNull(log);
-        return WriteThenLogAsync(auditEvent, log);
+        return trail.WriteThenLogAsync(auditEvent, logger, log);
     }
+}
 
-    private async ValueTask WriteThenLogAsync(AuditEvent auditEvent, Action<ILogger>? companionLog)
+/// <summary>
+/// Writes audit records straight to the registered <see cref="IAuditEventSink"/>, bypassing
+/// Serilog so the write can be awaited and its failure propagated to the business call site.
+/// </summary>
+/// <remarks>
+/// The dependency on <see cref="CompiledRedactionPatterns"/> and <see cref="StepUpSettings"/> is what makes
+/// <see cref="StepUpLoggingExtensions.AddAuditLogging{TSink}"/> require
+/// <see cref="StepUpLoggingExtensions.AddStepUpLogging(Microsoft.Extensions.Hosting.IHostApplicationBuilder, Action{StepUpLoggingOptions}?, string, string?)"/>:
+/// only the latter registers them, rather than silently deriving client addresses by a second,
+/// weaker rule (ADR 0008). An application that forgot it fails at host start, where
+/// <c>AddAuditLogging</c>'s start-up validation reports it; a container resolved without ever
+/// starting a host still fails here, on the missing dependency.
+/// </remarks>
+internal sealed class AuditTrail(
+    IAuditEventSink sink,
+    IHttpContextAccessor httpContextAccessor,
+    StepUpSettings settings,
+    CompiledRedactionPatterns redactionPatterns)
+{
+    /// <summary>
+    /// Writes <paramref name="auditEvent"/>, enriched with its id, time, trace and request context, then, only after a
+    /// Stored write, runs <paramref name="companionLog"/> on <paramref name="logger"/> in an immediate scope.
+    /// </summary>
+    internal async ValueTask WriteThenLogAsync(AuditEvent auditEvent, ILogger logger, Action<ILogger>? companionLog)
     {
         var record = Enrich(auditEvent);
         AuditWriteResult writeResult;
@@ -117,9 +126,9 @@ internal sealed class AuditLogger<T>(
         // Deliberately not Connection.RemoteIpAddress: ADR 0008 allows exactly one client-IP rule
         // in the package, so the audit trail resolves the client the same way request logging does
         // (including the TrustForwardedHeaders decision).
-        var (clientIp, _) = StepUpLoggingExtensions.ExtractClientAddresses(
-            httpContext, options.Value.TrustForwardedHeaders, redactionPatterns);
-        var rawUserAgent = StepUpLoggingExtensions.ExtractUserAgent(httpContext.Request);
+        var (clientIp, _) = RequestClient.Addresses(
+            httpContext, settings.TrustForwardedHeaders, redactionPatterns);
+        var rawUserAgent = RequestClient.UserAgent(httpContext.Request);
 
         // Redaction follows the origin of the value: the User-Agent is client-supplied and is
         // redacted as it is everywhere else in the package. So is the client IP, but only on the
@@ -141,7 +150,7 @@ internal sealed class AuditLogger<T>(
 /// <remarks>
 /// Deliberately not held by <see cref="AuditLogger{T}"/>: a static inside an open generic exists
 /// once per closed generic, so an app auditing from three services would create three undisposed
-/// meters — the leak <c>ImmediateSink</c> already had to fix once.
+/// meters — the leak <c>BypassSink</c> already had to fix once.
 /// </remarks>
 internal static class AuditMetrics
 {

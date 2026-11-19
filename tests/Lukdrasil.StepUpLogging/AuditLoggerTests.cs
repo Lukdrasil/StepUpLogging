@@ -7,7 +7,6 @@ using System.Net;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using Serilog;
 using Serilog.Events;
 using Serilog.Extensions.Logging;
@@ -119,7 +118,7 @@ public class AuditLoggerTests
         public ILogger<AuditLoggerTests> AuditCategoryLogger { get; }
 
         private readonly StepUpSink _stepUpSink;
-        private readonly ImmediateSink _immediateSink;
+        private readonly BypassSink _immediateSink;
         private readonly SerilogLoggerFactory _loggerFactory;
 
         public Harness(
@@ -144,7 +143,7 @@ public class AuditLoggerTests
             var gatedInner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(GatedOutput).CreateLogger();
             var bypassLogger = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(BypassOutput).CreateLogger();
             _stepUpSink = new StepUpSink(gatedInner, Controller.LevelSwitch, Controller.BaseLevel, options.NeverStepUpCategories);
-            _immediateSink = new ImmediateSink(bypassLogger);
+            _immediateSink = BypassSink.Immediate(bypassLogger);
 
             var root = new LoggerConfiguration()
                 .MinimumLevel.Verbose()
@@ -154,16 +153,13 @@ public class AuditLoggerTests
             _loggerFactory = new SerilogLoggerFactory(root, dispose: true);
 
             var patterns = new CompiledRedactionPatterns(
-                options.RedactionRegexes.Select(StepUpLoggingExtensions.CompilePattern).ToArray());
+                options.RedactionRegexes.Select(CompiledRedactionPatterns.CompilePattern).ToArray());
 
             AuditCategoryLogger = _loggerFactory.CreateLogger<AuditLoggerTests>();
 
             AuditLogger = new AuditLogger<AuditLoggerTests>(
-                sink,
-                AuditCategoryLogger,
-                new HttpContextAccessor { HttpContext = httpContext },
-                Options.Create(options),
-                patterns);
+                new AuditTrail(sink, new HttpContextAccessor { HttpContext = httpContext }, new StepUpSettings(options), patterns),
+                AuditCategoryLogger);
         }
 
         public void Dispose()
@@ -353,7 +349,7 @@ public class AuditLoggerTests
 
         // Redaction inside SourceIp is asymmetric by origin, not by field: a forwarded address is
         // client-supplied and is redacted, whereas the connection address above is not. Inherited
-        // from ExtractClientAddresses (ADR 0008) rather than decided here.
+        // from RequestClient.Addresses (ADR 0008) rather than decided here.
         Assert.Equal("[REDACTED]", Assert.Single(sink.Written).SourceIp);
     }
 
@@ -379,10 +375,7 @@ public class AuditLoggerTests
 
         await harness.AuditLogger.AuditAsync(SuccessEvent());
 
-        var userAgent = Assert.Single(sink.Written).UserAgent;
-        Assert.NotNull(userAgent);
-        Assert.Contains("[REDACTED]", userAgent);
-        Assert.DoesNotContain("secret-abc123", userAgent);
+        Assert.Equal("Agent/1.0 token=[REDACTED]", Assert.Single(sink.Written).UserAgent);
     }
 
     [Fact]
@@ -456,7 +449,7 @@ public class AuditLoggerTests
         // even while stepped up, so the ordinary Information event above is dropped. It still
         // suppresses neither audit path — the audit write never enters Serilog at all, and the
         // companion log, which StepUpSink drops on that very same pinned gate, is carried out by
-        // ImmediateSink instead, because the audit logger marks it IsImmediate.
+        // immediate BypassSink instead, because the audit logger marks it IsImmediate.
         Assert.Empty(harness.GatedOutput.Events);
         Assert.Single(sink.Written);
         var exported = Assert.Single(harness.BypassOutput.Events);

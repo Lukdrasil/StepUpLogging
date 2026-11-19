@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
+using Microsoft.Extensions.Time.Testing;
 using Serilog;
 using Serilog.Events;
 using Serilog.Core;
@@ -30,7 +31,7 @@ namespace Lukdrasil.StepUpLogging.Tests
             var controller = new StepUpLoggingController(opts, logger);
 
             var routeParams = new Dictionary<string, object?> { ["id"] = "1", ["order"] = "abc" };
-            controller.EmitRequestSummary("GET", "/api/values", 200, 123.45, "abcdef", "id=1&order=abc", routeParams);
+            controller.EmitRequestSummary(TestSummaries.Inbound("GET", "/api/values", 200, 123.45, queryString: "id=1&order=abc", routeParameters: routeParams));
 
             Assert.NotNull(sink.LastEvent);
             Assert.Equal("{Direction} {Method} {Path} {StatusCode} {ElapsedMs} ms {ClientKind} {UserAgent}", sink.LastEvent!.MessageTemplate.Text);
@@ -51,7 +52,7 @@ namespace Lukdrasil.StepUpLogging.Tests
             var logger = new LoggerConfiguration().WriteTo.Sink(sink).CreateLogger();
             var controller = new StepUpLoggingController(opts, logger);
 
-            controller.EmitRequestSummary("GET", "/api/test", 200, 50.0, userAgent: "Mozilla/5.0", clientIp: "127.0.0.1");
+            controller.EmitRequestSummary(TestSummaries.Inbound("GET", "/api/test", 200, 50.0, userAgent: "Mozilla/5.0", clientIp: "127.0.0.1"));
 
             Assert.NotNull(sink.LastEvent);
             Assert.Equal("Mozilla/5.0", ((ScalarValue)sink.LastEvent!.Properties["UserAgent"]).Value);
@@ -66,26 +67,12 @@ namespace Lukdrasil.StepUpLogging.Tests
             var logger = new LoggerConfiguration().WriteTo.Sink(sink).CreateLogger();
             var controller = new StepUpLoggingController(opts, logger);
 
-            controller.EmitRequestSummary("GET", "/api/test", 200, 50.0, userAgent: null, clientIp: null);
+            controller.EmitRequestSummary(TestSummaries.Inbound("GET", "/api/test", 200, 50.0, userAgent: null, clientIp: null));
 
             Assert.NotNull(sink.LastEvent);
             Assert.Equal("(none)", (sink.LastEvent!.Properties.GetValueOrDefault("UserAgent") as ScalarValue)?.Value);
             Assert.Equal("None", (sink.LastEvent.Properties.GetValueOrDefault("ClientKind") as ScalarValue)?.Value);
             Assert.False(sink.LastEvent.Properties.ContainsKey("ClientIp"));
-        }
-
-        [Fact(DisplayName = "EmitRequestSummary_CompactDetail_OmitsQueryString")]
-        public void EmitRequestSummary_CompactDetail_OmitsQueryString()
-        {
-            var opts = new StepUpLoggingOptions { RequestSummaryDetail = RequestSummaryDetail.Compact };
-            var sink = new CaptureSink();
-            var logger = new LoggerConfiguration().WriteTo.Sink(sink).CreateLogger();
-            var controller = new StepUpLoggingController(opts, logger);
-
-            controller.EmitRequestSummary("GET", "/api/test", 200, 50.0, queryString: "id=1");
-
-            Assert.NotNull(sink.LastEvent);
-            Assert.False(sink.LastEvent!.Properties.ContainsKey("QueryString"));
         }
 
         [Fact(DisplayName = "BaseLevel_DefaultOptions_IsWarning")]
@@ -107,7 +94,7 @@ namespace Lukdrasil.StepUpLogging.Tests
         [Fact(DisplayName = "IsSteppedUp_AutoMode_BaseLevelEqualsStepUpLevel_TracksExplicitFlagNotLevelComparison")]
         public void IsSteppedUp_AutoMode_BaseLevelEqualsStepUpLevel_TracksExplicitFlagNotLevelComparison()
         {
-            long ticks = Stopwatch.GetTimestamp();
+            var time = new FakeTimeProvider();
             var opts = new StepUpLoggingOptions
             {
                 Mode = StepUpMode.Auto,
@@ -116,7 +103,7 @@ namespace Lukdrasil.StepUpLogging.Tests
                 DurationSeconds = 300
             };
 
-            using var controller = new StepUpLoggingController(opts, null, () => ticks);
+            using var controller = new StepUpLoggingController(opts, null, time);
 
             // With BaseLevel == StepUpLevel, a level comparison can never distinguish stepped-up
             // from not; only an explicit flag can. Before any trigger, the switch already sits at
@@ -133,18 +120,18 @@ namespace Lukdrasil.StepUpLogging.Tests
         [Fact(DisplayName = "PerformStepDown_AutoMode_BaseEqualsStepUp_ForcedCapThenStaleCallback_DecrementsActiveCounterOnce")]
         public void PerformStepDown_AutoMode_BaseEqualsStepUp_ForcedCapThenStaleCallback_DecrementsActiveCounterOnce()
         {
-            long ticks = Stopwatch.GetTimestamp();
+            var time = new FakeTimeProvider();
             var opts = new StepUpLoggingOptions
             {
                 Mode = StepUpMode.Auto,
                 BaseLevel = "Information",
                 StepUpLevel = "Information",
-                DurationSeconds = 60,
+                DurationSeconds = 100,
                 MaxContinuousStepUpSeconds = 120,
                 StepUpCooldownSeconds = 300
             };
 
-            using var controller = new StepUpLoggingController(opts, null, () => ticks);
+            using var controller = new StepUpLoggingController(opts, null, time);
 
             int netActive = 0;
             using var listener = new MeterListener
@@ -157,18 +144,23 @@ namespace Lukdrasil.StepUpLogging.Tests
                     }
                 }
             };
-            listener.SetMeasurementEventCallback<int>((_, measurement, _, _) => netActive += measurement);
+            // The fake clock fires on this thread, so only this controller's measurements are recorded here.
+            var testThread = Environment.CurrentManagedThreadId;
+            listener.SetMeasurementEventCallback<int>((_, measurement, _, _) =>
+            {
+                if (Environment.CurrentManagedThreadId == testThread) netActive += measurement;
+            });
             listener.Start();
 
             controller.Trigger();
 
             // Extend once so the forced-cap trigger inherits this generation. The cap path does not
             // re-arm the timer, so this is the generation a queued callback would still carry.
-            ticks += Seconds(60);
+            time.Advance(TimeSpan.FromSeconds(60));
             controller.Trigger();
             long staleGeneration = controller.CurrentGeneration;
 
-            ticks += Seconds(70);
+            time.Advance(TimeSpan.FromSeconds(70));
             controller.Trigger();
             Assert.False(controller.IsSteppedUp);
 
@@ -182,7 +174,5 @@ namespace Lukdrasil.StepUpLogging.Tests
             Assert.Equal(LogEventLevel.Information, controller.LevelSwitch.MinimumLevel);
             Assert.Equal(0, netActive);
         }
-
-        private static long Seconds(double s) => (long)(s * Stopwatch.Frequency);
     }
 }

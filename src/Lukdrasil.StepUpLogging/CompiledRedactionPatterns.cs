@@ -22,7 +22,31 @@ internal sealed class CompiledRedactionPatterns
     {
         Patterns = patterns;
         _union = BuildUnion(patterns);
-        ExemptProperties = (exemptProperties ?? []).Where(p => !string.IsNullOrWhiteSpace(p)).ToFrozenSet(StringComparer.Ordinal);
+        ExemptProperties = StepUpSettings.NonBlank(exemptProperties).ToFrozenSet(StringComparer.Ordinal);
+    }
+
+    /// <summary>The patterns of <see cref="StepUpLoggingOptions.RedactionRegexes"/>, blank entries dropped, and its exempt properties.</summary>
+    internal static CompiledRedactionPatterns From(StepUpLoggingOptions options)
+        => new([.. StepUpSettings.NonBlank(options.RedactionRegexes).Select(CompilePattern)], options.RedactionExemptProperties);
+
+    /// <summary>
+    /// Compiles a redaction pattern with <see cref="RegexOptions.NonBacktracking"/> so matching is
+    /// linear-time and catastrophic backtracking is structurally impossible. Patterns using lookaround
+    /// or backreferences are unsupported by that engine and throw <see cref="NotSupportedException"/> at
+    /// construction; those fall back to <see cref="RegexOptions.Compiled"/>. <c>NonBacktracking</c> cannot
+    /// be combined with <c>Compiled</c>, so the fallback swaps the option rather than adding to it. The
+    /// 100 ms timeout stays on both branches as a backstop (ADR 0001 amendment).
+    /// </summary>
+    internal static Regex CompilePattern(string pattern)
+    {
+        try
+        {
+            return new Regex(pattern, RegexOptions.NonBacktracking | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100));
+        }
+        catch (NotSupportedException)
+        {
+            return new Regex(pattern, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100));
+        }
     }
 
     internal Regex[] Patterns { get; }

@@ -1,5 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Serilog;
+using Serilog.Core;
+using Serilog.Events;
 using Xunit;
 using static Lukdrasil.StepUpLogging.Tests.TestHosts;
 
@@ -8,45 +10,34 @@ namespace Lukdrasil.StepUpLogging.Tests;
 public class V2ApiCleanupTests
 {
     [Fact]
-    public void ConsoleLogging_DrivenByOptions_WiresWithoutError()
-    {
-        var builder = NewBuilder();
-        builder.AddStepUpLogging(opts =>
-        {
-            opts.EnableOtlpExporter = false;
-            opts.EnableConsoleLogging = true;
-        });
-
-        using var host = builder.Build();
-
-        var logger = host.Services.GetRequiredService<Serilog.ILogger>();
-        Assert.NotNull(logger);
-        logger.Warning("console-via-options smoke");
-    }
-
-    [Fact]
     public void ConfigureDelegate_InvokedWithServiceProviderAndLoggerConfiguration()
     {
         var builder = NewBuilder();
-
+        var capture = new CaptureSink();
         IServiceProvider? capturedProvider = null;
-        LoggerConfiguration? capturedConfig = null;
 
         builder.AddStepUpLogging((IServiceProvider sp, LoggerConfiguration lc) =>
         {
             capturedProvider = sp;
-            capturedConfig = lc;
+            lc.WriteTo.Sink(capture);
         });
 
-        using var host = builder.Build();
+        using (var host = builder.Build())
+        {
+            host.Services.GetRequiredService<Serilog.ILogger>().Warning("configure-delegate probe");
 
-        // Force the Serilog factory (and thus the configure callback) to run.
-        var logger = host.Services.GetRequiredService<Serilog.ILogger>();
-        Assert.NotNull(logger);
+            Assert.Same(host.Services.GetRequiredService<StepUpLoggingController>(), capturedProvider!.GetRequiredService<StepUpLoggingController>());
+        }
 
-        Assert.NotNull(capturedProvider);
-        Assert.NotNull(capturedConfig);
-        // The provider must be usable — resolving a known registered service must not throw.
-        Assert.NotNull(capturedProvider!.GetRequiredService<StepUpLoggingController>());
+        Assert.Contains(capture.Events, e => e.MessageTemplate.Text == "configure-delegate probe");
+    }
+
+    private sealed class CaptureSink : ILogEventSink
+    {
+        private readonly System.Collections.Concurrent.ConcurrentQueue<LogEvent> _events = new();
+
+        public LogEvent[] Events => [.. _events];
+
+        public void Emit(LogEvent logEvent) => _events.Enqueue(logEvent);
     }
 }

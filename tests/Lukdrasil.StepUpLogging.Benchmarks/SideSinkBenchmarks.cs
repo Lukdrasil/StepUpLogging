@@ -6,7 +6,7 @@ namespace Lukdrasil.StepUpLogging.Benchmarks;
 
 /// <summary>
 /// What the three sinks beside <see cref="StepUpSink"/> cost per event: <see cref="StepUpTriggerSink"/> for an
-/// Error and for an event below it, <see cref="SummarySink"/> and <see cref="ImmediateSink"/> for an event
+/// Error and for an event below it, the request summary <see cref="BypassSink"/> and the immediate <see cref="BypassSink"/> for an event
 /// carrying their flag and one that does not. Each sink is called directly with prebuilt events, over a
 /// target that only counts.
 /// </summary>
@@ -22,8 +22,8 @@ public class SideSinkBenchmarks
     private int _triggers;
     private Serilog.Core.Logger _target = null!;
     private StepUpTriggerSink _triggerSink = null!;
-    private SummarySink _summarySink = null!;
-    private ImmediateSink _immediateSink = null!;
+    private BypassSink _summarySink = null!;
+    private BypassSink _immediateSink = null!;
     private LogEvent _error = null!;
     private LogEvent _belowError = null!;
     private LogEvent _summary = null!;
@@ -36,8 +36,8 @@ public class SideSinkBenchmarks
     {
         _target = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(_forwarded).CreateLogger();
         _triggerSink = new StepUpTriggerSink(() => Interlocked.Increment(ref _triggers));
-        _summarySink = new SummarySink(_target);
-        _immediateSink = new ImmediateSink(_target);
+        _summarySink = BypassSink.RequestSummaries(_target);
+        _immediateSink = BypassSink.Immediate(_target);
         _error = BenchmarkFixtures.HandledEvent(LogEventLevel.Error, extra: 4);
         _belowError = BenchmarkFixtures.HandledEvent(LogEventLevel.Warning, extra: 4);
         _summary = Tagged(LogProperties.IsRequestSummary);

@@ -51,6 +51,7 @@ namespace Lukdrasil.StepUpLogging.Tests
                             services.AddSingleton(Options.Create(opts));
                             services.AddSingleton<Serilog.ILogger>(completionLogger);
                             services.AddSingleton(sp => new StepUpLoggingController(opts, completionLogger));
+                            services.AddSingleton(new StepUpSettings(opts));
                             var patterns = opts.RedactionRegexes
                                 .Where(p => !string.IsNullOrWhiteSpace(p))
                                 .Select(p => new Regex(p, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100)))

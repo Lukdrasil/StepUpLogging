@@ -191,8 +191,9 @@ public class EncryptedSpoolRegistrationTests
 
         using var host = builder.Build();
 
-        await Assert.ThrowsAnyAsync<Exception>(() => host.StartAsync(TestContext.Current.CancellationToken));
+        var refused = await Assert.ThrowsAnyAsync<IOException>(() => host.StartAsync(TestContext.Current.CancellationToken));
 
+        Assert.Contains(blockingFile, refused.Message);
         Assert.False(serverStub.Started);
     }
 
@@ -346,7 +347,9 @@ public class EncryptedSpoolRegistrationTests
             await sink.WriteAsync(SpoolableEvent());
 
             Assert.Equal(2, GaugeTotal("audit_spool_depth") - depthBefore);
-            Assert.True(GaugeTotal("audit_spool_bytes") - bytesBefore > 0);
+            Assert.Equal(
+                Directory.GetFiles(spool.FullPath).Sum(path => new FileInfo(path).Length),
+                GaugeTotal("audit_spool_bytes") - bytesBefore);
         }
         finally
         {
@@ -386,14 +389,9 @@ public class EncryptedSpoolRegistrationTests
     }
 
     [Fact]
-    public void EncryptedSpoolOptions_RequiredMembers_AreEndpointCredentialsModuleNameVersion_NoKeyOptions()
+    public void EncryptedSpoolOptions_HasNoKeyOptions()
     {
         var propertyNames = typeof(EncryptedSpoolOptions).GetProperties().Select(p => p.Name).ToArray();
-
-        Assert.Contains(nameof(EncryptedSpoolOptions.EndpointBaseUrl), propertyNames);
-        Assert.Contains(nameof(EncryptedSpoolOptions.ConfigureProducerCredentials), propertyNames);
-        Assert.Contains(nameof(EncryptedSpoolOptions.ModuleName), propertyNames);
-        Assert.Contains(nameof(EncryptedSpoolOptions.Version), propertyNames);
 
         // Encryption and all key handling live entirely inside the consumer's IAuditPayloadEncryptor
         // (ADR 0017 D3) — a JWKS URL, a key TTL, or a cache path must never sneak onto this type.

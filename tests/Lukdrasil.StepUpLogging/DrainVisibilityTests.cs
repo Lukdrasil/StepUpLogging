@@ -214,6 +214,39 @@ public class DrainVisibilityTests
     }
 
     [Fact]
+    public async Task EncryptedSpoolGauges_HeadRetriedOn503_OldestAgeGaugeReportsTheHeadAgeInSeconds()
+    {
+        using var harness = new SpoolDrainHarness(FakeAuditReceiver.Responding(HttpStatusCode.ServiceUnavailable));
+        await harness.SpoolAsync(AuditedOperation(at: Noon));
+        harness.Time.SetUtcNow(Noon.AddSeconds(90));
+        await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+
+        // Only the gauge created below: the earlier ones are still registered on the shared meter,
+        // and Start() publishes those first, before the flag is set.
+        var listening = false;
+        List<long> observed = [];
+        using var listener = new MeterListener
+        {
+            InstrumentPublished = (instrument, meterListener) =>
+            {
+                if (listening && instrument is ObservableGauge<long> { Name: "audit_spool_oldest_age_seconds" })
+                {
+                    meterListener.EnableMeasurementEvents(instrument);
+                }
+            }
+        };
+        listener.SetMeasurementEventCallback<long>((_, measurement, _, _) => observed.Add(measurement));
+        listener.Start();
+        listening = true;
+        _ = new EncryptedSpoolGauges(harness.Tracker, harness.Head, harness.Time);
+
+        harness.Time.Advance(TimeSpan.FromSeconds(30));
+        listener.RecordObservableInstruments();
+
+        Assert.Equal([120], observed);
+    }
+
+    [Fact]
     public async Task AddEncryptedSpoolAuditSink_PublishesOldestAgeGauge_InSeconds()
     {
         using var spool = new TempSpoolDirectory();

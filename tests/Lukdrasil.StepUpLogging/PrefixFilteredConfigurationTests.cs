@@ -17,7 +17,7 @@ public class PrefixFilteredConfigurationTests
             })
             .Build();
 
-        var (root, _) = StepUpLoggingExtensions.SplitSerilogConfiguration(live);
+        var (root, _) = StepUpPipeline.SplitSerilogConfiguration(live);
 
         var token = root.GetReloadToken();
         Assert.Equal("Warning", root["Serilog:MinimumLevel:Override:Microsoft"]);
@@ -40,7 +40,7 @@ public class PrefixFilteredConfigurationTests
             })
             .Build();
 
-        var (root, gated) = StepUpLoggingExtensions.SplitSerilogConfiguration(live);
+        var (root, gated) = StepUpPipeline.SplitSerilogConfiguration(live);
 
         Assert.Null(root["Serilog:WriteTo:0:Name"]);
         Assert.Empty(root.GetSection("Serilog").GetSection("WriteTo").GetChildren());
@@ -58,7 +58,7 @@ public class PrefixFilteredConfigurationTests
             })
             .Build();
 
-        var (root, gated) = StepUpLoggingExtensions.SplitSerilogConfiguration(live);
+        var (root, gated) = StepUpPipeline.SplitSerilogConfiguration(live);
 
         Assert.Equal("kept", root["Serilog:WriteToFoo"]);
         Assert.Null(gated["Serilog:WriteToFoo"]);
@@ -75,7 +75,7 @@ public class PrefixFilteredConfigurationTests
             })
             .Build();
 
-        var (root, gated) = StepUpLoggingExtensions.SplitSerilogConfiguration(live);
+        var (root, gated) = StepUpPipeline.SplitSerilogConfiguration(live);
 
         Assert.Equal("Serilog.Sinks.Console", root["Serilog:Using:0"]);
         Assert.Equal("Serilog.Sinks.Console", gated["Serilog:Using:0"]);

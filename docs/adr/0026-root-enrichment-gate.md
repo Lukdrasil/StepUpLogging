@@ -33,10 +33,10 @@ reads:
   (ADR 0015), and replays them on an `Error`;
 - `Error`: `StepUpTriggerSink` reads `Error` and `Fatal`, and the buffer flush keys on them; the floor is
   capped there, so an `Error` is always enriched even when `StepUpLevel` is `Fatal`;
-- the two markers: `ImmediateSink` and `SummarySink` export those events at any level.
+- the two markers: `BypassSink.Immediate` and `BypassSink.RequestSummaries` export those events at any level.
 
-The gate reads the live switch (`StepUpLoggingController.LevelSwitch` is public), so a switch lowered by
-Diagnostic mode, by `Trigger()` or by a consumer lowers the floor with it. The floor always includes
+The gate reads the live switch, so a switch lowered by Diagnostic mode or by `Trigger()` lowers the floor
+with it. The floor always includes
 `StepUpLevel`, never the switch alone. Without it, an `Information` event logged just before a step-up
 would be judged against a switch still at Warning, skipped by the enrichers, and then exported by
 `StepUpSink` after the switch dropped to Information: an exported event without `Application`, trace ids

@@ -17,77 +17,75 @@ using Serilog.Parsing;
 namespace Lukdrasil.StepUpLogging.Tests;
 
 /// <summary>
-/// End-to-end routing tests that wire the full Serilog pipeline and verify the routing invariants
-/// documented in the plan:
+/// End-to-end routing tests over the root logger <see cref="StepUpPipeline"/> builds, with one config-declared
+/// capture sink that both output loggers (gated and bypass) write to, so every assertion counts what is exported:
 ///
 /// Root (Verbose)
-///  ├─ StepUpSink  gated by LevelSwitch, drops IsRequestSummary=true and IsImmediate=true
-///  ├─ PreErrorBufferSink  per-trace ring buffer, flushes to bypass on Error
+///  ├─ StepUpSink  gated by LevelSwitch, drops IsRequestSummary=true and IsImmediate=true, holds the rest
+///  ├─ PreErrorBufferSink  per-trace ring buffer floored at StepUpLevel, flushes to bypass on Error
 ///  ├─ StepUpTriggerSink  fires controller.Trigger() on Error/Fatal (regardless of marker)
-///  ├─ SummarySink  forwards IsRequestSummary=true to bypass
-///  └─ ImmediateSink  forwards IsImmediate=true to bypass
+///  ├─ BypassSink.RequestSummaries  forwards IsRequestSummary=true to bypass
+///  └─ BypassSink.Immediate  forwards IsImmediate=true to bypass
 /// </summary>
 public class PipelineRoutingTests
 {
     // ─── helpers ──────────────────────────────────────────────────────────────────
 
+    private const string Routed = "ROUTED_EVENT";
+
     private sealed class Pipeline : IDisposable
     {
-        public Serilog.ILogger Root { get; }
-        public CollectingSink StepUpOutput { get; } = new();
-        public CollectingSink BypassOutput { get; } = new();
-        public StepUpLoggingController Controller { get; }
+        private readonly string _captureKey = Guid.NewGuid().ToString("N");
+        private readonly Logger _root;
 
-        private readonly StepUpSink _stepUpSink;
-        private readonly StepUpTriggerSink _triggerSink;
+        public Serilog.ILogger Root => _root;
+        public StepUpLoggingController Controller { get; }
 
         public Pipeline(string baseLevel = "Warning", string stepUpLevel = "Information", bool withPreErrorBuffer = false)
         {
+            var builder = TestHosts.NewBuilder();
+            builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Serilog:Using:0"] = typeof(KeyedCaptureSink).Assembly.GetName().Name,
+                ["Serilog:WriteTo:0:Name"] = nameof(KeyedCaptureSink.StepUpCapture),
+                ["Serilog:WriteTo:0:Args:key"] = _captureKey,
+            });
+
             var opts = new StepUpLoggingOptions
             {
                 Mode = StepUpMode.Auto,
                 BaseLevel = baseLevel,
                 StepUpLevel = stepUpLevel,
                 DurationSeconds = 10,
-                EnablePreErrorBuffering = withPreErrorBuffer
+                EnablePreErrorBuffering = withPreErrorBuffer,
+                EnableOtlpExporter = false,
             };
 
             Controller = new StepUpLoggingController(opts);
 
-            var stepUpInner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(StepUpOutput).CreateLogger();
-            var bypassLogger = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(BypassOutput).CreateLogger();
-
-            var buffer = withPreErrorBuffer ? new PreErrorBufferSink(bypassLogger, 50, 64, LogEventLevel.Verbose) : null;
-            _stepUpSink = new StepUpSink(stepUpInner, Controller.LevelSwitch, Controller.BaseLevel, [], buffer);
-            _triggerSink = new StepUpTriggerSink(Controller);
-
-            var cfg = new LoggerConfiguration()
-                .MinimumLevel.Verbose()
-                .WriteTo.Sink(_stepUpSink)
-                .WriteTo.Sink(_triggerSink)
-                .WriteTo.Sink(new SummarySink(bypassLogger))
-                .WriteTo.Sink(new ImmediateSink(bypassLogger));
-
-            if (buffer is not null)
-            {
-                cfg.WriteTo.Sink(buffer);
-            }
-
-            Root = cfg.CreateLogger();
+            var lc = new LoggerConfiguration();
+            new StepUpPipeline(builder, new StepUpSettings(opts), new CompiledRedactionPatterns([]), null)
+                .Configure(lc, Controller, new ServiceCollection().BuildServiceProvider(), configure: null, builder.Configuration.GetSection("SerilogStepUp"));
+            _root = lc.CreateLogger();
         }
+
+        /// <summary>The events built by <see cref="MakeEvent"/> that reached an output, in export order.</summary>
+        public LogEvent[] Exported => [.. KeyedCaptureSink.Events(_captureKey).Where(e => e.MessageTemplate.Text == Routed)];
+
+        public int Count(string token) => KeyedCaptureSink.Count(_captureKey, token);
 
         public void Dispose()
         {
-            _triggerSink.Dispose();
-            _stepUpSink.Dispose();
+            _root.Dispose();
             Controller.Dispose();
+            KeyedCaptureSink.Forget(_captureKey);
         }
     }
 
     private static LogEvent MakeEvent(LogEventLevel level, params LogEventProperty[] properties)
     {
         var parser = new MessageTemplateParser();
-        return new LogEvent(DateTimeOffset.UtcNow, level, null, parser.Parse("msg"), properties);
+        return new LogEvent(DateTimeOffset.UtcNow, level, null, parser.Parse(Routed), properties);
     }
 
     private static LogEventProperty Immediate() =>
@@ -96,117 +94,103 @@ public class PipelineRoutingTests
     private static LogEventProperty Summary() =>
         new(LogProperties.IsRequestSummary, new ScalarValue(true));
 
+    private static LogEventLevel[] Levels(Pipeline p) => [.. p.Exported.Select(e => e.Level)];
+
     // ─── 1. Normal event routing ───────────────────────────────────────────────
 
     [Fact]
-    public void NormalWarning_WithBaseLevelWarning_GoesToStepUpOnly()
+    public void NormalWarning_WithBaseLevelWarning_IsExportedOnce()
     {
         using var p = new Pipeline();
 
         p.Root.Write(MakeEvent(LogEventLevel.Warning));
 
-        Assert.Single(p.StepUpOutput.Events);
-        Assert.Empty(p.BypassOutput.Events);
+        Assert.Single(p.Exported);
     }
 
     [Fact]
-    public void NormalInformation_WithBaseLevelWarning_GoesNowhere()
+    public void NormalInformation_WithBaseLevelWarning_IsNotExported()
     {
         using var p = new Pipeline();
 
         p.Root.Write(MakeEvent(LogEventLevel.Information));
 
-        Assert.Empty(p.StepUpOutput.Events);
-        Assert.Empty(p.BypassOutput.Events);
+        Assert.Empty(p.Exported);
     }
 
     [Fact]
-    public void NormalInformation_WhenSteppedUp_GoesToStepUpOnly()
+    public void NormalInformation_WhenSteppedUp_IsExportedOnce()
     {
         using var p = new Pipeline();
 
         p.Controller.Trigger(); // raises LevelSwitch to Information
         p.Root.Write(MakeEvent(LogEventLevel.Information));
 
-        Assert.Single(p.StepUpOutput.Events);
-        Assert.Empty(p.BypassOutput.Events);
+        Assert.Single(p.Exported);
     }
 
     [Fact]
-    public async Task NormalError_GoesToStepUpAndTriggersStepUp()
+    public void NormalError_IsExportedOnceAndTriggersStepUp()
     {
         using var p = new Pipeline();
 
         Assert.False(p.Controller.IsSteppedUp);
 
         p.Root.Write(MakeEvent(LogEventLevel.Error));
-        await Task.Delay(150, TestContext.Current.CancellationToken); // let trigger channel process
 
-        // Error goes through StepUpSink (Error >= Warning base level)
-        Assert.Single(p.StepUpOutput.Events);
-        // Trigger fired → controller stepped up
-        Assert.True(p.Controller.IsSteppedUp);
-        // Bypass is empty (error has no bypass marker)
-        Assert.Empty(p.BypassOutput.Events);
+        Assert.True(SpinWait.SpinUntil(() => p.Controller.IsSteppedUp, 2000));
+        Assert.Single(p.Exported);
     }
 
     // ─── 2. Immediate event routing ───────────────────────────────────────────
 
     [Fact]
-    public void ImmediateInformation_WithBaseLevelWarning_GoesToBypassOnly()
+    public void ImmediateInformation_WithBaseLevelWarning_IsExportedOnce()
     {
         using var p = new Pipeline();
 
         p.Root.Write(MakeEvent(LogEventLevel.Information, Immediate()));
 
-        Assert.Empty(p.StepUpOutput.Events);
-        Assert.Single(p.BypassOutput.Events);
+        Assert.Single(p.Exported);
     }
 
     [Fact]
-    public void ImmediateWarning_WithBaseLevelWarning_GoesToBypassOnly_NotDuplicated()
+    public void ImmediateWarning_WithBaseLevelWarning_IsExportedOnce_NotDuplicated()
     {
         using var p = new Pipeline();
 
+        // StepUpSink must drop it despite Warning >= Warning base level, or it is exported twice.
         p.Root.Write(MakeEvent(LogEventLevel.Warning, Immediate()));
 
-        // StepUpSink must have dropped it despite Warning >= Warning base level
-        Assert.Empty(p.StepUpOutput.Events);
-        Assert.Single(p.BypassOutput.Events);
+        Assert.Single(p.Exported);
     }
 
     [Fact]
-    public async Task ImmediateError_GoesToBypassAndTriggersStepUp()
+    public void ImmediateError_IsExportedOnceAndTriggersStepUp()
     {
         using var p = new Pipeline();
 
         Assert.False(p.Controller.IsSteppedUp);
 
         p.Root.Write(MakeEvent(LogEventLevel.Error, Immediate()));
-        await Task.Delay(150, TestContext.Current.CancellationToken);
 
-        // Bypass receives it (ImmediateSink picks it up)
-        Assert.Single(p.BypassOutput.Events);
-        // StepUpSink dropped it (IsImmediate=true)
-        Assert.Empty(p.StepUpOutput.Events);
         // Trigger still fires — StepUpTriggerSink is not filtered
-        Assert.True(p.Controller.IsSteppedUp);
+        Assert.True(SpinWait.SpinUntil(() => p.Controller.IsSteppedUp, 2000));
+        Assert.Single(p.Exported);
     }
 
     [Fact]
-    public void ImmediateInformation_WhenSteppedUp_GoesToBypassOnly_NoDuplication()
+    public void ImmediateInformation_WhenSteppedUp_IsExportedOnce_NoDuplication()
     {
         using var p = new Pipeline();
 
         p.Controller.Trigger(); // LevelSwitch now at Information
         Assert.True(p.Controller.IsSteppedUp);
 
+        // Even though LevelSwitch is at Information, StepUpSink must still drop IsImmediate events.
         p.Root.Write(MakeEvent(LogEventLevel.Information, Immediate()));
 
-        // Even though LevelSwitch is at Information (step-up active),
-        // StepUpSink must still drop IsImmediate events.
-        Assert.Empty(p.StepUpOutput.Events);
-        Assert.Single(p.BypassOutput.Events);
+        Assert.Single(p.Exported);
     }
 
     [Fact]
@@ -220,12 +204,11 @@ public class PipelineRoutingTests
             p.Root.Write(MakeEvent(LogEventLevel.Information, Immediate()));
         }
 
-        Assert.Empty(p.StepUpOutput.Events);
-        Assert.Equal(count, p.BypassOutput.Events.Count);
+        Assert.Equal(count, p.Exported.Length);
     }
 
     [Fact]
-    public void MixedEvents_RoutedToCorrectSinks()
+    public void MixedEvents_OnlyTheWarningAndTheImmediateAreExported()
     {
         using var p = new Pipeline();
 
@@ -233,88 +216,52 @@ public class PipelineRoutingTests
         p.Root.Write(MakeEvent(LogEventLevel.Information, Immediate()));        // → bypass
         p.Root.Write(MakeEvent(LogEventLevel.Information));                     // → nowhere
 
-        Assert.Single(p.StepUpOutput.Events);
-        Assert.Single(p.BypassOutput.Events);
+        var exported = p.Exported;
+        Assert.Equal(2, exported.Length);
+        Assert.Equal(LogEventLevel.Warning, exported[0].Level);
+        Assert.True(LogProperties.HasFlag(exported[1], LogProperties.IsImmediate));
     }
 
     // ─── 3. Request summary routing ───────────────────────────────────────────
 
     [Fact]
-    public void RequestSummary_GoesToBypassViaSummarySink()
+    public void RequestSummary_IsExportedOnce()
     {
         using var p = new Pipeline();
 
         p.Root.Write(MakeEvent(LogEventLevel.Information, Summary()));
 
-        Assert.Single(p.BypassOutput.Events);
-        Assert.Empty(p.StepUpOutput.Events);
+        Assert.Single(p.Exported);
     }
 
     [Fact]
-    public void RequestSummary_IsNotPickedUpByImmediateSink()
-    {
-        // IsRequestSummary=true should only go to SummarySink, not ImmediateSink.
-        // Since both route to the same BypassOutput in the test, we verify count stays at 1.
-        using var p = new Pipeline();
-
-        p.Root.Write(MakeEvent(LogEventLevel.Information, Summary()));
-
-        // Exactly one write to bypass (SummarySink), not two (which would happen if ImmediateSink also picked it up).
-        Assert.Single(p.BypassOutput.Events);
-    }
-
-    [Fact]
-    public void RequestSummary_DoesNotAppearInStepUpOutput()
+    public void RequestSummary_WithSwitchAtVerbose_IsExportedOnce()
     {
         using var p = new Pipeline();
 
-        // Even when LevelSwitch is at Verbose, summary events must not reach the step-up output
+        // Even when LevelSwitch is at Verbose, StepUpSink must not export the summary a second time.
         p.Controller.LevelSwitch.MinimumLevel = LogEventLevel.Verbose;
         p.Root.Write(MakeEvent(LogEventLevel.Information, Summary()));
 
-        Assert.Empty(p.StepUpOutput.Events);
-    }
-
-    [Fact]
-    public void ImmediateLog_IsNotPickedUpBySummarySink()
-    {
-        // IsImmediate=true should only go to ImmediateSink, not SummarySink.
-        // Verified by count staying at 1.
-        using var p = new Pipeline();
-
-        p.Root.Write(MakeEvent(LogEventLevel.Information, Immediate()));
-
-        Assert.Single(p.BypassOutput.Events);
+        Assert.Single(p.Exported);
     }
 
     // ─── 4. Pre-error buffer interaction ──────────────────────────────────────
 
     [Fact]
-    public void ImmediateLog_IsNotHeldInBuffer_AppearsImmediately()
-    {
-        // ImmediateSink runs before or alongside PreErrorBufferSink in the pipeline.
-        // The immediate event should be in bypass regardless of whether an error occurs.
-        using var p = new Pipeline(withPreErrorBuffer: false);
-
-        p.Root.Write(MakeEvent(LogEventLevel.Information, Immediate()));
-
-        Assert.Single(p.BypassOutput.Events);
-    }
-
-    [Fact]
-    public void PreErrorBuffer_WithPreErrorBufferingEnabled_FlushesPreErrorLogsToBypassOnError()
+    public void PreErrorBuffer_FlushesHeldEventsAtStepUpLevelOnError_NotDebug()
     {
         using var p = new Pipeline(withPreErrorBuffer: true);
 
-        // Emit some Debug events (buffered, not yet visible)
+        // Information sits between StepUpLevel and BaseLevel: held. Debug is below StepUpLevel: never held.
+        p.Root.Write(MakeEvent(LogEventLevel.Information));
+        p.Root.Write(MakeEvent(LogEventLevel.Information));
         p.Root.Write(MakeEvent(LogEventLevel.Debug));
-        p.Root.Write(MakeEvent(LogEventLevel.Debug));
-        Assert.Empty(p.BypassOutput.Events); // still buffered
+        Assert.Empty(p.Exported); // still buffered
 
-        // Error triggers flush of the two Debug events to bypass
         p.Root.Write(MakeEvent(LogEventLevel.Error));
 
-        Assert.Equal(2, p.BypassOutput.Events.Count);
+        Assert.Equal([LogEventLevel.Error, LogEventLevel.Information, LogEventLevel.Information], Levels(p));
     }
 
     [Fact]
@@ -323,52 +270,50 @@ public class PipelineRoutingTests
         using var p = new Pipeline(withPreErrorBuffer: true);
 
         p.Root.Write(MakeEvent(LogEventLevel.Warning));
-        p.Root.Write(MakeEvent(LogEventLevel.Debug));
+        p.Root.Write(MakeEvent(LogEventLevel.Information));
         p.Root.Write(MakeEvent(LogEventLevel.Error));
 
-        Assert.Equal([LogEventLevel.Warning, LogEventLevel.Error], p.StepUpOutput.Events.Select(e => e.Level));
-        Assert.Equal(LogEventLevel.Debug, Assert.Single(p.BypassOutput.Events).Level);
+        Assert.Equal([LogEventLevel.Warning, LogEventLevel.Error, LogEventLevel.Information], Levels(p));
     }
 
     [Fact]
-    public void ImmediateLog_WithBufferingEnabled_StillBypassesBuffer()
+    public void ImmediateLog_WithBufferingEnabled_IsExportedBeforeAnyError_AndNotFlushedAgain()
     {
-        // An IsImmediate log must reach bypass even when pre-error buffering is on,
-        // before any error occurs.
         using var p = new Pipeline(withPreErrorBuffer: true);
 
         p.Root.Write(MakeEvent(LogEventLevel.Information, Immediate()));
+        Assert.Single(p.Exported);
 
-        Assert.Single(p.BypassOutput.Events);
+        p.Root.Write(MakeEvent(LogEventLevel.Error));
+
+        Assert.Equal([LogEventLevel.Information, LogEventLevel.Error], Levels(p));
     }
 
     // ─── 5. Level-switch boundary conditions ──────────────────────────────────
 
     [Fact]
-    public void ImmediateDebug_WithBaseLevelWarning_StillReachesBypass()
+    public void ImmediateDebug_WithBaseLevelWarning_IsExportedOnce()
     {
         // The LevelSwitch gate must not prevent Debug-level immediate events from exporting.
         using var p = new Pipeline();
 
         p.Root.Write(MakeEvent(LogEventLevel.Debug, Immediate()));
 
-        Assert.Empty(p.StepUpOutput.Events);
-        Assert.Single(p.BypassOutput.Events);
+        Assert.Single(p.Exported);
     }
 
     [Fact]
-    public void ImmediateVerbose_WithBaseLevelWarning_StillReachesBypass()
+    public void ImmediateVerbose_WithBaseLevelWarning_IsExportedOnce()
     {
         using var p = new Pipeline();
 
         p.Root.Write(MakeEvent(LogEventLevel.Verbose, Immediate()));
 
-        Assert.Empty(p.StepUpOutput.Events);
-        Assert.Single(p.BypassOutput.Events);
+        Assert.Single(p.Exported);
     }
 
     [Fact]
-    public void StepUpSink_LevelSwitchGate_ExactBoundary()
+    public void LevelSwitchGate_ExactBoundary()
     {
         // At Warning base level: Warning passes, Information does not.
         using var p = new Pipeline(baseLevel: "Warning");
@@ -377,12 +322,11 @@ public class PipelineRoutingTests
         p.Root.Write(MakeEvent(LogEventLevel.Warning));
         p.Root.Write(MakeEvent(LogEventLevel.Error));
 
-        Assert.Equal(2, p.StepUpOutput.Events.Count); // Warning + Error
-        Assert.Empty(p.BypassOutput.Events);
+        Assert.Equal([LogEventLevel.Warning, LogEventLevel.Error], Levels(p));
     }
 
     [Fact]
-    public void StepUpAndImmediateEvents_TotalCountAcrossBothSinks()
+    public void StepUpImmediateAndSummaryEvents_EachExportedOnce()
     {
         using var p = new Pipeline();
 
@@ -391,142 +335,89 @@ public class PipelineRoutingTests
         for (var i = 0; i < 3; i++) p.Root.Write(MakeEvent(LogEventLevel.Warning, Immediate()));
         for (var i = 0; i < 2; i++) p.Root.Write(MakeEvent(LogEventLevel.Information, Summary()));
 
-        Assert.Equal(3, p.StepUpOutput.Events.Count);
-        Assert.Equal(5, p.BypassOutput.Events.Count); // 3 immediate + 2 summary
+        Assert.Equal(8, p.Exported.Length);
     }
 
     // ─── 6. MEL (ILogger) end-to-end: BeginImmediateScope routing ─────────────
 
     [Fact]
-    public void MelScope_ImmediateScope_RoutesToBypass()
+    public void MelScope_ImmediateScope_IsExportedBelowTheGate()
     {
-        var stepUpOutput = new CollectingSink();
-        var bypassOutput = new CollectingSink();
-
-        var stepUpInner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(stepUpOutput).CreateLogger();
-        var bypassLogger = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(bypassOutput).CreateLogger();
-
-        var opts = new StepUpLoggingOptions { BaseLevel = "Warning", StepUpLevel = "Information", DurationSeconds = 10 };
-        using var controller = new StepUpLoggingController(opts);
-        using var stepUpSink = new StepUpSink(stepUpInner, controller.LevelSwitch, controller.BaseLevel, []);
-
-        var serilogRoot = new LoggerConfiguration()
-            .MinimumLevel.Verbose()
-            .WriteTo.Sink(stepUpSink)
-            .WriteTo.Sink(new ImmediateSink(bypassLogger))
-            .CreateLogger();
-
-        using var factory = new SerilogLoggerFactory(serilogRoot, dispose: false);
+        using var p = new Pipeline();
+        using var factory = new SerilogLoggerFactory(p.Root, dispose: false);
         var logger = factory.CreateLogger("RoutingTest");
 
         using (logger.BeginImmediateScope())
         {
-            logger.LogInformation("inside immediate scope");
-            logger.LogInformation("also immediate");
+            logger.LogInformation("MEL_SCOPED_ONE");
+            logger.LogInformation("MEL_SCOPED_TWO");
         }
 
-        logger.LogWarning("normal warning (not immediate)");
+        logger.LogWarning("MEL_NORMAL_WARNING");
 
-        // Both scoped logs go to bypass only
-        Assert.Equal(2, bypassOutput.Events.Count);
-        // Normal warning goes to step-up only (Warning >= Warning base level)
-        Assert.Single(stepUpOutput.Events);
+        Assert.Equal(1, p.Count("MEL_SCOPED_ONE"));
+        Assert.Equal(1, p.Count("MEL_SCOPED_TWO"));
+        Assert.Equal(1, p.Count("MEL_NORMAL_WARNING"));
     }
 
     [Fact]
     public void MelScope_ImmediateScope_ScopeEndsCleanly()
     {
-        var stepUpOutput = new CollectingSink();
-        var bypassOutput = new CollectingSink();
-
-        var stepUpInner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(stepUpOutput).CreateLogger();
-        var bypassLogger = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(bypassOutput).CreateLogger();
-
-        var opts = new StepUpLoggingOptions { BaseLevel = "Warning", StepUpLevel = "Information", DurationSeconds = 10 };
-        using var controller = new StepUpLoggingController(opts);
-        using var stepUpSink = new StepUpSink(stepUpInner, controller.LevelSwitch, controller.BaseLevel, []);
-
-        var serilogRoot = new LoggerConfiguration()
-            .MinimumLevel.Verbose()
-            .WriteTo.Sink(stepUpSink)
-            .WriteTo.Sink(new ImmediateSink(bypassLogger))
-            .CreateLogger();
-
-        using var factory = new SerilogLoggerFactory(serilogRoot, dispose: false);
+        using var p = new Pipeline();
+        using var factory = new SerilogLoggerFactory(p.Root, dispose: false);
         var logger = factory.CreateLogger("RoutingTest");
 
         using (logger.BeginImmediateScope())
         {
-            logger.LogInformation("inside");
+            logger.LogInformation("MEL_INSIDE");
         }
 
         // After scope ends, Information is back to normal routing (below Warning base level → nowhere)
-        logger.LogInformation("outside");
+        logger.LogInformation("MEL_OUTSIDE");
 
-        Assert.Single(bypassOutput.Events);   // only the one inside the scope
-        Assert.Empty(stepUpOutput.Events);    // outside Information is below Warning gate
+        Assert.Equal(1, p.Count("MEL_INSIDE"));
+        Assert.Equal(0, p.Count("MEL_OUTSIDE"));
     }
 
     [Fact]
-    public async Task MelHelper_LogImmediateError_TriggersStepUpViaTriggerSink()
+    public void MelHelper_LogImmediateError_IsExportedOnceAndTriggersStepUp()
     {
-        var stepUpOutput = new CollectingSink();
-        var bypassOutput = new CollectingSink();
-
-        var stepUpInner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(stepUpOutput).CreateLogger();
-        var bypassLogger = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(bypassOutput).CreateLogger();
-
-        var opts = new StepUpLoggingOptions { BaseLevel = "Warning", StepUpLevel = "Information", DurationSeconds = 10 };
-        using var controller = new StepUpLoggingController(opts);
-        using var stepUpSink = new StepUpSink(stepUpInner, controller.LevelSwitch, controller.BaseLevel, []);
-        using var triggerSink = new StepUpTriggerSink(controller);
-        using var immediateSink = new ImmediateSink(bypassLogger);
-
-        var serilogRoot = new LoggerConfiguration()
-            .MinimumLevel.Verbose()
-            .WriteTo.Sink(stepUpSink)
-            .WriteTo.Sink(triggerSink)
-            .WriteTo.Sink(immediateSink)
-            .CreateLogger();
-
-        using var factory = new SerilogLoggerFactory(serilogRoot, dispose: false);
+        using var p = new Pipeline();
+        using var factory = new SerilogLoggerFactory(p.Root, dispose: false);
         var logger = factory.CreateLogger("RoutingTest");
 
-        Assert.False(controller.IsSteppedUp);
+        Assert.False(p.Controller.IsSteppedUp);
 
-        logger.LogImmediateError("immediate error");
-        await Task.Delay(150, TestContext.Current.CancellationToken); // let trigger channel process
+        logger.LogImmediateError("MEL_IMMEDIATE_ERROR");
 
-        // Routed to bypass (IsImmediate), not step-up
-        Assert.Single(bypassOutput.Events);
-        Assert.Empty(stepUpOutput.Events);
         // Trigger still fired despite the IsImmediate marker
-        Assert.True(controller.IsSteppedUp);
+        Assert.True(SpinWait.SpinUntil(() => p.Controller.IsSteppedUp, 2000));
+        Assert.Equal(1, p.Count("MEL_IMMEDIATE_ERROR"));
     }
 
     // ─── 7. LogProperties marker correctness ──────────────────────────────────
 
     [Fact]
-    public void ImmediateEvent_HasIsImmediateProperty_InBypassOutput()
+    public void ImmediateEvent_HasIsImmediateProperty_WhenExported()
     {
         using var p = new Pipeline();
 
         p.Root.Write(MakeEvent(LogEventLevel.Information, Immediate()));
 
-        var evt = Assert.Single(p.BypassOutput.Events);
+        var evt = Assert.Single(p.Exported);
         Assert.True(evt.Properties.TryGetValue(LogProperties.IsImmediate, out var val));
         Assert.IsType<ScalarValue>(val);
         Assert.Equal(true, ((ScalarValue)val!).Value);
     }
 
     [Fact]
-    public void SummaryEvent_HasIsRequestSummaryProperty_InBypassOutput()
+    public void SummaryEvent_HasIsRequestSummaryProperty_WhenExported()
     {
         using var p = new Pipeline();
 
         p.Root.Write(MakeEvent(LogEventLevel.Information, Summary()));
 
-        var evt = Assert.Single(p.BypassOutput.Events);
+        var evt = Assert.Single(p.Exported);
         Assert.True(evt.Properties.TryGetValue(LogProperties.IsRequestSummary, out var val));
         Assert.Equal(true, ((ScalarValue)val!).Value);
     }
@@ -748,5 +639,29 @@ public class PipelineRoutingTests
             out var steppedUp);
 
         Assert.True(steppedUp);
+    }
+
+    // ─── 10. Pre-error buffer floor with the enrichment gate open ─────────────
+
+    [Fact]
+    public void PreErrorBuffer_WithConfigureHook_FlushesOnlyEventsAtOrAboveStepUpLevel()
+    {
+        // The configure hook opens the enrichment gate (ADR 0026), so a Debug event reaches the buffer and only the
+        // buffer's StepUpLevel floor keeps it out of the flush.
+        var counts = TestHosts.RunInOneTrace(
+            [],
+            (_, _) => { },
+            services =>
+            {
+                var logger = services.GetRequiredService<Serilog.ILogger>();
+                logger.Debug("{Token}", "GATE_OPEN_DEBUG");
+                logger.Information("{Token}", "GATE_OPEN_INFO");
+                logger.Error("{Token}", "GATE_OPEN_ERROR");
+            },
+            "GATE_OPEN_DEBUG", "GATE_OPEN_INFO", "GATE_OPEN_ERROR");
+
+        Assert.Equal(0, counts["GATE_OPEN_DEBUG"]);
+        Assert.Equal(1, counts["GATE_OPEN_INFO"]);
+        Assert.Equal(1, counts["GATE_OPEN_ERROR"]);
     }
 }

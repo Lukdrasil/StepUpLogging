@@ -21,9 +21,8 @@ using Xunit;
 namespace Lukdrasil.StepUpLogging.Tests
 {
     /// <summary>
-    /// Characterization tests for the private <c>ExtractClientAddresses</c>/<c>ExtractUserAgent</c> methods
-    /// on <see cref="StepUpLoggingExtensions"/>. These are only reachable through the real
-    /// <c>UseStepUpRequestLogging()</c> middleware pipeline with <c>AlwaysLogRequestSummary</c> enabled,
+    /// Characterization tests for <c>RequestClient.Addresses</c>/<c>RequestClient.UserAgent</c>,
+    /// driven through the real <c>UseStepUpRequestLogging()</c> middleware pipeline with <c>AlwaysLogRequestSummary</c> enabled,
     /// so every test here drives a real <see cref="TestServer"/> end-to-end rather than calling a
     /// stand-in copy of the extraction logic.
     /// </summary>
@@ -53,6 +52,7 @@ namespace Lukdrasil.StepUpLogging.Tests
                         services.AddSingleton(Options.Create(opts));
                         services.AddSingleton<Serilog.ILogger>(summaryLogger);
                         services.AddSingleton(sp => new StepUpLoggingController(opts, summaryLogger));
+                        services.AddSingleton(new StepUpSettings(opts));
                         var patterns = opts.RedactionRegexes
                             .Where(p => !string.IsNullOrWhiteSpace(p))
                             .Select(p => new Regex(p, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100)))
@@ -75,7 +75,7 @@ namespace Lukdrasil.StepUpLogging.Tests
                         });
 
                         // The real production middleware — this is what actually invokes
-                        // ExtractClientAddresses/ExtractUserAgent, via the AlwaysLogRequestSummary branch.
+                        // RequestClient.Addresses/RequestClient.UserAgent, via the AlwaysLogRequestSummary branch.
                         app.UseStepUpRequestLogging();
 
                         app.Run(async ctx =>
@@ -184,7 +184,6 @@ namespace Lukdrasil.StepUpLogging.Tests
             // SECURITY (ADR 0008): with TrustForwardedHeaders unset, the spoofable XFF header must NOT
             // become ClientIp; the connection's RemoteIpAddress wins.
             Assert.Equal(KnownRemoteIp, StringProperty(logEvent!, "ClientIp"));
-            Assert.NotEqual("203.0.113.42", StringProperty(logEvent, "ClientIp"));
         }
 
         [Fact(DisplayName = "EmitRequestSummary_EmitsForwardedFor_WhenXForwardedForPresent_ByDefault")]
@@ -317,12 +316,11 @@ namespace Lukdrasil.StepUpLogging.Tests
             Assert.NotNull(capture.LastEvent);
             var logEvent = capture.LastEvent;
 
-            // ExtractClientAddresses (StepUpLoggingExtensions.cs:731) falls back to the bare, unredacted
+            // RequestClient.Addresses (RequestClient.cs:30) falls back to the bare, unredacted
             // Connection.RemoteIpAddress here (TrustForwardedHeaders=false ⇒ the XFF entry is never used
             // as ClientIp) — deliberately, because a connection address is not client-supplied and so is
             // not run through CompiledRedactionPatterns.Redact() the way ForwardedFor is.
             Assert.Equal(KnownRemoteIp, StringProperty(logEvent!, "ClientIp"));
-            Assert.DoesNotContain("[REDACTED]", StringProperty(logEvent!, "ClientIp")!);
         }
 
         [Fact(DisplayName = "EmitRequestSummary_ClientIpFromRemoteIp_IsNotRedacted_WhenTrustedButXForwardedForAbsent")]
@@ -334,7 +332,7 @@ namespace Lukdrasil.StepUpLogging.Tests
             var client = host.GetTestClient();
 
             var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
-            // No X-Forwarded-For header: even with TrustForwardedHeaders=true, ExtractClientAddresses
+            // No X-Forwarded-For header: even with TrustForwardedHeaders=true, RequestClient.Addresses
             // falls back to the same unredacted Connection.RemoteIpAddress branch.
             await client.SendAsync(request, TestContext.Current.CancellationToken);
 
@@ -342,7 +340,6 @@ namespace Lukdrasil.StepUpLogging.Tests
             var logEvent = capture.LastEvent;
 
             Assert.Equal(KnownRemoteIp, StringProperty(logEvent!, "ClientIp"));
-            Assert.DoesNotContain("[REDACTED]", StringProperty(logEvent!, "ClientIp")!);
         }
     }
 }

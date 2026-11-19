@@ -54,7 +54,7 @@ internal static class BenchmarkFixtures
 
     /// <summary>The first <paramref name="count"/> redaction patterns, compiled the way the host compiles them.</summary>
     internal static CompiledRedactionPatterns SamplePatterns(int count = 5) =>
-        new(PatternSources.Take(count).Select(StepUpLoggingExtensions.CompilePattern).ToArray());
+        new(PatternSources.Take(count).Select(CompiledRedactionPatterns.CompilePattern).ToArray());
 
     internal static LogEvent Event(LogEventLevel level, string sourceContext, params LogEventProperty[] properties) =>
         new(

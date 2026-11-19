@@ -1,7 +1,5 @@
 using System.Reflection;
 using System.Runtime.CompilerServices;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Lukdrasil.StepUpLogging.Tests;
 
@@ -58,43 +56,6 @@ public class AuditEventTests
         Assert.Equal(AuditOutcome.Denied, evt.Outcome);
     }
 
-    [Fact]
-    public void With_CarriesCallerSuppliedOldAndNewValues()
-    {
-        var oldValues = new Dictionary<string, object?> { ["role"] = "viewer" };
-        var newValues = new Dictionary<string, object?> { ["role"] = "editor" };
-
-        var evt = AuditEvent.Success("user.role.change", "admin-1", "user") with
-        {
-            OldValues = oldValues,
-            NewValues = newValues
-        };
-
-        Assert.Same(oldValues, evt.OldValues);
-        Assert.Same(newValues, evt.NewValues);
-    }
-
-    [Fact]
-    public void With_OverridesContext_WithoutDisturbingRequiredMembers()
-    {
-        var original = AuditEvent.Success("order.cancel", "user-1", "user");
-
-        var enriched = original with
-        {
-            TargetType = "order",
-            TargetId = "42",
-            Data = new Dictionary<string, object?> { ["channel"] = "support-portal" }
-        };
-
-        Assert.Equal("order", enriched.TargetType);
-        Assert.Equal("42", enriched.TargetId);
-        Assert.Equal("support-portal", enriched.Data!["channel"]);
-        Assert.Equal(original.Action, enriched.Action);
-        Assert.Equal(original.ActorId, enriched.ActorId);
-        Assert.Equal(original.ActorType, enriched.ActorType);
-        Assert.Equal(original.Outcome, enriched.Outcome);
-    }
-
     [Theory]
     [InlineData(nameof(AuditEvent.Action))]
     [InlineData(nameof(AuditEvent.ActorId))]
@@ -106,61 +67,5 @@ public class AuditEventTests
 
         Assert.NotNull(property);
         Assert.NotNull(property.GetCustomAttribute<RequiredMemberAttribute>());
-    }
-
-    [Fact]
-    public async Task FakeAuditEventSink_ImplementsWriteAsync_AndReportsTheRecordStored()
-    {
-        var sink = new FakeAuditEventSink();
-        var evt = AuditEvent.Success("order.cancel", "user-1", "user");
-
-        var result = await sink.WriteAsync(evt);
-
-        Assert.Equal(AuditWriteResult.Stored, result);
-        Assert.Single(sink.Written);
-        Assert.Same(evt, sink.Written[0]);
-    }
-
-    [Fact]
-    public async Task FakeAuditLogger_ImplementsBothAuditAsyncOverloads()
-    {
-        var logger = new FakeAuditLogger<AuditEventTests>();
-        var evt = AuditEvent.Success("order.cancel", "user-1", "user");
-        var logInvoked = false;
-
-        await logger.AuditAsync(evt);
-        await logger.AuditAsync(evt, _ => logInvoked = true);
-
-        Assert.Equal(2, logger.Audited.Count);
-        Assert.True(logInvoked);
-    }
-
-    private sealed class FakeAuditEventSink : IAuditEventSink
-    {
-        public List<AuditEvent> Written { get; } = [];
-
-        public ValueTask<AuditWriteResult> WriteAsync(AuditEvent auditEvent)
-        {
-            Written.Add(auditEvent);
-            return ValueTask.FromResult(AuditWriteResult.Stored);
-        }
-    }
-
-    private sealed class FakeAuditLogger<T> : IAuditLogger<T>
-    {
-        public List<AuditEvent> Audited { get; } = [];
-
-        public ValueTask AuditAsync(AuditEvent auditEvent)
-        {
-            Audited.Add(auditEvent);
-            return ValueTask.CompletedTask;
-        }
-
-        public ValueTask AuditAsync(AuditEvent auditEvent, Action<ILogger> log)
-        {
-            Audited.Add(auditEvent);
-            log(NullLoggerFactory.Instance.CreateLogger<T>());
-            return ValueTask.CompletedTask;
-        }
     }
 }

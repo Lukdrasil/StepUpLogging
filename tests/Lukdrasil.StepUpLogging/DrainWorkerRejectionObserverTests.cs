@@ -67,6 +67,29 @@ public class DrainWorkerRejectionObserverTests
     }
 
     [Fact]
+    public async Task RejectedWithObserver_RecordIsDeadLetteredBeforeTheObserverHearsOfIt()
+    {
+        SpoolDrainHarness? drained = null;
+        IReadOnlyList<string> deadLetteredWhenNotified = [];
+        IReadOnlyList<string> spooledWhenNotified = [];
+        var observer = new RecordingRejectionObserver((_, _) =>
+        {
+            deadLetteredWhenNotified = drained!.DeadLetteredFileNames();
+            spooledWhenNotified = drained.SpooledFileNames();
+            return ValueTask.CompletedTask;
+        });
+        using var harness = new SpoolDrainHarness(FakeAuditReceiver.Answering(UnknownKeyRejection), rejectionObservers: [observer]);
+        drained = harness;
+        await SpoolInOrderAsync(harness, 1);
+        var rejectedFileName = harness.SpooledFileNames()[0];
+
+        await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal([rejectedFileName], deadLetteredWhenNotified);
+        Assert.Empty(spooledWhenNotified);
+    }
+
+    [Fact]
     public async Task RejectedWithoutObserver_DeadLetterLogOmitsProblemCode()
     {
         using var harness = new SpoolDrainHarness(FakeAuditReceiver.Answering(UnknownKeyRejection));

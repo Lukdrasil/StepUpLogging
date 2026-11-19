@@ -93,7 +93,7 @@ app.MapGet("/stepup/status", (StepUpLoggingController controller) =>
     return Results.Ok(new 
     { 
         active = controller.IsSteppedUp,
-        currentLevel = controller.LevelSwitch.MinimumLevel.ToString()
+        currentLevel = controller.CurrentLevel.ToString()
     });
 })
 .WithName("StepUpStatus");

@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Linq;
 using Serilog.Events;
 using DiagnosticHost = Lukdrasil.StepUpLogging.Tests.DiagnosticModeTests.DiagnosticHost;
@@ -69,6 +70,56 @@ public class StartupReportTests
         using var run = Start(("RedactLogEventProperties", "true"));
 
         Assert.Contains(run.WithTemplate(StartupReport.UnusedOptionTemplate), e => e.RenderMessage().Contains("RedactLogEventProperties", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ConsoleTextFormat_WithTheConsoleOn_IsNotWarnedAsUnused()
+    {
+        using var run = Start(("EnableConsoleLogging", "true"), ("ConsoleFormat", "Text"));
+
+        Assert.DoesNotContain(run.WithTemplate(StartupReport.UnusedOptionTemplate), e => e.RenderMessage().Contains("ConsoleFormat", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void RedactLogEventProperties_WithAPattern_IsNotWarnedAsUnused()
+    {
+        using var run = Start(("RedactLogEventProperties", "true"), ("RedactionRegexes:0", "secret"));
+
+        Assert.DoesNotContain(run.WithTemplate(StartupReport.UnusedOptionTemplate), e => e.RenderMessage().Contains("RedactLogEventProperties", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("true", "false")]
+    [InlineData("false", "true")]
+    public void NotFullWithASummaryOn_IsNotWarnedAsUnused(string inbound, string outbound)
+    {
+        using var run = Start(("AlwaysLogRequestSummary", inbound), ("AlwaysLogOutboundRequestSummary", outbound), ("RequestSummaryDetail", "Compact"));
+
+        Assert.DoesNotContain(run.WithTemplate(StartupReport.UnusedOptionTemplate), e => e.RenderMessage().Contains("RequestSummaryDetail", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Summary_NamesTheConsoleAndTheLogFileAsOutputs()
+    {
+        var logFile = Path.Combine(Path.GetTempPath(), $"stepup-report-{Guid.NewGuid():N}.log");
+        try
+        {
+            using (var run = DiagnosticHost.Start(
+                [("Mode", "Auto"), ("EnableConsoleLogging", "true"), ("ConsoleFormat", "Text")],
+                registerFakeTime: false,
+                builder => builder.AddStepUpLogging(logFilePath: logFile)))
+            {
+                var summary = Assert.Single(run.WithTemplate(StartupReport.SummaryTemplate));
+                Assert.Contains($"; outputs Console Text, File {logFile}; ", summary.RenderMessage(), StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            foreach (var file in Directory.GetFiles(Path.GetTempPath(), Path.GetFileNameWithoutExtension(logFile) + "*"))
+            {
+                File.Delete(file);
+            }
+        }
     }
 
     [Fact]

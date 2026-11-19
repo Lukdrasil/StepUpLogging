@@ -319,7 +319,7 @@ public class StepUpSinkTests
 
         var levelSwitch = new LoggingLevelSwitch(LogEventLevel.Information);
         using var stepUpSink = new StepUpSink(stepUpInner, levelSwitch, LogEventLevel.Warning, []);
-        using var immediateSink = new ImmediateSink(bypassLogger);
+        using var immediateSink = BypassSink.Immediate(bypassLogger);
 
         var immediateProp = new LogEventProperty(LogProperties.IsImmediate, new ScalarValue(true));
         var evt = MakeEvent(LogEventLevel.Information, immediateProp);

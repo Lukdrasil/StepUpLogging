@@ -30,20 +30,19 @@ namespace Lukdrasil.StepUpLogging.Tests
         [Fact(DisplayName = "Redact_FailsPerPatternNotGlobally_WhenOnePatternThrows")]
         public void Redact_FailsPerPatternNotGlobally_WhenOnePatternThrows()
         {
-            // A global try/catch would return the raw input on the throwing pattern, leaking the
-            // literal secret the second pattern is meant to mask. Per-pattern fail-closed must not.
-            var input = new string('a', 40) + "! keepsecret";
+            // The throwing pattern turns the value into the sentinel and the next pattern still runs on it:
+            // "ERROR" in the sentinel is redacted. A global try/catch, or stopping at the first failure,
+            // would return the bare sentinel instead.
+            var input = new string('a', 40) + "!";
             var patterns = new CompiledRedactionPatterns(new[]
             {
                 CompileFast("(a+)+$"),
-                CompileFast("keepsecret"),
+                CompileFast("ERROR"),
             });
 
             var result = patterns.Redact(input);
 
-            Assert.Equal("[REDACTION-ERROR]", result);
-            Assert.DoesNotContain("keepsecret", result);
-            Assert.DoesNotContain(new string('a', 40), result);
+            Assert.Equal("[REDACTION-[REDACTED]]", result);
         }
 
         [Fact(DisplayName = "Redact_ReturnsInput_WhenEmpty")]
@@ -79,7 +78,7 @@ namespace Lukdrasil.StepUpLogging.Tests
             // backtracking engine and yield the fail-closed sentinel. NonBacktracking evaluates in
             // linear time, finds no match, and returns the input verbatim.
             var input = new string('a', 5000) + "!";
-            var patterns = new CompiledRedactionPatterns(new[] { StepUpLoggingExtensions.CompilePattern("(a+)+$") });
+            var patterns = new CompiledRedactionPatterns(new[] { CompiledRedactionPatterns.CompilePattern("(a+)+$") });
 
             var result = patterns.Redact(input);
 
@@ -92,7 +91,7 @@ namespace Lukdrasil.StepUpLogging.Tests
         {
             // A lookahead is unsupported by NonBacktracking (throws NotSupportedException at construction)
             // and must land on the Compiled fallback rather than propagate the exception.
-            var regex = StepUpLoggingExtensions.CompilePattern("(?=secret)secret");
+            var regex = CompiledRedactionPatterns.CompilePattern("(?=secret)secret");
             var patterns = new CompiledRedactionPatterns(new[] { regex });
 
             var result = patterns.Redact("my secret here");

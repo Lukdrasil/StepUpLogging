@@ -396,7 +396,7 @@ public class ApplicationLogRedactionTests
     {
         var evt = LogWarningThroughPipeline(new PathString("/api/v2/Public/ActionLinks/abc123"));
 
-        Assert.DoesNotContain("abc123", evt.Properties["Value"].ToString());
+        Assert.Equal("\"/api/v2[REDACTED]\"", evt.Properties["Value"].ToString());
     }
 
     [Fact]
@@ -404,7 +404,7 @@ public class ApplicationLogRedactionTests
     {
         var evt = LogWarningThroughPipeline(new QueryString("?next=/Public/ActionLinks/abc123"));
 
-        Assert.DoesNotContain("abc123", evt.Properties["Value"].ToString());
+        Assert.Equal("\"?next=[REDACTED]\"", evt.Properties["Value"].ToString());
     }
 
     [Fact]
@@ -412,7 +412,7 @@ public class ApplicationLogRedactionTests
     {
         var evt = LogWarningThroughPipeline(new Uri("https://h/api/v2/Public/ActionLinks/abc123"));
 
-        Assert.DoesNotContain("abc123", evt.Properties["Value"].ToString());
+        Assert.Equal("\"https://h/api/v2[REDACTED]\"", evt.Properties["Value"].ToString());
     }
 
     [Fact]
@@ -420,6 +420,6 @@ public class ApplicationLogRedactionTests
     {
         var evt = LogWarningThroughPipeline(new Uri("https://h/api/v2/Public/Action%4Cinks/abc123"));
 
-        Assert.DoesNotContain("abc123", evt.Properties["Value"].ToString());
+        Assert.Equal("\"https://h/api/v2[REDACTED]\"", evt.Properties["Value"].ToString());
     }
 }

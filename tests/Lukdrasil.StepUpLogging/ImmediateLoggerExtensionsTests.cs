@@ -79,6 +79,7 @@ public class ImmediateLoggerExtensionsTests
 
         Assert.Single(collector.Events);
         AssertIsImmediate(collector.Events[0]);
+        Assert.Equal(LogEventLevel.Error, collector.Events[0].Level);
         Assert.Equal(ex, collector.Events[0].Exception);
     }
 
@@ -92,6 +93,7 @@ public class ImmediateLoggerExtensionsTests
 
         Assert.Single(collector.Events);
         AssertIsImmediate(collector.Events[0]);
+        Assert.Equal(LogEventLevel.Warning, collector.Events[0].Level);
     }
 
     [Fact]
@@ -105,6 +107,7 @@ public class ImmediateLoggerExtensionsTests
 
         Assert.Single(collector.Events);
         AssertIsImmediate(collector.Events[0]);
+        Assert.Equal(LogEventLevel.Error, collector.Events[0].Level);
         Assert.Equal(ex, collector.Events[0].Exception);
     }
 

@@ -56,7 +56,7 @@ internal sealed class StepUpSink : ILogEventSink, IDisposable
     /// <summary>
     /// Whether the event is not this sink's to export: it arrives after dispose, is null, was dropped by the
     /// enrichment gate (no enricher ran on it, ADR 0026 D3), or is routed to a bypass sink (marked
-    /// <c>IsRequestSummary</c> or <c>IsImmediate</c>), which prevents duplication with SummarySink / ImmediateSink.
+    /// <c>IsRequestSummary</c> or <c>IsImmediate</c>), which prevents duplication with the two <see cref="BypassSink"/> routes.
     /// </summary>
     private bool Refuses(LogEvent? logEvent)
         => _disposed

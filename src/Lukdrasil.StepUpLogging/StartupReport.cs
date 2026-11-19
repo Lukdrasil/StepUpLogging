@@ -5,8 +5,9 @@ namespace Lukdrasil.StepUpLogging;
 
 /// <summary>
 /// What the library writes once at startup through the bypass logger: one Information line with the effective
-/// configuration unless <see cref="StepUpLoggingOptions.WriteStartupSummary"/> is false, and a Warning for each key
-/// under the options section that binds to nothing and for each option set to a value that has no effect.
+/// configuration unless <see cref="StepUpLoggingOptions.WriteStartupSummary"/> is false, a Warning for each key
+/// under the options section that binds to nothing and for each option set to a value that has no effect, a Warning
+/// when a level cannot raise verbosity (ADR 0007 warn-not-fail), and in Diagnostic mode a Warning with its window.
 /// </summary>
 internal static class StartupReport
 {
@@ -27,13 +28,14 @@ internal static class StartupReport
         (nameof(StepUpLoggingOptions.ConsoleFormat), "EnableConsoleLogging is false",
             opts => opts.ConsoleFormat != ConsoleLogFormat.Json && !opts.EnableConsoleLogging),
         (nameof(StepUpLoggingOptions.RedactLogEventProperties), "RedactionRegexes is empty",
-            opts => opts.RedactLogEventProperties && !(opts.RedactionRegexes ?? []).Any(p => !string.IsNullOrWhiteSpace(p))),
+            opts => opts.RedactLogEventProperties && StepUpSettings.NonBlank(opts.RedactionRegexes).Length == 0),
         (nameof(StepUpLoggingOptions.RequestSummaryDetail), "AlwaysLogRequestSummary and AlwaysLogOutboundRequestSummary are false",
             opts => opts.RequestSummaryDetail != RequestSummaryDetail.Full && !opts.AlwaysLogRequestSummary && !opts.AlwaysLogOutboundRequestSummary),
     ];
 
-    internal static void Write(Serilog.ILogger logger, StepUpLoggingOptions opts, IConfigurationSection section, string? logFilePath)
+    internal static void Write(Serilog.ILogger logger, StepUpSettings settings, IConfigurationSection section, string? logFilePath, DateTimeOffset diagnosticExpiresAt)
     {
+        var opts = settings.Options;
         if (opts.WriteStartupSummary)
         {
             logger.Information(SummaryTemplate,
@@ -50,6 +52,36 @@ internal static class StartupReport
         {
             logger.Warning(UnusedOptionTemplate, option, reason);
         }
+
+        WriteLevelWarnings(logger, settings, diagnosticExpiresAt);
+    }
+
+    // A StepUpLevel or DiagnosticLevel not strictly more verbose than BaseLevel (numerically >= it, since a more
+    // verbose level is a lower LogEventLevel) cannot raise verbosity. AlwaysOn and Disabled ignore the ordering.
+    private static void WriteLevelWarnings(Serilog.ILogger logger, StepUpSettings settings, DateTimeOffset diagnosticExpiresAt)
+    {
+        if (settings.Mode is StepUpMode.Auto or StepUpMode.Diagnostic && settings.StepUpLevel >= settings.BaseLevel)
+        {
+            logger.Warning(
+                "StepUpLevel {StepUpLevel} is not more verbose than BaseLevel {BaseLevel}; step-up cannot increase verbosity in {Mode:l} mode.",
+                settings.StepUpLevel, settings.BaseLevel, settings.Mode.ToString());
+        }
+
+        if (settings.Mode is not StepUpMode.Diagnostic)
+        {
+            return;
+        }
+
+        if (settings.DiagnosticLevel >= settings.BaseLevel)
+        {
+            logger.Warning(
+                "DiagnosticLevel {DiagnosticLevel} is not more verbose than BaseLevel {BaseLevel}; Diagnostic mode cannot increase verbosity.",
+                settings.DiagnosticLevel, settings.BaseLevel);
+        }
+
+        logger.Warning(
+            "StepUp Diagnostic mode active at {DiagnosticLevel} for {DurationMinutes} min until {ExpiresAt}",
+            settings.DiagnosticLevel, settings.Options.DiagnosticDurationMinutes, diagnosticExpiresAt);
     }
 
     internal static IEnumerable<string> UnknownKeys(IConfigurationSection section)

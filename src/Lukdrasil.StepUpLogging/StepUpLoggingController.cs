@@ -2,7 +2,6 @@ using System;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using System.Threading;
-using System.Collections.Generic;
 using Serilog;
 using Serilog.Core;
 using Serilog.Events;
@@ -10,28 +9,22 @@ using Serilog.Events;
 namespace Lukdrasil.StepUpLogging;
 
 /// <summary>
-/// Manages step-up logging level transitions and duration control.
-/// Implements proper timer lifecycle management to prevent resource leaks.
-/// Thread-safe design with minimal locking.
+/// Owns the step-up level: raises it on <see cref="Trigger"/>, lowers it after <c>DurationSeconds</c>, and in
+/// Diagnostic mode holds <c>DiagnosticLevel</c> for <c>DiagnosticDurationMinutes</c>. Resolve it from DI to trigger a
+/// step-up by hand or to read its state. Thread-safe.
 /// </summary>
 public sealed class StepUpLoggingController : IDisposable
 {
+    private static readonly TimeSpan MinTriggerInterval = TimeSpan.FromSeconds(5);
+
     private readonly object _gate = new();
-    private readonly StepUpMode _mode;
-    private readonly LogEventLevel _baseLevel;
-    private readonly LogEventLevel _stepUpLevel;
-    private readonly TimeSpan _duration;
-    private readonly TimeSpan _minTriggerInterval = TimeSpan.FromSeconds(5);
-    private readonly bool _enableActivityInstrumentation;
+    private readonly StepUpSettings _settings;
+    private readonly TimeProvider _time;
 
-    private readonly TimeSpan _maxContinuous;
-    private readonly TimeSpan _cooldown;
-    private long _cooldownUntilTimestamp;
-
-    private Timer? _timer;
-    private readonly Func<long> _clock;
+    private ITimer? _timer;
     private long _lastTriggerTimestamp;
     private long _stepUpStartTimestamp;
+    private long? _cooldownStartTimestamp;
     private long _generation;
     private bool _disposed;
     // Authoritative record of step-up state. The LevelSwitch cannot stand in for it: when
@@ -39,6 +32,7 @@ public sealed class StepUpLoggingController : IDisposable
     private bool _isSteppedUp;
     private ITimer? _diagnosticTimer;
     private bool _diagnosticActive;
+    private Serilog.ILogger? _summaryLogger;
 
     private static readonly Meter Meter = new("StepUpLogging", "1.0.0");
     private static readonly Counter<long> TriggerCounter = Meter.CreateCounter<long>("stepup_trigger_total", "count", "Total number of step-up triggers");
@@ -49,16 +43,48 @@ public sealed class StepUpLoggingController : IDisposable
     private static readonly UpDownCounter<int> DiagnosticActiveCounter = Meter.CreateUpDownCounter<int>("stepup_diagnostic_active", "state", "Whether Diagnostic mode is active (1) or not (0)");
     private readonly UpDownCounter<int> _activeStepUpCounter = Meter.CreateUpDownCounter<int>("stepup_active", "state", "Whether step-up is active (1) or not (0)");
 
-    public LoggingLevelSwitch LevelSwitch { get; }
+    /// <summary>Creates a controller from unresolved options; <paramref name="timeProvider"/> defaults to <see cref="TimeProvider.System"/>.</summary>
+    internal StepUpLoggingController(StepUpLoggingOptions options, Serilog.ILogger? summaryLogger = null, TimeProvider? timeProvider = null)
+        : this(new StepUpSettings(options), summaryLogger, timeProvider ?? TimeProvider.System)
+    {
+    }
 
-    /// <summary>The resolved <c>BaseLevel</c> — the floor the step-up raises from.</summary>
-    internal LogEventLevel BaseLevel => _baseLevel;
+    /// <summary>
+    /// Creates a controller. Ownership of <paramref name="summaryLogger"/>, the bypass logger for summaries and
+    /// Warnings, transfers to the controller: <see cref="Dispose"/> disposes it. <paramref name="timeProvider"/> times
+    /// the step-down, the rate limit, the cap, the cooldown and the Diagnostic window.
+    /// </summary>
+    internal StepUpLoggingController(StepUpSettings settings, Serilog.ILogger? summaryLogger, TimeProvider timeProvider)
+    {
+        _settings = settings;
+        _summaryLogger = summaryLogger;
+        _time = timeProvider;
+        _lastTriggerTimestamp = timeProvider.GetTimestamp();
+        LevelSwitch = new LoggingLevelSwitch(settings.InitialLevel);
+        if (settings.Mode == StepUpMode.Diagnostic)
+        {
+            DiagnosticExpiresAt = StartDiagnostic();
+        }
+    }
 
-    /// <summary>The resolved <c>StepUpLevel</c> — the level the switch is raised to on trigger.</summary>
-    internal LogEventLevel StepUpLevel => _stepUpLevel;
+    /// <summary>The minimum level the step-up gate exports at right now.</summary>
+    public LogEventLevel CurrentLevel => LevelSwitch.MinimumLevel;
+
+    /// <summary>
+    /// Gets whether logging is currently stepped up; always <see langword="true"/> while Diagnostic mode is active.
+    /// </summary>
+    public bool IsSteppedUp => _settings.CanStepUp ? IsDiagnosticActive || _isSteppedUp : _settings.Mode == StepUpMode.AlwaysOn;
+
+    internal LoggingLevelSwitch LevelSwitch { get; }
+
+    /// <summary>The resolved <c>BaseLevel</c>, the floor the step-up raises from.</summary>
+    internal LogEventLevel BaseLevel => _settings.BaseLevel;
+
+    /// <summary>The resolved <c>StepUpLevel</c>, the level the switch is raised to on trigger.</summary>
+    internal LogEventLevel StepUpLevel => _settings.StepUpLevel;
 
     /// <summary>The resolved <c>DiagnosticLevel</c>: the level the switch sits at while Diagnostic mode is active.</summary>
-    internal LogEventLevel DiagnosticLevel { get; }
+    internal LogEventLevel DiagnosticLevel => _settings.DiagnosticLevel;
 
     /// <summary>When Diagnostic mode ends, fixed at construction. Unset outside <see cref="StepUpMode.Diagnostic"/>.</summary>
     internal DateTimeOffset DiagnosticExpiresAt { get; }
@@ -66,164 +92,51 @@ public sealed class StepUpLoggingController : IDisposable
     /// <summary>True from construction in Diagnostic mode until its timer fires or the controller is disposed.</summary>
     internal bool IsDiagnosticActive => Volatile.Read(ref _diagnosticActive);
 
-    private readonly LogEventLevel _requestSummaryLevel;
-    private readonly RequestSummaryDetail _requestSummaryDetail;
-    private Serilog.ILogger? _summaryLogger;
+    // The Log.Logger fallback is reached only by a controller built without a bypass logger: the pipeline attaches
+    // its bypass logger when the logger is built, before any request or trigger.
+    private Serilog.ILogger Output => _summaryLogger ?? Log.Logger;
 
-    public StepUpLoggingController(StepUpLoggingOptions options)
-        : this(options, null)
+    private DateTimeOffset StartDiagnostic()
     {
-    }
-
-    /// <summary>
-    /// Creates a controller with an attached summary/bypass logger. Ownership of <paramref name="summaryLogger"/>
-    /// transfers to the controller — <see cref="Dispose"/> disposes it. See <see cref="SetSummaryLogger"/>.
-    /// </summary>
-    /// <remarks>
-    /// In the request summary, route values are converted per value with the logger's scalar conversion; a <c>ToMaximumCollectionCount</c> below the number of route values or a destructuring depth limit on a consumer-supplied summary logger is not applied to <c>RouteParameters</c>. The library's own bypass logger has no such settings.
-    /// </remarks>
-    public StepUpLoggingController(StepUpLoggingOptions options, Serilog.ILogger? summaryLogger)
-        : this(options, summaryLogger, Stopwatch.GetTimestamp)
-    {
-    }
-
-    /// <summary>
-    /// Constructor allowing a monotonic clock and a time provider to be injected; used by tests and the DI factory.
-    /// The <paramref name="clock"/> must return timestamps in <see cref="Stopwatch"/> tick units (as produced by <see cref="Stopwatch.GetTimestamp"/>).
-    /// </summary>
-    /// <param name="options">The step-up configuration.</param>
-    /// <param name="summaryLogger">The bypass logger for summaries and Warnings; the static <see cref="Log"/> when <see langword="null"/>.</param>
-    /// <param name="clock">The monotonic clock for step-up timing.</param>
-    /// <param name="timeProvider">Times the Diagnostic window only; <see cref="TimeProvider.System"/> when <see langword="null"/>.</param>
-    internal StepUpLoggingController(StepUpLoggingOptions options, Serilog.ILogger? summaryLogger, Func<long> clock, TimeProvider? timeProvider = null)
-    {
-        ArgumentNullException.ThrowIfNull(options);
-        _clock = clock;
-        _lastTriggerTimestamp = clock();
-        _mode = options.Mode;
-        _baseLevel = Parse(options.BaseLevel, LogEventLevel.Warning);
-        _stepUpLevel = Parse(options.StepUpLevel, LogEventLevel.Information);
-        // Single canonical default (3) matching StepUpLoggingOptions; startup validation rejects <= 0,
-        // so this guard only defends direct construction in tests (ADR 0007).
-        _duration = TimeSpan.FromSeconds(options.DurationSeconds <= 0 ? 3 : options.DurationSeconds);
-        _maxContinuous = options.MaxContinuousStepUpSeconds > 0 ? TimeSpan.FromSeconds(options.MaxContinuousStepUpSeconds) : TimeSpan.Zero;
-        _cooldown = _maxContinuous == TimeSpan.Zero ? TimeSpan.Zero : TimeSpan.FromSeconds(options.StepUpCooldownSeconds);
-        _enableActivityInstrumentation = options.EnableActivityInstrumentation;
-        _summaryLogger = summaryLogger;
-        _requestSummaryLevel = Parse(options.RequestSummaryLevel, LogEventLevel.Information);
-        _requestSummaryDetail = options.RequestSummaryDetail;
-        DiagnosticLevel = Parse(options.DiagnosticLevel, LogEventLevel.Debug);
-
-        // Initialize level based on mode
-        var initialLevel = _mode switch
-        {
-            StepUpMode.AlwaysOn => _stepUpLevel,
-            StepUpMode.Disabled => _baseLevel,
-            StepUpMode.Diagnostic => DiagnosticLevel,
-            _ => _baseLevel
-        };
-        LevelSwitch = new LoggingLevelSwitch(initialLevel);
-
-        if (_mode == StepUpMode.Diagnostic)
-        {
-            DiagnosticExpiresAt = StartDiagnostic(timeProvider, TimeSpan.FromMinutes(options.DiagnosticDurationMinutes));
-        }
-    }
-
-    private DateTimeOffset StartDiagnostic(TimeProvider? timeProvider, TimeSpan duration)
-    {
-        var time = timeProvider ?? TimeProvider.System;
         lock (_gate)
         {
             Volatile.Write(ref _diagnosticActive, true);
             DiagnosticActiveCounter.Add(1);
-            _diagnosticTimer = time.CreateTimer(_ => EndDiagnostic(), null, duration, Timeout.InfiniteTimeSpan);
-            return time.GetUtcNow() + duration;
+            _diagnosticTimer = _time.CreateTimer(_ => EndDiagnostic(), null, _settings.DiagnosticDuration, Timeout.InfiniteTimeSpan);
+            return _time.GetUtcNow() + _settings.DiagnosticDuration;
         }
     }
 
     /// <summary>
-    /// Attach or replace the summary/bypass logger. Useful for wiring the bypass logger after AddSerilog has
-    /// created it to avoid circular DI during startup.
+    /// Attaches the bypass logger once the pipeline has built it; resolving it through DI inside the
+    /// <c>AddSerilog</c> callback would deadlock. Ownership transfers to this controller.
     /// </summary>
-    /// <remarks>
-    /// Ownership transfers to this controller: <see cref="Dispose"/> disposes the attached logger to flush its
-    /// async buffers on shutdown. Pass a logger dedicated to this controller — not a shared logger you keep using
-    /// elsewhere (e.g. <c>Log.Logger</c>), which would be disposed out from under you.
-    /// <para>
-    /// In the request summary, route values are converted per value with the logger's scalar conversion; a <c>ToMaximumCollectionCount</c> below the number of route values or a destructuring depth limit on a consumer-supplied summary logger is not applied to <c>RouteParameters</c>. The library's own bypass logger has no such settings.
-    /// </para>
-    /// </remarks>
-    public void SetSummaryLogger(Serilog.ILogger? summaryLogger)
+    internal void SetSummaryLogger(Serilog.ILogger? summaryLogger)
     {
         _summaryLogger = summaryLogger;
     }
 
-    /// <summary>
-    /// Emit a structured inbound request summary using the configured summary logger (bypass) if available.
-    /// </summary>
-    /// <remarks>
-    /// The summary is written with the template <c>{Direction} {Method} {Path} {StatusCode} {ElapsedMs} ms {ClientKind} {UserAgent}</c>:
-    /// <c>Direction</c> is <c>Inbound</c>, <c>ClientKind</c> is classified from <paramref name="userAgent"/>, and a
-    /// missing or blank <paramref name="userAgent"/> is written as <c>(none)</c>. With
-    /// <see cref="StepUpLoggingOptions.RequestSummaryDetail"/> set to <see cref="RequestSummaryDetail.Compact"/> or
-    /// <see cref="RequestSummaryDetail.Minimal"/>, <paramref name="queryString"/>, <paramref name="routeParameters"/>
-    /// and <paramref name="forwardedFor"/> are not written (ADR 0032); with <see cref="RequestSummaryDetail.Minimal"/>
-    /// the rest are written under short keys (ADR 0033).
-    /// <para>
-    /// Route values are converted per value with the logger's scalar conversion. A <c>ToMaximumCollectionCount</c>
-    /// below the number of route values, or a destructuring depth limit, on a consumer-supplied summary logger is not
-    /// applied to <c>RouteParameters</c>. The library's own bypass logger has no such settings, so the default
-    /// pipeline is unchanged. See ADR 0009.
-    /// </para>
-    /// </remarks>
-    /// <param name="method">HTTP method of the request.</param>
-    /// <param name="path">Normalized request path.</param>
-    /// <param name="statusCode">HTTP status code of the response.</param>
-    /// <param name="elapsedMs">Request duration in milliseconds.</param>
-    /// <param name="traceId">Ignored; the summary carries the trace and span of <see cref="Activity.Current"/>.</param>
-    /// <param name="queryString">Redacted query string, when present.</param>
-    /// <param name="routeParameters">Redacted route parameters, when present.</param>
-    /// <param name="userAgent">Redacted User-Agent header, when present.</param>
-    /// <param name="clientIp">Client IP address (see <see cref="StepUpLoggingOptions.TrustForwardedHeaders"/>).</param>
-    /// <param name="jti">Redacted token identifier claim, when present.</param>
-    /// <param name="forwardedFor">Redacted raw <c>X-Forwarded-For</c> header, when present. Client-supplied and untrusted.</param>
-    public void EmitRequestSummary(string method, string path, int statusCode, double elapsedMs, string? traceId = null, string? queryString = null, IReadOnlyDictionary<string, object?>? routeParameters = null, string? userAgent = null, string? clientIp = null, string? jti = null, string? forwardedFor = null)
-        => EmitRequestSummary(InboundRequestSummary.FromArguments(
-            method, path, statusCode, elapsedMs, queryString, routeParameters, userAgent, clientIp, jti, forwardedFor, _requestSummaryDetail));
-
     /// <summary>Writes <paramref name="summary"/> through the summary logger at the request summary level.</summary>
+    /// <remarks>
+    /// Route values are converted per value with the logger's scalar conversion, so a <c>ToMaximumCollectionCount</c>
+    /// or destructuring depth limit on a consumer-supplied summary logger is not applied to <c>RouteParameters</c>
+    /// (ADR 0009). The library's own bypass logger has no such settings.
+    /// </remarks>
     internal void EmitRequestSummary(RequestSummary summary)
     {
         try
         {
-            var level = _requestSummaryLevel;
-            // The Log.Logger fallback is not reachable in the normal pipeline: SetSummaryLogger
-            // runs at logger-build time, before any request, so _summaryLogger is already set by the
-            // time a request handler can call EmitRequestSummary.
-            var logger = _summaryLogger ?? Log.Logger;
-            if (!logger.IsEnabled(level))
+            var logger = Output;
+            if (logger.IsEnabled(_settings.RequestSummaryLevel))
             {
-                return;
+                logger.Write(summary.ToLogEvent(_settings.RequestSummaryLevel, logger));
             }
-
-            logger.Write(summary.ToLogEvent(level, logger));
         }
         catch
         {
             // Swallow to avoid affecting request pipeline
         }
     }
-
-    /// <summary>
-    /// Gets whether logging is currently stepped up; always <see langword="true"/> while Diagnostic mode is active.
-    /// </summary>
-    public bool IsSteppedUp => _mode switch
-    {
-        StepUpMode.AlwaysOn => true,
-        StepUpMode.Disabled => false,
-        _ => IsDiagnosticActive || _isSteppedUp
-    };
 
     private void EndDiagnostic()
     {
@@ -235,9 +148,9 @@ public sealed class StepUpLoggingController : IDisposable
             }
 
             Volatile.Write(ref _diagnosticActive, false);
-            LevelSwitch.MinimumLevel = _baseLevel;
+            LevelSwitch.MinimumLevel = _settings.BaseLevel;
             DiagnosticActiveCounter.Add(-1);
-            (_summaryLogger ?? Log.ForContext<StepUpLoggingController>()).Warning("StepUp Diagnostic mode ended, running as Auto at {BaseLevel}", _baseLevel);
+            Output.Warning("StepUp Diagnostic mode ended, running as Auto at {BaseLevel}", _settings.BaseLevel);
         }
     }
 
@@ -246,81 +159,94 @@ public sealed class StepUpLoggingController : IDisposable
     /// </summary>
     public void Trigger()
     {
-        // Ignore triggers in AlwaysOn or Disabled mode
-        if (_mode == StepUpMode.AlwaysOn || _mode == StepUpMode.Disabled)
+        if (!_settings.CanStepUp)
         {
             return;
         }
 
         lock (_gate)
         {
-            if (_disposed || _diagnosticActive)
+            if (_disposed || _diagnosticActive || InCooldown())
             {
                 return;
             }
 
-            // Post-cap cooldown: while active, ignore triggers entirely; once expired, clear and proceed.
-            if (_maxContinuous != TimeSpan.Zero && _cooldownUntilTimestamp != 0)
-            {
-                if (_clock() < _cooldownUntilTimestamp)
-                {
-                    SuppressedTriggerCounter.Add(1);
-                    return;
-                }
-
-                _cooldownUntilTimestamp = 0;
-            }
-
-            // Fast-path: if already stepped up and recently triggered, just extend timer.
-            // Reads the explicit flag rather than comparing levels: when BaseLevel == StepUpLevel,
-            // the switch already sits at _stepUpLevel before the first trigger, which a level
-            // comparison cannot tell apart from a genuine step-up.
+            // Reads the explicit flag rather than comparing levels: when BaseLevel == StepUpLevel, the switch already
+            // sits at StepUpLevel before the first trigger, which a level comparison cannot tell from a step-up.
             if (_isSteppedUp)
             {
-                var now = _clock();
-
-                // Hard cap: once step-up has been continuously active past the bound, force a step-down and
-                // open the cooldown. Checked before the rate-limit/extend so a caller who keeps failing can
-                // no longer hold the level indefinitely.
-                if (_maxContinuous != TimeSpan.Zero
-                    && Stopwatch.GetElapsedTime(_stepUpStartTimestamp, now) >= _maxContinuous)
-                {
-                    // Dispose the live timer so its superseded callback cannot fire a second step-down (ADR 0002).
-                    _timer?.Dispose();
-                    _timer = null;
-                    PerformStepDown(forcedByCap: true);
-                    CapReachedCounter.Add(1);
-                    _cooldownUntilTimestamp = now + ToStopwatchTicks(_cooldown);
-                    return;
-                }
-
-                if (Stopwatch.GetElapsedTime(_lastTriggerTimestamp, now) < _minTriggerInterval)
-                {
-                    SkippedTriggerCounter.Add(1);
-                    return;
-                }
-
-                _lastTriggerTimestamp = now;
-                ArmTimer();
-                return;
+                Extend();
             }
-
-            // Transition to stepped-up state
-            using (_enableActivityInstrumentation ? StepUpLoggingExtensions.ControllerActivitySource.StartActivity("TriggerStepUp", ActivityKind.Internal) : null)
+            else
             {
-                LevelSwitch.MinimumLevel = _stepUpLevel;
-                _isSteppedUp = true;
-                _lastTriggerTimestamp = _clock();
-                _stepUpStartTimestamp = _lastTriggerTimestamp;
-
-                TriggerCounter.Add(1);
-                _activeStepUpCounter.Add(1);
-
-                (_summaryLogger ?? Log.Logger).Warning("Logging step up: increased minimum level to {Level} for {DurationSeconds} seconds",
-                    _stepUpLevel, (int)_duration.TotalSeconds);
-
-                ArmTimer();
+                StepUp();
             }
+        }
+    }
+
+    /// <summary>Whether the post-cap cooldown still suppresses triggers; clears an expired cooldown. Holds <see cref="_gate"/>.</summary>
+    private bool InCooldown()
+    {
+        if (_cooldownStartTimestamp is not { } start)
+        {
+            return false;
+        }
+
+        if (_time.GetElapsedTime(start) < _settings.StepUpCooldown)
+        {
+            SuppressedTriggerCounter.Add(1);
+            return true;
+        }
+
+        _cooldownStartTimestamp = null;
+        return false;
+    }
+
+    /// <summary>
+    /// Extends a running step-up, unless it has run past the continuous cap, which forces a step-down and opens the
+    /// cooldown (ADR 0010), or the last extension is younger than the rate limit. Holds <see cref="_gate"/>.
+    /// </summary>
+    private void Extend()
+    {
+        var now = _time.GetTimestamp();
+        if (_settings.MaxContinuousStepUp != TimeSpan.Zero
+            && _time.GetElapsedTime(_stepUpStartTimestamp, now) >= _settings.MaxContinuousStepUp)
+        {
+            // Dispose the live timer so its superseded callback cannot fire a second step-down (ADR 0002).
+            _timer?.Dispose();
+            _timer = null;
+            PerformStepDown(forcedByCap: true);
+            CapReachedCounter.Add(1);
+            _cooldownStartTimestamp = now;
+            return;
+        }
+
+        if (_time.GetElapsedTime(_lastTriggerTimestamp, now) < MinTriggerInterval)
+        {
+            SkippedTriggerCounter.Add(1);
+            return;
+        }
+
+        _lastTriggerTimestamp = now;
+        ArmTimer();
+    }
+
+    private void StepUp()
+    {
+        using (_settings.ActivityInstrumentation ? StepUpLoggingActivitySources.Controller.StartActivity("TriggerStepUp", ActivityKind.Internal) : null)
+        {
+            LevelSwitch.MinimumLevel = _settings.StepUpLevel;
+            _isSteppedUp = true;
+            _lastTriggerTimestamp = _time.GetTimestamp();
+            _stepUpStartTimestamp = _lastTriggerTimestamp;
+
+            TriggerCounter.Add(1);
+            _activeStepUpCounter.Add(1);
+
+            Output.Warning("Logging step up: increased minimum level to {Level} for {DurationSeconds} seconds",
+                _settings.StepUpLevel, (int)_settings.StepUpDuration.TotalSeconds);
+
+            ArmTimer();
         }
     }
 
@@ -334,7 +260,7 @@ public sealed class StepUpLoggingController : IDisposable
     {
         _generation++;
         _timer?.Dispose();
-        _timer = new Timer(StepDownCallback, _generation, _duration, Timeout.InfiniteTimeSpan);
+        _timer = _time.CreateTimer(StepDownCallback, _generation, _settings.StepUpDuration, Timeout.InfiniteTimeSpan);
     }
 
     /// <summary>
@@ -377,21 +303,17 @@ public sealed class StepUpLoggingController : IDisposable
         }
 
         // Activity is only created if step down actually occurs (not when disposed)
-        using var activity = _enableActivityInstrumentation ? StepUpLoggingExtensions.ControllerActivitySource.StartActivity("PerformStepDown", ActivityKind.Internal) : null;
+        using var activity = _settings.ActivityInstrumentation ? StepUpLoggingActivitySources.Controller.StartActivity("PerformStepDown", ActivityKind.Internal) : null;
         activity?.SetTag("stepup.forced_by_cap", forcedByCap);
 
-        LevelSwitch.MinimumLevel = _baseLevel;
+        LevelSwitch.MinimumLevel = _settings.BaseLevel;
         _isSteppedUp = false;
 
-        var duration = Stopwatch.GetElapsedTime(_stepUpStartTimestamp, _clock()).TotalSeconds;
-        StepUpDurationHistogram.Record(duration);
+        StepUpDurationHistogram.Record(_time.GetElapsedTime(_stepUpStartTimestamp).TotalSeconds);
         _activeStepUpCounter.Add(-1);
 
-        (_summaryLogger ?? Log.Logger).Warning("Logging step down: restored minimum level to {Level}", _baseLevel);
+        Output.Warning("Logging step down: restored minimum level to {Level}", _settings.BaseLevel);
     }
-
-    private static long ToStopwatchTicks(TimeSpan span)
-        => (long)(span.TotalSeconds * Stopwatch.Frequency);
 
     /// <summary>
     /// Test-only accessor for the current timer generation. Reads under the lock.
@@ -408,25 +330,12 @@ public sealed class StepUpLoggingController : IDisposable
     }
 
     /// <summary>
-    /// Test-only accessor reporting whether the post-cap cooldown window is currently active. Reads under the lock.
-    /// </summary>
-    internal bool IsInCooldown
-    {
-        get
-        {
-            lock (_gate)
-            {
-                return _cooldownUntilTimestamp != 0 && _clock() < _cooldownUntilTimestamp;
-            }
-        }
-    }
-
-    /// <summary>
     /// Test-only deterministic invocation of the step-down callback with a captured generation,
     /// bypassing the real timer.
     /// </summary>
     internal void InvokeStepDownForTest(long capturedGeneration) => StepDownCallback(capturedGeneration);
 
+    /// <summary>Stops the timers and disposes the bypass logger this controller owns, flushing its buffers.</summary>
     public void Dispose()
     {
         lock (_gate)
@@ -454,11 +363,5 @@ public sealed class StepUpLoggingController : IDisposable
             (_summaryLogger as IDisposable)?.Dispose();
             _summaryLogger = null;
         }
-    }
-
-    private static LogEventLevel Parse(string? value, LogEventLevel fallback)
-    {
-        if (string.IsNullOrWhiteSpace(value)) return fallback;
-        return Enum.TryParse<LogEventLevel>(value, true, out var lvl) ? lvl : fallback;
     }
 }

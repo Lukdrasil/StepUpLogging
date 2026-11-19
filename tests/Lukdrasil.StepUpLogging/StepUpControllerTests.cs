@@ -96,49 +96,9 @@ public class StepUpControllerTests
     }
 
     [Fact]
-    public void ParseInvalidLevel_ReturnsFallback()
-    {
-        var opts = new StepUpLoggingOptions
-        {
-            BaseLevel = "InvalidLevel",
-            StepUpLevel = "AlsoInvalid",
-            DurationSeconds = 60
-        };
-
-        using var controller = new StepUpLoggingController(opts);
-
-        // Should fallback to Warning and Information
-        Assert.Equal(LogEventLevel.Warning, controller.LevelSwitch.MinimumLevel);
-    }
-
-    [Fact]
     public void ConstructorWithNullOptions_ThrowsArgumentNullException()
     {
         Assert.Throws<ArgumentNullException>(() => new StepUpLoggingController(null!));
-    }
-
-    [Fact]
-    public async Task RapidTriggers_RateLimited()
-    {
-        var opts = new StepUpLoggingOptions
-        {
-            BaseLevel = "Warning",
-            StepUpLevel = "Information",
-            DurationSeconds = 5
-        };
-
-        using var controller = new StepUpLoggingController(opts);
-
-        // First trigger should succeed
-        controller.Trigger();
-        Assert.True(controller.IsSteppedUp);
-
-        // Rapid second trigger within 5-second window should be rate-limited
-        controller.Trigger();
-
-        // Wait for timer to restore
-        await Task.Delay(TimeSpan.FromMilliseconds(5100), TestContext.Current.CancellationToken);
-        Assert.False(controller.IsSteppedUp);
     }
 }
 
@@ -214,22 +174,5 @@ public class RedactionTests
         Assert.DoesNotContain("abc123", redacted);
         Assert.Contains("[REDACTED]", redacted);
         Assert.Contains("data=ok", redacted);
-    }
-
-    [Fact]
-    public void Redact_InvalidRegex_ReturnsFallback()
-    {
-        var patterns = new[]
-        {
-            new System.Text.RegularExpressions.Regex("password=[^&]*", System.Text.RegularExpressions.RegexOptions.Compiled)
-        };
-
-        var compiled = new CompiledRedactionPatterns(patterns);
-
-        var input = "password=secret&other=value";
-        var redacted = compiled.Redact(input);
-
-        // Should still contain original sensitive data due to fallback
-        Assert.NotNull(redacted);
     }
 }
