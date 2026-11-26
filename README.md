@@ -225,6 +225,7 @@ The file sink is enabled by the `logFilePath` parameter of `AddStepUpLogging`: d
 | `RedactionExemptProperties` | none | Listed property names, such as `Jti`, skip the patterns on every event and on the request summary. A secret logged under a listed name is exported in clear; request paths, query strings, headers, route values and bodies are always redacted |
 | `ServiceVersion`, `ServiceInstanceId` | none | Added to every event when set |
 | `EnrichWithThreadId`, `EnrichWithProcessId`, `EnrichWithCallStack` | `false` | More properties on every event; call stacks are expensive |
+| `CaptureScopesOnException` | `true` | `false` stops recording scopes on every thrown exception; events logging an exception then lack the scopes of its throw site |
 
 Every option, with its default, is listed in [Configuration Options](#configuration-options).
 
@@ -1284,6 +1285,7 @@ the entries you still want in it.
 | `EnrichWithMachineName` | `true` | - | Include machine name in log events |
 | `EnrichWithCallStack` | `false` | - | Include call-stack information using Serilog.Enrichers.CallStack (https://github.com/hokagedami/serilog-stacktrace-enricher) |
 | `EnrichWithEnvironment` | `true` | - | Include environment name (Development/Production) |
+| `CaptureScopesOnException` | `true` | - | Add to an event that logs an exception the `BeginScope` and `LogContext` scopes open where it (or an inner exception) was thrown; a property the event already has keeps its value |
 | **Request Logging** |
 | `AlwaysLogRequestSummary` | `false` | - | Export one summary per request at `RequestSummaryLevel`, whatever the current level |
 | `RequestSummaryLevel` | `"Information"` | - | Level of the inbound and outbound request summary |

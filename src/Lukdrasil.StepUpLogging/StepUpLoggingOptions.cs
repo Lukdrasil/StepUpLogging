@@ -244,6 +244,18 @@ public sealed class StepUpLoggingOptions
     public bool RedactLogEventProperties { get; set; } = false;
 
     /// <summary>
+    /// Adds to an event that logs an exception the log scopes (<c>BeginScope</c> and <c>LogContext</c>) that were open
+    /// where that exception or one of its inner exceptions was thrown, so the request completion event, the exception
+    /// handler event and a <c>catch</c> outside the scope still carry them. A property the event already has keeps its
+    /// value. Default: <see langword="true"/>.
+    /// </summary>
+    /// <remarks>
+    /// Each thrown exception, handled or not, records its scopes, and they live as long as the exception object.
+    /// Set <see langword="false"/> for code that throws exceptions as control flow at a high rate.
+    /// </remarks>
+    public bool CaptureScopesOnException { get; set; } = true;
+
+    /// <summary>
     /// Enables capture of request bodies (POST, PUT, PATCH) in logs when logging is stepped-up.
     /// Default: false (to avoid performance impact in normal operation)
     /// </summary>
