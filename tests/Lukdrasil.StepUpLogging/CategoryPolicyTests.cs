@@ -281,6 +281,18 @@ public class CategoryPolicyTests
     }
 
     [Fact]
+    public void BufferExcluded_WithBufferingOff_IsNoRule_AndReadsNoDiagnostic()
+    {
+        var policy = Policy(o =>
+        {
+            o.EnablePreErrorBuffering = false;
+            o.PreErrorBufferExcludeCategories = ["Noisy"];
+        });
+
+        Assert.Equal(new CategoryVerdict(LogEventLevel.Warning, false), policy.Resolve(Event("Noisy", LogEventLevel.Debug), LogEventLevel.Warning, () => throw new InvalidOperationException()));
+    }
+
+    [Fact]
     public void BufferExcluded_IsNotLiftedByDiagnostic()
     {
         var policy = Policy(o => o.PreErrorBufferExcludeCategories = ["Noisy"]);

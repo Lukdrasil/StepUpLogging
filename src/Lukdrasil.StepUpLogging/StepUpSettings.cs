@@ -5,7 +5,8 @@ namespace Lukdrasil.StepUpLogging;
 /// <summary>
 /// The <see cref="StepUpLoggingOptions"/> resolved once from <c>IOptions&lt;StepUpLoggingOptions&gt;</c>, after binding,
 /// defaults and validation (ADR 0007): typed levels, durations, the <see cref="CategoryPolicy"/>, the excluded
-/// request paths and the sensitive headers. It is the only reader of the options at runtime; every module reads these instead of interpreting the raw options again.
+/// request paths and the sensitive headers. It is the only reader of the options at runtime; every module reads these
+/// instead of interpreting the raw options again.
 /// </summary>
 internal sealed class StepUpSettings
 {

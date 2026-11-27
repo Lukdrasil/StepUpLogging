@@ -31,8 +31,10 @@ is about what the buffer keeps, and `Hold` already owns the other buffer filters
 > buffer" rule was split across three modules: the framework rule flag in the floor lookup, a bool
 > `StepUpSink` passed to `Hold`, and this list matched again in `Hold`. `CategoryPolicy` now answers it
 > once, as `KeptOutOfBuffer` of the verdict `StepUpSink` already asks for, and `StepUpSink` does not hold
-> such an event. `PreErrorBufferSink` reads no category option. D1 to D3 hold unchanged: the list filters
-> the buffer only, below `Warning` only, and blank entries are dropped.
+> such an event. `PreErrorBufferSink` reads no category option. This takes the alternative D1 rejected,
+> filtering before `Hold`: its reason, that `Hold` owns the other buffer filters, no longer holds once one
+> module answers every category rule. D1 to D3 hold unchanged: the list filters the buffer only, below
+> `Warning` only, and blank entries are dropped.
 
 **D2. Only events below `Warning` are dropped.** A `Warning` of a listed category is held when the
 switch or a floor rejects it (for example `BaseLevel = Error`) and an `Error` flushes it, so the list

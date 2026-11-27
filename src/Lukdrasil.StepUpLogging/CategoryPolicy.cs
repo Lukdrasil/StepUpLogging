@@ -9,7 +9,7 @@ namespace Lukdrasil.StepUpLogging;
 internal readonly record struct CategoryVerdict(LogEventLevel ExportMinimum, bool KeptOutOfBuffer);
 
 /// <summary>
-/// The one reader of every category option: <see cref="StepUpLoggingOptions.NeverStepUpCategories"/> (ADR 0021),
+/// The one runtime reader of every category option: <see cref="StepUpLoggingOptions.NeverStepUpCategories"/> (ADR 0021),
 /// <see cref="StepUpLoggingOptions.CategoryFloors"/> with <see cref="StepUpLoggingOptions.DiagnosticExemptCategories"/>
 /// (ADR 0024), <see cref="StepUpLoggingOptions.PreErrorBufferExcludeCategories"/> (ADR 0028), the framework defaults
 /// (ADR 0029), <see cref="StepUpLoggingOptions.NeverTriggerCategories"/> and
@@ -41,7 +41,7 @@ internal sealed class CategoryPolicy
             .OrderByDescending(f => f.Key.Length)];
         _frameworkDefaults = alwaysOn ? [] : [.. StepUpSettings.FrameworkDefaultsFor(options.FrameworkCategoryDefaults).OrderByDescending(r => r.Prefix.Length)];
         _diagnosticExempt = StepUpSettings.NonBlank(options.DiagnosticExemptCategories);
-        _bufferExcluded = StepUpSettings.NonBlank(options.PreErrorBufferExcludeCategories);
+        _bufferExcluded = options.EnablePreErrorBuffering ? StepUpSettings.NonBlank(options.PreErrorBufferExcludeCategories) : [];
         _neverTrigger = StepUpSettings.NonBlank(options.NeverTriggerCategories);
         _alwaysExport = StepUpSettings.NonBlank(options.AlwaysExportCategories);
         _hasExportRules = _neverStepUp.Length > 0 || _floors.Length > 0 || _frameworkDefaults.Length > 0 || _bufferExcluded.Length > 0;

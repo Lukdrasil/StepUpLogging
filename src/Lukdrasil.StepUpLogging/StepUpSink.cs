@@ -14,21 +14,21 @@ internal sealed class StepUpSink : ILogEventSink, IDisposable
 {
     private readonly Serilog.ILogger _innerLogger;
     private readonly LoggingLevelSwitch _levelSwitch;
-    private readonly CategoryPolicy _categories;
+    private readonly CategoryPolicy _policy;
     private readonly PreErrorBufferSink? _heldBackBuffer;
     private readonly Func<bool>? _isDiagnosticActive;
     private bool _disposed;
 
     /// <param name="innerLogger">Pre-configured output logger (OTLP / Console / File sinks). No enrichers needed — events arrive already enriched from the root pipeline.</param>
     /// <param name="levelSwitch">Shared switch managed by <see cref="StepUpLoggingController"/>.</param>
-    /// <param name="categories">The category options that raise the export minimum or keep an event out of the buffer.</param>
+    /// <param name="policy">The category options that raise the export minimum or keep an event out of the buffer.</param>
     /// <param name="heldBackBuffer">Buffer that receives events this sink does not export; <see langword="null"/> when pre-error buffering is off.</param>
     /// <param name="isDiagnosticActive">Controller-owned diagnostic flag; <see langword="null"/> reads as never active.</param>
-    public StepUpSink(Serilog.ILogger innerLogger, LoggingLevelSwitch levelSwitch, CategoryPolicy categories, PreErrorBufferSink? heldBackBuffer = null, Func<bool>? isDiagnosticActive = null)
+    public StepUpSink(Serilog.ILogger innerLogger, LoggingLevelSwitch levelSwitch, CategoryPolicy policy, PreErrorBufferSink? heldBackBuffer = null, Func<bool>? isDiagnosticActive = null)
     {
         _innerLogger = innerLogger ?? throw new ArgumentNullException(nameof(innerLogger));
         _levelSwitch = levelSwitch ?? throw new ArgumentNullException(nameof(levelSwitch));
-        _categories = categories ?? throw new ArgumentNullException(nameof(categories));
+        _policy = policy ?? throw new ArgumentNullException(nameof(policy));
         _heldBackBuffer = heldBackBuffer;
         _isDiagnosticActive = isDiagnosticActive;
     }
@@ -37,7 +37,7 @@ internal sealed class StepUpSink : ILogEventSink, IDisposable
     {
         if (Refuses(logEvent)) return;
 
-        var verdict = _categories.Resolve(logEvent, _levelSwitch.MinimumLevel, _isDiagnosticActive);
+        var verdict = _policy.Resolve(logEvent, _levelSwitch.MinimumLevel, _isDiagnosticActive);
         if (logEvent.Level < verdict.ExportMinimum)
         {
             if (!verdict.KeptOutOfBuffer) _heldBackBuffer?.Hold(logEvent);
