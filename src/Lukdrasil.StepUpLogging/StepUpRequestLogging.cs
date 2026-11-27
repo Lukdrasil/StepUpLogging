@@ -24,9 +24,12 @@ internal sealed class StepUpRequestLogging(StepUpSettings settings, StepUpLoggin
 
     private static readonly LogEventProperty CompletionSource = new("SourceContext", new ScalarValue(CompletionSourceContext));
 
-    // HttpContext.Items keys: the completion level of a failed request, and the mark that its completion event carries the summary.
-    private static readonly object FailedCompletionLevel = new();
-    private static readonly object SummaryCarried = new();
+    // HttpContext.Items keys: the failure noted for Enrich, and the mark that the completion event carries the summary.
+    private static readonly object NotedFailure = new();
+    private static readonly object CompletionCarriesSummary = new();
+
+    // The summary fields the completion event sets itself, after the carried ones.
+    private static readonly HashSet<string> SetByCompletion = ["ClientIp", LogProperties.Jti, "QueryString", "RouteParameters"];
 
     private static readonly Meter Meter = new("StepUpLogging.RequestLogging", "1.0.0");
     private static readonly Counter<long> BodyCaptureCounter = Meter.CreateCounter<long>("request_body_captured_total", "count", "Number of requests with captured body");
@@ -51,7 +54,7 @@ internal sealed class StepUpRequestLogging(StepUpSettings settings, StepUpLoggin
         {
             options.Logger = logger;
             options.EnrichDiagnosticContext = Enrich;
-            options.GetLevel = OmitsSummaryOnError ? LevelNotingFailure : LevelOf;
+            options.GetLevel = OmitsSummaryOnError ? LevelNotingFailedRequest : LevelOf;
             options.GetMessageTemplateProperties = (context, _, elapsedMs, statusCode) =>
             [
                 new LogEventProperty("RequestMethod", new ScalarValue(context.Request.Method)),
@@ -84,9 +87,9 @@ internal sealed class StepUpRequestLogging(StepUpSettings settings, StepUpLoggin
         }
         finally
         {
-            if (!context.Items.ContainsKey(SummaryCarried))
+            if (!context.Items.ContainsKey(CompletionCarriesSummary))
             {
-                _summaries.WriteInbound(context, failed ? StatusCodes.Status500InternalServerError : context.Response.StatusCode, Stopwatch.GetElapsedTime(start).TotalMilliseconds);
+                _summaries.WriteInbound(context, StatusOf(context, failed), Stopwatch.GetElapsedTime(start).TotalMilliseconds);
             }
         }
     }
@@ -128,19 +131,23 @@ internal sealed class StepUpRequestLogging(StepUpSettings settings, StepUpLoggin
     }
 
     /// <summary>
-    /// <see cref="LevelOf"/>, noting the level of a failed request (status 400 or above, or an exception) for
-    /// <see cref="Enrich"/>: an exception's 500 is not yet on the response when the completion event is written.
+    /// <see cref="LevelOf"/>, noting the level and status of a failed request (status 400 or above, or an exception)
+    /// for <see cref="Enrich"/>: an exception's 500 is not yet on the response when the completion event is written.
     /// </summary>
-    private LogEventLevel LevelNotingFailure(HttpContext context, double elapsedMs, Exception? exception)
+    private LogEventLevel LevelNotingFailedRequest(HttpContext context, double elapsedMs, Exception? exception)
     {
         var level = LevelOf(context, elapsedMs, exception);
-        if (exception is not null || context.Response.StatusCode >= StatusCodes.Status400BadRequest)
+        var status = StatusOf(context, exception is not null);
+        if (status >= StatusCodes.Status400BadRequest)
         {
-            context.Items[FailedCompletionLevel] = level;
+            context.Items[NotedFailure] = new FailedRequest(level, status);
         }
 
         return level;
     }
+
+    // An unhandled exception is answered with 500, which is not on the response while it propagates.
+    private static int StatusOf(HttpContext context, bool threw) => threw ? StatusCodes.Status500InternalServerError : context.Response.StatusCode;
 
     // A 5xx with no exception is often a backend failure relayed by a proxy, not this application's;
     // TreatServerErrorStatusAsError = false keeps those out of the trigger path.
@@ -186,26 +193,31 @@ internal sealed class StepUpRequestLogging(StepUpSettings settings, StepUpLoggin
     }
 
     /// <summary>
-    /// When the request failed and its completion event will be exported, sets the summary's fields on it and marks
-    /// the request so <see cref="SummarizeAsync"/> writes no summary. The fields the completion event sets itself are
-    /// set after these and win. A failure here leaves the summary to be written.
+    /// When the request failed and its completion event will be exported, sets the summary's fields on it, routes it
+    /// past the level switch so a step-down before it reaches the output logger cannot drop it, and marks the request
+    /// so <see cref="SummarizeAsync"/> writes no summary. A failure here leaves the summary to be written.
     /// </summary>
     private void CarrySummaryIfFailed(IDiagnosticContext diagnosticContext, HttpContext context)
     {
-        if (!context.Items.TryGetValue(FailedCompletionLevel, out var noted) || noted is not LogEventLevel level || !CompletionExports(level))
+        if (!context.Items.TryGetValue(NotedFailure, out var noted) || noted is not FailedRequest failure || !CompletionExports(failure.Level))
         {
             return;
         }
 
         try
         {
-            var summary = InboundRequestSummary.From(context, ExcludedPaths.NormalizedPath(context.Request), context.Response.StatusCode, 0, settings.RequestSummaryDetail, settings.TrustForwardedHeaders, settings.ClientIpLogging, patterns);
-            foreach (var (name, value) in summary.CarriedFields())
+            if (_summaries.BuildInbound(context, failure.StatusCode, 0) is not { } summary)
+            {
+                return;
+            }
+
+            foreach (var (name, value) in summary.CarriedFields(SetByCompletion))
             {
                 diagnosticContext.Set(name, value);
             }
 
-            context.Items[SummaryCarried] = true;
+            diagnosticContext.Set(LogProperties.IsImmediate, true);
+            context.Items[CompletionCarriesSummary] = true;
         }
         catch
         {
@@ -213,13 +225,11 @@ internal sealed class StepUpRequestLogging(StepUpSettings settings, StepUpLoggin
         }
     }
 
-    /// <summary>Whether the output logger exports a completion event at <paramref name="level"/> now, by the rule of <see cref="StepUpSink"/>.</summary>
+    /// <summary>Whether the output loggers export a completion event at <paramref name="level"/> now.</summary>
     private bool CompletionExports(LogEventLevel level)
-    {
-        var probe = new LogEvent(DateTimeOffset.Now, level, null, MessageTemplate.Empty, [CompletionSource]);
-        return settings.Categories.AlwaysExports(probe)
-               || level >= settings.Categories.Resolve(probe, controller.LevelSwitch.MinimumLevel, () => controller.IsDiagnosticActive).ExportMinimum;
-    }
+        => settings.Categories.Exports(new LogEvent(DateTimeOffset.Now, level, null, MessageTemplate.Empty, [CompletionSource]), controller.LevelSwitch.MinimumLevel, () => controller.IsDiagnosticActive);
+
+    private readonly record struct FailedRequest(LogEventLevel Level, int StatusCode);
 
     private static void SetIfPresent(IDiagnosticContext diagnosticContext, string name, string? value)
     {

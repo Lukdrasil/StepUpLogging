@@ -6,7 +6,11 @@ namespace Lukdrasil.StepUpLogging;
 /// What the category options decide about one event: the level it must reach to be exported, and whether it stays
 /// out of the pre-error buffer when it is held back.
 /// </summary>
-internal readonly record struct CategoryVerdict(LogEventLevel ExportMinimum, bool KeptOutOfBuffer);
+internal readonly record struct CategoryVerdict(LogEventLevel ExportMinimum, bool KeptOutOfBuffer)
+{
+    /// <summary>Whether an event at <paramref name="level"/> reaches <see cref="ExportMinimum"/>.</summary>
+    internal bool Exports(LogEventLevel level) => level >= ExportMinimum;
+}
 
 /// <summary>
 /// The one runtime reader of every category option: <see cref="StepUpLoggingOptions.NeverStepUpCategories"/> (ADR 0021),
@@ -71,6 +75,13 @@ internal sealed class CategoryPolicy
         var keptOut = logEvent.Level < minimum && (frameworkExcluded || CategoryPrefix.MatchesAny(source, _bufferExcluded));
         return new(minimum, keptOut);
     }
+
+    /// <summary>
+    /// Whether the output loggers export <paramref name="logEvent"/> at <paramref name="switchLevel"/>: through the
+    /// immediate route (<see cref="AlwaysExports"/>) or by reaching the <see cref="Resolve"/> export minimum.
+    /// </summary>
+    internal bool Exports(LogEvent logEvent, LogEventLevel switchLevel, Func<bool>? isDiagnosticActive)
+        => AlwaysExports(logEvent) || Resolve(logEvent, switchLevel, isDiagnosticActive).Exports(logEvent.Level);
 
     /// <summary>Whether an Error or Fatal event from this source must not raise the level (<c>NeverTriggerCategories</c>).</summary>
     internal bool NeverTriggers(LogEvent logEvent) => CategoryPrefix.MatchesAny(logEvent, _neverTrigger);

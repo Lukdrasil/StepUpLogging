@@ -26,16 +26,24 @@ internal sealed class RequestSummaryWriter(StepUpSettings settings, CompiledReda
     {
         try
         {
-            var path = ExcludedPaths.NormalizedPath(context.Request);
-            if (!settings.ExcludedPaths.Contains(path))
+            if (BuildInbound(context, statusCode, elapsedMs) is { } summary)
             {
-                Emit(InboundRequestSummary.From(context, path, statusCode, elapsedMs, settings.RequestSummaryDetail, settings.TrustForwardedHeaders, settings.ClientIpLogging, patterns));
+                Emit(summary);
             }
         }
         catch
         {
             // Never let the summary fail or mask the request.
         }
+    }
+
+    /// <summary>The summary of the request in <paramref name="context"/>; <see langword="null"/> when its path is excluded.</summary>
+    internal RequestSummary? BuildInbound(HttpContext context, int statusCode, double elapsedMs)
+    {
+        var path = ExcludedPaths.NormalizedPath(context.Request);
+        return settings.ExcludedPaths.Contains(path)
+            ? null
+            : InboundRequestSummary.From(context, path, statusCode, elapsedMs, settings.RequestSummaryDetail, settings.TrustForwardedHeaders, settings.ClientIpLogging, patterns);
     }
 
     /// <summary>Writes the summary of one call through the client named <paramref name="clientName"/>; <paramref name="response"/> is null when it failed.</summary>

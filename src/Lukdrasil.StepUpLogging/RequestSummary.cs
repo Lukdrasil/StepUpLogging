@@ -120,15 +120,19 @@ internal sealed class RequestSummary
 
     /// <summary>
     /// The fields a request completion event carries in place of this summary (ADR 0043): <c>ClientKind</c>,
-    /// <c>UserAgent</c>, then the optional fields in the order they were added, under their long names.
+    /// <c>UserAgent</c>, then the optional fields in the order they were added, except those named in
+    /// <paramref name="setByCarrier"/>, each under the key this summary writes it with.
     /// </summary>
-    internal IEnumerable<KeyValuePair<string, object>> CarriedFields()
+    internal IEnumerable<KeyValuePair<string, object>> CarriedFields(IReadOnlySet<string> setByCarrier)
     {
-        yield return new("ClientKind", _clientKind);
-        yield return new("UserAgent", _userAgent);
-        foreach (var field in _fields)
+        yield return new(Key("ClientKind"), _clientKind);
+        yield return new(Key("UserAgent"), _userAgent);
+        foreach (var (name, value) in _fields)
         {
-            yield return field;
+            if (!setByCarrier.Contains(name))
+            {
+                yield return new(Key(name), value);
+            }
         }
     }
 

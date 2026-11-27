@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Serilog.Events;
 using Xunit;
 
@@ -18,7 +19,10 @@ public class RequestSummaryOnErrorTests
 {
     private const string UserAgent = "curl/8.4.0";
 
-    private static async Task<LogEvent[]> ExportedAsync(string path, params (string Key, string Value)[] options)
+    private static Task<LogEvent[]> ExportedAsync(string path, params (string Key, string Value)[] options)
+        => ExportedAsync(path, steppedUp: false, options);
+
+    private static async Task<LogEvent[]> ExportedAsync(string path, bool steppedUp, params (string Key, string Value)[] options)
     {
         var captureKey = Guid.NewGuid().ToString("N");
         var settings = new Dictionary<string, string?>
@@ -51,8 +55,18 @@ public class RequestSummaryOnErrorTests
                 app.UseStepUpRequestLogging();
                 app.MapGet("/status/{code:int}", (int code) => Results.StatusCode(code));
                 app.MapGet("/throw", IResult () => throw new InvalidOperationException("boom"));
+                app.MapGet("/abort/{code:int}", (int code, HttpContext context) =>
+                {
+                    context.Response.StatusCode = code;
+                    context.Abort();
+                });
 
                 await app.StartAsync(TestContext.Current.CancellationToken);
+                if (steppedUp)
+                {
+                    app.Services.GetRequiredService<StepUpLoggingController>().Trigger();
+                }
+
                 using var client = app.GetTestClient();
                 using var request = new HttpRequestMessage(HttpMethod.Get, path);
                 request.Headers.TryAddWithoutValidation("User-Agent", UserAgent);
@@ -60,9 +74,9 @@ public class RequestSummaryOnErrorTests
                 {
                     using var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
                 }
-                catch (InvalidOperationException)
+                catch (Exception)
                 {
-                    // The test server rethrows the handler's exception.
+                    // The test server rethrows the handler's exception and fails an aborted request.
                 }
 
                 await Task.Delay(200, TestContext.Current.CancellationToken);
@@ -81,7 +95,7 @@ public class RequestSummaryOnErrorTests
 
     private static bool IsCompletion(LogEvent e) => e.Properties.ContainsKey("RequestMethod");
 
-    private static object? Scalar(LogEvent e, string name) => e.Properties.TryGetValue(name, out var value) ? ((ScalarValue)value).Value : null;
+    private static object? Scalar(LogEvent e, string name) => e.Properties.TryGetValue(name, out var value) ? Assert.IsType<ScalarValue>(value).Value : null;
 
     [Theory]
     [InlineData(null)]
@@ -167,5 +181,74 @@ public class RequestSummaryOnErrorTests
         var events = await ExportedAsync("/status/429");
 
         Assert.Equal(StepUpRequestLogging.CompletionSourceContext, Scalar(Assert.Single(events, IsCompletion), "SourceContext"));
+    }
+
+    [Fact]
+    public async Task Omit_SteppedUpAboveTheBaseLevel_WritesOnlyTheCompletionEvent()
+    {
+        var events = await ExportedAsync("/status/429", steppedUp: true, ("RequestSummaryOnError", "Omit"), ("BaseLevel", "Error"));
+
+        var completion = Assert.Single(events);
+        Assert.True(IsCompletion(completion));
+    }
+
+    [Fact]
+    public async Task Omit_TheCarriedCompletionEvent_IsExportedPastTheLevelSwitch()
+    {
+        var events = await ExportedAsync("/status/429", ("RequestSummaryOnError", "Omit"));
+
+        Assert.True(LogProperties.HasFlag(Assert.Single(events), LogProperties.IsImmediate));
+    }
+
+    [Theory]
+    [InlineData(200)]
+    [InlineData(400)]
+    public async Task Omit_AnAbortedRequest_WhoseInformationCompletionIsNotExported_KeepsTheSummary(int status)
+    {
+        var events = await ExportedAsync($"/abort/{status}", ("RequestSummaryOnError", "Omit"));
+
+        Assert.True(IsSummary(Assert.Single(events)));
+    }
+
+    [Fact]
+    public async Task Omit_AnAbortedFailedRequest_WhoseCompletionIsExported_WritesOnlyTheCompletionEvent()
+    {
+        var events = await ExportedAsync("/abort/400", ("RequestSummaryOnError", "Omit"), ("BaseLevel", "Information"));
+
+        var completion = Assert.Single(events);
+        Assert.Equal(LogEventLevel.Information, completion.Level);
+        Assert.Equal(true, Scalar(completion, "Aborted"));
+    }
+
+    [Fact]
+    public async Task Omit_AnAbortedSuccessfulRequest_WhoseCompletionIsExported_KeepsTheSummary()
+    {
+        var events = await ExportedAsync("/abort/200", ("RequestSummaryOnError", "Omit"), ("BaseLevel", "Information"));
+
+        Assert.Single(events, IsSummary);
+        Assert.Single(events, IsCompletion);
+    }
+
+    [Fact]
+    public async Task Omit_TheCarriedFields_AreRedacted()
+    {
+        var events = await ExportedAsync("/status/429", ("RequestSummaryOnError", "Omit"), ("RedactionRegexes:0", "curl/[0-9.]+"), ("RedactionRegexes:1", "rate-limited"));
+
+        var completion = Assert.Single(events);
+        Assert.Equal("[REDACTED]", Scalar(completion, "UserAgent"));
+        Assert.Equal("[REDACTED]-client", Scalar(completion, "ClientId"));
+    }
+
+    [Fact]
+    public async Task Omit_Minimal_CarriesTheFieldsUnderTheSummaryShortKeys()
+    {
+        var events = await ExportedAsync("/status/429", ("RequestSummaryOnError", "Omit"), ("RequestSummaryDetail", "Minimal"));
+
+        var completion = Assert.Single(events);
+        Assert.Equal(nameof(ClientKind.Tool), Scalar(completion, "ck"));
+        Assert.Equal(UserAgent, Scalar(completion, "ua"));
+        Assert.Equal("rate-limited-client", Scalar(completion, "cid"));
+        Assert.False(completion.Properties.ContainsKey("ClientKind"));
+        Assert.False(completion.Properties.ContainsKey("ip"));
     }
 }

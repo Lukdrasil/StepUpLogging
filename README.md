@@ -352,7 +352,7 @@ t=17:13:45.110 l=INF tid=55b5a5163e2d4b008bfa8938d5189c3c msg="Outbound GET /v1/
 
 Not logged: `Referer`, `sub`, email and name claims, cookies, `Authorization`.
 
-**RequestSummaryOnError** (`Keep` by default) set to `Omit` writes one line per failed request instead of two. A request that ends with status 400 or above or an unhandled exception gets no summary when its completion event is exported; the completion event carries the summary's fields instead, at `RequestSummaryDetail`, under the long names above. When the completion event is not exported (a 4xx `Warning` under `BaseLevel` `Error`, say), the summary is written as usual, so every request keeps at least one line. A 2xx always writes its summary. See ADR 0043.
+**RequestSummaryOnError** (`Keep` by default) set to `Omit` writes one line per failed request instead of two. A request that ends with status 400 or above or an unhandled exception gets no summary when its completion event is exported; the completion event carries the summary's fields instead, at `RequestSummaryDetail`, under the same keys the summary uses. When the completion event is not exported (a 4xx `Warning` under `BaseLevel` `Error`, say), the summary is written as usual, so every request keeps at least one line. A 2xx always writes its summary. See ADR 0043.
 
 Summary events are marked with the "IsRequestSummary" property and are processed by the library's BypassSink so they are exported independently of the StepUp level switch (base Warning) and the normal step-up flow.
 
