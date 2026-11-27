@@ -65,6 +65,10 @@ application running by losing audit silently. This ADR rejects every one of them
      (`age > max`) reports `OldestRecordStatus` (default `Degraded`, as with `UnreachableStatus` no
      record is lost yet). It is independent of the other signals and the worst one wins. There is
      no default age because the right one depends on how long the receiver may be down for.
+   - > **Amended (2026-11-27, ADR 0041):** `SpoolHead` is no longer set by the worker per drain step. It is
+     part of the `Spool` module, which moves it as the drain reads and settles records: the oldest record a
+     read handed out and nothing removed or set aside. The gauge, the health signal and their values are
+     unchanged.
 
 6. **At 100 % of cap the new record is dropped**, logged at Critical and counted — `WriteAsync`
    returns `AuditWriteResult.Dropped` (ADR 0018 D6) rather than throwing, so core neither counts it
