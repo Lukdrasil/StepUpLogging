@@ -69,15 +69,14 @@ public class EncryptedSpoolAuditSinkTests
         var clock = time ?? new FakeTimeProvider();
         return new(
             Options.Create(options),
-            new SpoolWriter(options.SpoolDirectory),
-            new SpoolUsageTracker(new SpoolCapacity(options), clock, options.SpoolFullRecheckInterval),
+            new Spool(options, clock),
             encryptor,
             clock,
             logger ?? NullLogger<EncryptedSpoolAuditSink>.Instance);
     }
 
     private static EncryptedSpoolHealthCheck CreateHealthCheck(EncryptedSpoolOptions options) =>
-        new(Options.Create(options), new DeadLetterBox(Options.Create(options)), new EndpointReachability(), new SpoolHead(), TimeProvider.System);
+        new(Options.Create(options), new Spool(options, TimeProvider.System), new EndpointReachability(), TimeProvider.System);
 
     /// <summary>A record of its own, so every write lands on a spool file of its own.</summary>
     private static AuditEvent SpoolableEvent() =>

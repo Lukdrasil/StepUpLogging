@@ -9,7 +9,7 @@ namespace Lukdrasil.StepUpLogging.Audit.EncryptedSpool;
 /// <summary>
 /// Delivers spooled audit records to the configured endpoint, oldest first, and deletes each only
 /// once the endpoint has confirmed it stored it (ADR 0020 D7). A record it can never deliver goes
-/// to <see cref="DeadLetterBox"/>; anything else that goes wrong leaves the record spooled for the
+/// <c>dead-letter/</c> (<see cref="Spool.SetAside"/>); anything else that goes wrong leaves the record spooled for the
 /// next attempt, which backs off while the endpoint keeps failing. With
 /// <see cref="EncryptedSpoolOptions.DeliveryBatchSize"/> above 1 it delivers a run of records as
 /// one request, and what the endpoint says about it counts for every record in it; a rejected
@@ -46,10 +46,8 @@ namespace Lukdrasil.StepUpLogging.Audit.EncryptedSpool;
 internal sealed class DrainWorker(
     IOptions<EncryptedSpoolOptions> options,
     IHttpClientFactory httpClientFactory,
-    DeadLetterBox deadLetterBox,
+    Spool spool,
     EndpointReachability reachability,
-    SpoolHead spoolHead,
-    SpoolUsageTracker usageTracker,
     TimeProvider timeProvider,
     IEnumerable<IAuditRejectionObserver> rejectionObservers,
     ILogger<DrainWorker> logger) : BackgroundService
@@ -59,7 +57,6 @@ internal sealed class DrainWorker(
 
     private readonly EncryptedSpoolOptions _options = options.Value;
     private readonly IAuditRejectionObserver[] _rejectionObservers = [.. rejectionObservers];
-    private readonly SpoolReader _reader = new(options.Value.SpoolDirectory);
     private readonly Uri _auditEndpoint = new($"{options.Value.EndpointBaseUrl.TrimEnd('/')}/audit");
     private readonly Uri _batchEndpoint = new($"{options.Value.EndpointBaseUrl.TrimEnd('/')}/audit/batch");
 
@@ -241,10 +238,9 @@ internal sealed class DrainWorker(
         // recycles it, which is what keeps a process-long worker from pinning a stale DNS answer.
         var client = httpClientFactory.CreateClient(HttpClientName);
 
-        foreach (var step in Plan(_reader.ReadOldestFirst(), _options.DeliveryBatchSize))
+        foreach (var step in Plan(spool.ReadOldestFirst(), _options.DeliveryBatchSize))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            spoolHead.Seen(step.Head.CreatedUtc);
 
             var carryOn = step.Faulted is { } faulted
                 ? SetAsideFaulted(faulted)
@@ -258,8 +254,6 @@ internal sealed class DrainWorker(
                 return;
             }
         }
-
-        spoolHead.Cleared();
     }
 
     /// <summary>How long to wait before the next attempt after <paramref name="consecutiveFailures"/> failed ones.</summary>
@@ -321,7 +315,7 @@ internal sealed class DrainWorker(
     {
         if (batch.Count == 1)
         {
-            DeadLetterAndRelease(batch[0], DeadLetterReason.Rejected, WithProblemCode(attempt));
+            DeadLetter(batch[0], DeadLetterReason.Rejected, WithProblemCode(attempt));
             await NotifyRejectedAsync(attempt.Rejection, cancellationToken).ConfigureAwait(false);
             return true;
         }
@@ -433,11 +427,11 @@ internal sealed class DrainWorker(
     {
         if (!entry.IsCorrupt)
         {
-            return DeadLetterIfUnreadableTooLong(entry.FilePath);
+            return DeadLetterIfUnreadableTooLong(entry);
         }
 
         _unreadableAttempts.Remove(entry.FilePath);
-        DeadLetterAndRelease(entry, DeadLetterReason.Corrupt, "the spool file could not be parsed as an audit envelope");
+        DeadLetter(entry, DeadLetterReason.Corrupt, "the spool file could not be parsed as an audit envelope");
         return true;
     }
 
@@ -449,14 +443,10 @@ internal sealed class DrainWorker(
         }
     }
 
-    /// <summary>Deletes a record the endpoint confirmed and tells the usage tally its room is free.</summary>
+    /// <summary>Removes a record the endpoint confirmed from the spool.</summary>
     private void Delivered(SpoolEntry entry)
     {
-        // The token is taken before the delete: a measure that runs in between may or may not have
-        // seen the file, and then this release is ignored rather than counted off twice.
-        var token = usageTracker.ReleaseToken;
-        File.Delete(entry.FilePath);
-        usageTracker.Released(token, entry.Contents.Length);
+        spool.Remove(entry);
         EncryptedSpoolMetrics.DrainedCounter.Add(1);
         ReportDeliveredAfterFailures(entry.FilePath);
     }
@@ -472,15 +462,8 @@ internal sealed class DrainWorker(
         {
             logger.LogInformation(
                 "Audit record {SpoolFile} was delivered after {FailedAttempts} failed attempts and removed from the spool; {SpooledRecords} records remain spooled.",
-                Path.GetFileName(spoolFilePath), settled.FailedAttempts, usageTracker.Snapshot.Records);
+                Path.GetFileName(spoolFilePath), settled.FailedAttempts, spool.Usage.Records);
         }
-    }
-
-    private void DeadLetterAndRelease(SpoolEntry entry, DeadLetterReason reason, string description)
-    {
-        var token = usageTracker.ReleaseToken;
-        DeadLetter(entry.FilePath, reason, description);
-        usageTracker.Released(token, entry.Contents.Length);
     }
 
     /// <summary>
@@ -502,9 +485,10 @@ internal sealed class DrainWorker(
     /// Sets a record aside that no retry can deliver, and says so at Critical: it never reached the
     /// audit store, and only an operator can decide what to do about it (ADR 0020 D7).
     /// </summary>
-    private void DeadLetter(string spoolFilePath, DeadLetterReason reason, string description)
+    private void DeadLetter(SpoolEntry entry, DeadLetterReason reason, string description)
     {
-        var deadLetterPath = deadLetterBox.Deposit(spoolFilePath);
+        var spoolFilePath = entry.FilePath;
+        var deadLetterPath = spool.SetAside(entry);
         EncryptedSpoolMetrics.DeadLetteredCounter.Add(1, new KeyValuePair<string, object?>(DeadLetterReason.TagName, reason.Tag));
 
         using var span = _stuckRecords.Settled(spoolFilePath);
@@ -525,15 +509,16 @@ internal sealed class DrainWorker(
     }
 
     /// <summary>
-    /// Counts one more failed read of <paramref name="spoolFilePath"/> and dead-letters it once
+    /// Counts one more failed read of <paramref name="entry"/> and dead-letters it once
     /// <see cref="EncryptedSpoolOptions.UnreadableRetryLimit"/> is reached, returning whether it
     /// did. The endpoint was never contacted for a file that cannot even be opened, so this counts
     /// on <see cref="EncryptedSpoolMetrics.DrainFailureCounter"/> like any other read fault but
     /// never touches <see cref="EndpointReachability"/> — that would blame the receiver for a local
     /// disk fault.
     /// </summary>
-    private bool DeadLetterIfUnreadableTooLong(string spoolFilePath)
+    private bool DeadLetterIfUnreadableTooLong(SpoolEntry entry)
     {
+        var spoolFilePath = entry.FilePath;
         var attempts = _unreadableAttempts.GetValueOrDefault(spoolFilePath) + 1;
         if (attempts < _options.UnreadableRetryLimit)
         {
@@ -546,7 +531,7 @@ internal sealed class DrainWorker(
         }
 
         _unreadableAttempts.Remove(spoolFilePath);
-        DeadLetter(spoolFilePath, DeadLetterReason.Unreadable, $"the spool file could not be read from disk after {_options.UnreadableRetryLimit} attempts");
+        DeadLetter(entry, DeadLetterReason.Unreadable, $"the spool file could not be read from disk after {_options.UnreadableRetryLimit} attempts");
         return true;
     }
 
@@ -557,11 +542,7 @@ internal sealed class DrainWorker(
     internal readonly record struct DeliveryAttempt(DeliveryOutcome Outcome, string Description, AuditRejection? Rejection = null);
 
     /// <summary>One delivery the plan calls for: a batch of readable records, or a faulted file standing on its own.</summary>
-    internal readonly record struct DrainStep(IReadOnlyList<SpoolEntry> Batch, SpoolEntry? Faulted)
-    {
-        /// <summary>The oldest record the step stands on: the faulted file, or the first of the batch.</summary>
-        public SpoolEntry Head => Faulted ?? Batch[0];
-    }
+    internal readonly record struct DrainStep(IReadOnlyList<SpoolEntry> Batch, SpoolEntry? Faulted);
 
     internal enum DeliveryOutcome
     {

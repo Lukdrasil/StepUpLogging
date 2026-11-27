@@ -196,8 +196,8 @@ public class BatchedDrainTests
 
         await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(0, harness.Tracker.Snapshot.Records);
-        Assert.Equal(0, harness.Tracker.Snapshot.Bytes);
+        Assert.Equal(0, harness.Spool.Usage.Records);
+        Assert.Equal(0, harness.Spool.Usage.Bytes);
     }
 
     [Fact]
@@ -206,11 +206,11 @@ public class BatchedDrainTests
         using var harness = new SpoolDrainHarness(FakeAuditReceiver.Responding(HttpStatusCode.OK), BatchesOf(64));
         harness.PutInSpool("20260813T1159000000000Z-11111111-1111-7111-8111-111111111111.env", "not an envelope");
         await harness.SpoolAsync(AuditedOperation(Noon));
-        Assert.Equal(2, harness.Tracker.Snapshot.Records);
+        Assert.Equal(2, harness.Spool.Usage.Records);
 
         await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(0, harness.Tracker.Snapshot.Records);
+        Assert.Equal(0, harness.Spool.Usage.Records);
     }
 
     [Fact]

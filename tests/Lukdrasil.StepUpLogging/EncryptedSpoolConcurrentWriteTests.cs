@@ -31,8 +31,7 @@ public class EncryptedSpoolConcurrentWriteTests
         var time = new FakeTimeProvider();
         return new(
             Options.Create(options),
-            writer,
-            new SpoolUsageTracker(new SpoolCapacity(options), time, options.SpoolFullRecheckInterval),
+            new Spool(options, time, writer),
             new FakeAuditPayloadEncryptor(),
             time,
             logger ?? NullLogger<EncryptedSpoolAuditSink>.Instance);

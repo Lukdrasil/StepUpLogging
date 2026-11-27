@@ -105,7 +105,7 @@ internal sealed class SingleClientHttpClientFactory(HttpClient client) : IHttpCl
 /// A drain worker over its own temporary spool, with the sink that fills it, the receiver it
 /// posts to, and the health check that reports on it — all wired the way
 /// <c>AddEncryptedSpoolAuditSink</c> wires them, the sink and the worker sharing one
-/// <see cref="SpoolUsageTracker"/> and one clock.
+/// <see cref="Spool"/> and one clock.
 /// </summary>
 internal sealed class SpoolDrainHarness : IDisposable
 {
@@ -135,18 +135,16 @@ internal sealed class SpoolDrainHarness : IDisposable
 
         Receiver = receiver;
         _client = new HttpClient(receiver);
-        Tracker = new SpoolUsageTracker(new SpoolCapacity(SpoolOptions), Time, SpoolOptions.SpoolFullRecheckInterval);
+        Spool = new Spool(SpoolOptions, Time);
         _sink = new EncryptedSpoolAuditSink(
             Options.Create(SpoolOptions),
-            new SpoolWriter(SpoolOptions.SpoolDirectory),
-            Tracker,
+            Spool,
             Encryptor,
             Time,
             NullLogger<EncryptedSpoolAuditSink>.Instance);
-        DeadLetter = new DeadLetterBox(Options.Create(SpoolOptions));
         Reachability = new EndpointReachability();
         Worker = StartedOver();
-        HealthCheck = new EncryptedSpoolHealthCheck(Options.Create(SpoolOptions), DeadLetter, Reachability, Head, Time);
+        HealthCheck = new EncryptedSpoolHealthCheck(Options.Create(SpoolOptions), Spool, Reachability, Time);
     }
 
     public EncryptedSpoolOptions SpoolOptions { get; }
@@ -159,14 +157,10 @@ internal sealed class SpoolDrainHarness : IDisposable
 
     public RecordingLogger<DrainWorker> Logger { get; } = new();
 
-    public SpoolUsageTracker Tracker { get; }
-
-    public DeadLetterBox DeadLetter { get; }
+    /// <summary>The spool the sink fills, the worker drains and the health check reports on.</summary>
+    public Spool Spool { get; }
 
     public EndpointReachability Reachability { get; }
-
-    /// <summary>The oldest record the worker is waiting on, shared by the worker and the health check.</summary>
-    public SpoolHead Head { get; } = new();
 
     public DrainWorker Worker { get; }
 
@@ -178,7 +172,7 @@ internal sealed class SpoolDrainHarness : IDisposable
 
     /// <summary>Another worker over the same spool, endpoint and directories — what a restarted host builds.</summary>
     public DrainWorker StartedOver() =>
-        new(Options.Create(SpoolOptions), new SingleClientHttpClientFactory(_client), DeadLetter, Reachability, Head, Tracker, Time, _rejectionObservers, Logger);
+        new(Options.Create(SpoolOptions), new SingleClientHttpClientFactory(_client), Spool, Reachability, Time, _rejectionObservers, Logger);
 
     /// <summary>Spools <paramref name="auditEvent"/> through the sink, exactly as an audited operation does.</summary>
     public async Task<AuditEvent> SpoolAsync(AuditEvent auditEvent)
@@ -193,7 +187,7 @@ internal sealed class SpoolDrainHarness : IDisposable
 
     public IReadOnlyList<string> SpooledFileNames() => FileNamesIn(SpoolOptions.SpoolDirectory);
 
-    public IReadOnlyList<string> DeadLetteredFileNames() => FileNamesIn(DeadLetter.DirectoryPath);
+    public IReadOnlyList<string> DeadLetteredFileNames() => FileNamesIn(Spool.DeadLetterDirectory);
 
     /// <summary>Puts <paramref name="contents"/> into the spool under <paramref name="fileName"/>, as a fault on the disk would leave it.</summary>
     public string PutInSpool(string fileName, string contents)

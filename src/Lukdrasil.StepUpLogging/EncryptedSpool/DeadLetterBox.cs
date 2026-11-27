@@ -1,5 +1,3 @@
-using Microsoft.Extensions.Options;
-
 namespace Lukdrasil.StepUpLogging.Audit.EncryptedSpool;
 
 /// <summary>
@@ -8,10 +6,10 @@ namespace Lukdrasil.StepUpLogging.Audit.EncryptedSpool;
 /// deletes from it: it is the evidence that an audit record never reached the audit store, and it
 /// stays until an operator has looked at it (ADR 0020 D7).
 /// </summary>
-internal sealed class DeadLetterBox(IOptions<EncryptedSpoolOptions> options)
+internal sealed class DeadLetterBox(EncryptedSpoolOptions options)
 {
     /// <summary>The directory dead-lettered records are kept in, a sibling of the spool directory.</summary>
-    public string DirectoryPath { get; } = SiblingOfSpool(options.Value.SpoolDirectory);
+    public string DirectoryPath { get; } = SiblingOfSpool(options.SpoolDirectory);
 
     /// <summary>True while any record is waiting to be looked at.</summary>
     public bool HoldsRecords => Directory.Exists(DirectoryPath) && Directory.EnumerateFiles(DirectoryPath).Any();

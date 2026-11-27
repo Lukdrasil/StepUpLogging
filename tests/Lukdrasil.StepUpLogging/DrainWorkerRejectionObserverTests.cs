@@ -231,7 +231,7 @@ public class DrainWorkerRejectionObserverTests
         builder.Services.AddHttpClient(DrainWorker.HttpClientName)
             .ConfigurePrimaryHttpMessageHandler(() => FakeAuditReceiver.Answering(UnknownKeyRejection));
         using var host = builder.Build();
-        await host.Services.GetRequiredService<SpoolWriter>().WriteAsync(SpoolEnvelopes.CreatedAt(DateTimeOffset.UtcNow));
+        await host.Services.GetRequiredService<Spool>().Reserve(SpoolEnvelopes.CreatedAt(DateTimeOffset.UtcNow)).WriteAsync();
 
         await host.Services.GetServices<IHostedService>().OfType<DrainWorker>().Single()
             .DrainAsync(TestContext.Current.CancellationToken);

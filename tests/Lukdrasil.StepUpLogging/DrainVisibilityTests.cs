@@ -30,7 +30,14 @@ public class DrainVisibilityTests
         (await harness.HealthCheck.CheckHealthAsync(new HealthCheckContext(), TestContext.Current.CancellationToken)).Status;
 
     private static long OldestAgeSeconds(SpoolDrainHarness harness) =>
-        harness.Head.AgeSecondsAt(harness.Time.GetUtcNow());
+        (long)harness.Spool.OldestRecordAgeAt(harness.Time.GetUtcNow()).TotalSeconds;
+
+    /// <summary>Spools a record created at <see cref="Noon"/> and runs one cycle the receiver answers with 503, so the drain waits on it.</summary>
+    private static async Task StalledOnRecordFromNoon(SpoolDrainHarness harness)
+    {
+        await harness.SpoolAsync(AuditedOperation(at: Noon));
+        await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+    }
 
     private static EncryptedSpoolOptions ValidOptions() => new()
     {
@@ -84,7 +91,6 @@ public class DrainVisibilityTests
         head.Seen(Noon.AddMinutes(5));
 
         Assert.Equal(TimeSpan.Zero, head.AgeAt(Noon));
-        Assert.Equal(0, head.AgeSecondsAt(Noon));
     }
 
     [Fact]
@@ -117,13 +123,13 @@ public class DrainVisibilityTests
         int ageSeconds, HealthStatus? configuredStatus, HealthStatus expectedStatus)
     {
         using var harness = new SpoolDrainHarness(
-            FakeAuditReceiver.Responding(HttpStatusCode.OK),
+            FakeAuditReceiver.Responding(HttpStatusCode.ServiceUnavailable),
             options =>
             {
                 options.OldestRecordMaxAge = TimeSpan.FromSeconds(60);
                 if (configuredStatus is not null) options.OldestRecordStatus = configuredStatus.Value;
             });
-        harness.Head.Seen(Noon);
+        await StalledOnRecordFromNoon(harness);
         harness.Time.SetUtcNow(Noon.AddSeconds(ageSeconds));
 
         Assert.Equal(expectedStatus, await HealthOf(harness));
@@ -132,8 +138,8 @@ public class DrainVisibilityTests
     [Fact]
     public async Task HealthCheck_OldestRecordMaxAgeUnset_StalledHeadStaysHealthy()
     {
-        using var harness = new SpoolDrainHarness(FakeAuditReceiver.Responding(HttpStatusCode.OK));
-        harness.Head.Seen(Noon);
+        using var harness = new SpoolDrainHarness(FakeAuditReceiver.Responding(HttpStatusCode.ServiceUnavailable));
+        await StalledOnRecordFromNoon(harness);
         harness.Time.SetUtcNow(Noon.AddDays(1));
 
         Assert.Equal(HealthStatus.Healthy, await HealthOf(harness));
@@ -238,7 +244,7 @@ public class DrainVisibilityTests
         listener.SetMeasurementEventCallback<long>((_, measurement, _, _) => observed.Add(measurement));
         listener.Start();
         listening = true;
-        _ = new EncryptedSpoolGauges(harness.Tracker, harness.Head, harness.Time);
+        _ = new EncryptedSpoolGauges(harness.Spool, harness.Time);
 
         harness.Time.Advance(TimeSpan.FromSeconds(30));
         listener.RecordObservableInstruments();

@@ -2,8 +2,9 @@ namespace Lukdrasil.StepUpLogging.Audit.EncryptedSpool;
 
 /// <summary>
 /// The creation instant of the oldest record the drain worker is waiting on, so how long a stalled
-/// drain has been stalled can be read without scanning the spool. The drain worker writes it; the
-/// <c>audit_spool_oldest_age_seconds</c> gauge and the health check read it from other threads.
+/// drain has been stalled can be read without scanning the spool. <see cref="Spool"/> writes it as
+/// the drain reads and settles records; the <c>audit_spool_oldest_age_seconds</c> gauge and the
+/// health check read it from other threads.
 /// </summary>
 internal sealed class SpoolHead
 {
@@ -26,7 +27,4 @@ internal sealed class SpoolHead
         var ticks = Interlocked.Read(ref _createdUtcTicks);
         return ticks == Empty || ticks > now.UtcTicks ? TimeSpan.Zero : TimeSpan.FromTicks(now.UtcTicks - ticks);
     }
-
-    /// <summary>The age in whole seconds, the value the gauge reports.</summary>
-    public long AgeSecondsAt(DateTimeOffset now) => (long)AgeAt(now).TotalSeconds;
 }

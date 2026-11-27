@@ -39,10 +39,8 @@ public class SpoolDrainBenchmarks
         _worker = new DrainWorker(
             Options.Create(_options),
             new SingleClientFactory(_client),
-            new DeadLetterBox(Options.Create(_options)),
+            new Spool(_options, TimeProvider.System),
             new EndpointReachability(),
-            new SpoolHead(),
-            SpoolBenchmarkSupport.TrackerFor(_options),
             TimeProvider.System,
             [],
             NullLogger<DrainWorker>.Instance);

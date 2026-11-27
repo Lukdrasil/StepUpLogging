@@ -86,18 +86,12 @@ public static class StepUpLoggingEncryptedSpoolExtensions
             .Configure(configureOptions)
             .ValidateOnStart();
 
-        // Singletons because each is a seam two collaborators must meet on: the sink writes the
-        // tally the gauges observe, the drain worker sets the dead-letter and endpoint signals the
-        // health check reports, and the SpoolWriter's crash-recovery sweep runs in its constructor,
-        // so a second instance would sweep the same .tmp files a second time.
-        builder.Services.AddSingleton(sp => new SpoolWriter(SpoolOptions(sp).SpoolDirectory));
-        builder.Services.AddSingleton(sp => new SpoolUsageTracker(
-            new SpoolCapacity(SpoolOptions(sp)),
-            sp.GetRequiredService<TimeProvider>(),
-            SpoolOptions(sp).SpoolFullRecheckInterval));
-        builder.Services.AddSingleton<DeadLetterBox>();
+        // Singletons because each is a seam two collaborators must meet on: the sink fills the
+        // spool the drain worker empties and the gauges and health check observe, the drain worker
+        // sets the endpoint signal the health check reports, and the spool's crash-recovery sweep
+        // runs in its constructor, so a second instance would sweep the same .tmp files a second time.
+        builder.Services.AddSingleton(sp => new Spool(SpoolOptions(sp), sp.GetRequiredService<TimeProvider>()));
         builder.Services.AddSingleton<EndpointReachability>();
-        builder.Services.AddSingleton<SpoolHead>();
         // TryAdd, not Add: a consumer who registered their own TimeProvider first (a FakeTimeProvider
         // in their own integration tests, say) keeps it — this library's opinion only applies when
         // nothing else already supplied one.
@@ -110,7 +104,7 @@ public static class StepUpLoggingEncryptedSpoolExtensions
         builder.Services.AddHostedService<DrainWorker>();
         builder.Services.AddHealthChecks().AddCheck<EncryptedSpoolHealthCheck>(HealthCheckName, tags: [HealthCheckTag]);
 
-        // Forces the sink — and the SpoolWriter whose constructor runs the crash-recovery sweep —
+        // Forces the sink — and the spool whose constructor runs the crash-recovery sweep —
         // to resolve at host start, so an unwritable SpoolDirectory surfaces there instead of on
         // the first audited business operation (B07 hand-off). The gauges resolve alongside it so
         // their ObservableGauge instruments exist from host start rather than only once something
