@@ -81,3 +81,7 @@ created with `new HttpClient()` is not covered.
 > outbound builder moved from `OutboundRequestSummaryHandler` to `OutboundRequestSummary`, beside
 > `InboundRequestSummary`; the handler only times the call. `StepUpLoggingController` no longer writes summaries. The decisions above are unchanged, and so
 > is every summary's level, template, property set and order.
+
+> **Amended (2026-11-27, ADR 0043):** with `RequestSummaryOnError` `Omit`, a failed inbound request whose completion
+> event is exported writes no summary; the completion event carries the summary's fields instead. `Keep`, the
+> default, leaves every decision above unchanged.
