@@ -27,3 +27,6 @@ Domain terms of `Lukdrasil.StepUpLogging`.
   process, still in the spool. Avoid: failed record, pending record.
 - **record trace**: (ADR 0037) the trace a stuck record's retry warnings and its closing entry share.
   Avoid: delivery trace, spool trace.
+- **client prefix**: (ADR 0042) the network, /24 for IPv4 and /48 for IPv6, written in CIDR form in place of the
+  client address when `ClientIpLogging` or `ClientIpAudit` is `Prefix`. Avoid: anonymized IP, truncated IP,
+  masked IP.
