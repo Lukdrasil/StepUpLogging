@@ -31,7 +31,8 @@ The field names and the Minimal short key `ip` (ADR 0033) do not change.
 
 **D4. Only a value that parses is masked, and it is parsed after redaction.** With `TrustForwardedHeaders` the
 address is the first `X-Forwarded-For` entry, which may carry a port, brackets or arbitrary text. The redacted
-value is parsed as an endpoint or an address. A value that does not parse, including one a redaction regex
+value is parsed as an endpoint or an address, and an IPv4 value must be the dotted quad itself, since the parser
+also reads shorthand such as `42` or `0x7f.0.0.1` as an address. A value that does not parse, including one a redaction regex
 changed, is omitted instead of written as raw text. Parsing the raw value would bypass redaction of a
 client-supplied value.
 

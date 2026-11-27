@@ -51,10 +51,15 @@ public class RequestClientIpModeTests
         Assert.Equal(expected, clientIp);
     }
 
-    [Fact]
-    public void Prefix_OmitsAForwardedEntryThatDoesNotParse()
+    [Theory]
+    [InlineData("unknown")]
+    [InlineData("42")]
+    [InlineData("1.2")]
+    [InlineData("0x7f.0.0.1")]
+    [InlineData("010.0.0.1:80")]
+    public void Prefix_OmitsAForwardedEntryThatIsNotAnAddress(string firstEntry)
     {
-        var (clientIp, _) = RequestClient.Addresses(Context("10.0.0.1", "unknown, 10.0.0.2"), true, ClientIpMode.Prefix, NoPatterns);
+        var (clientIp, _) = RequestClient.Addresses(Context("10.0.0.1", $"{firstEntry}, 10.0.0.2"), true, ClientIpMode.Prefix, NoPatterns);
 
         Assert.Null(clientIp);
     }

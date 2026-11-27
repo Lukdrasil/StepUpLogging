@@ -35,13 +35,14 @@ internal static class RequestClient
         try
         {
             var (forwardedFor, firstEntry) = RedactedForwardedFor(httpContext.Request.Headers, patterns);
+            var trustedEntry = trustForwardedHeaders ? firstEntry : null;
             var remoteIp = httpContext.Connection.RemoteIpAddress;
             if (mode == ClientIpMode.Full)
             {
-                return (trustForwardedHeaders && firstEntry is not null ? firstEntry : remoteIp?.ToString(), forwardedFor);
+                return (trustedEntry ?? remoteIp?.ToString(), forwardedFor);
             }
 
-            var clientIp = trustForwardedHeaders && firstEntry is not null ? PrefixOfEntry(firstEntry) : PrefixOf(remoteIp);
+            var clientIp = trustedEntry is not null ? PrefixOfEntry(trustedEntry) : PrefixOf(remoteIp);
             return (clientIp, PrefixOfEachEntry(forwardedFor));
         }
         catch
@@ -50,7 +51,6 @@ internal static class RequestClient
         }
     }
 
-    // The client prefix of each entry that parses, joined with ", "; null when none does.
     private static string? PrefixOfEachEntry(string? forwardedFor)
     {
         if (forwardedFor is null)
@@ -62,9 +62,27 @@ internal static class RequestClient
         return prefixes.Length == 0 ? null : string.Join(", ", prefixes);
     }
 
-    // An entry may carry a port or brackets ("198.51.100.9:5678", "[2001:db8::1]:443").
+    // An entry may carry a port or brackets ("198.51.100.9:5678", "[2001:db8::1]:443"). An IPv4 entry must be the
+    // dotted quad itself: the parser also reads shorthand such as "42" or "0x7f.0.0.1" as an address.
     private static string? PrefixOfEntry(string entry)
-        => IPEndPoint.TryParse(entry, out var endpoint) ? PrefixOf(endpoint.Address) : null;
+    {
+        if (!IPEndPoint.TryParse(entry, out var endpoint))
+        {
+            return null;
+        }
+
+        var address = endpoint.Address;
+        if (address.AddressFamily == AddressFamily.InterNetwork)
+        {
+            var text = address.ToString();
+            if (entry != text && !entry.StartsWith(text + ":", StringComparison.Ordinal))
+            {
+                return null;
+            }
+        }
+
+        return PrefixOf(address);
+    }
 
     // The /24 network of an IPv4 address (also of an IPv4-mapped IPv6 one), the /48 network of an IPv6 address.
     private static string? PrefixOf(IPAddress? address)
