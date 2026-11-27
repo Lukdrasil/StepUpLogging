@@ -66,7 +66,7 @@ public class InboundRequestSummaryTests
     }
 
     private static LogEvent From(HttpContext context, RequestSummaryDetail detail = RequestSummaryDetail.Full, CompiledRedactionPatterns? patterns = null, string path = Path)
-        => InboundRequestSummary.From(context, path, 200, 1.5, detail, false, patterns ?? NoPatterns)
+        => InboundRequestSummary.From(context, path, 200, 1.5, detail, false, ClientIpMode.Full, patterns ?? NoPatterns)
             .ToLogEvent(LogEventLevel.Information, Logger);
 
     private static object? Scalar(LogEvent logEvent, string name) => ((ScalarValue)logEvent.Properties[name]).Value;

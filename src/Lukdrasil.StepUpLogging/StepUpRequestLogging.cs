@@ -137,7 +137,7 @@ internal sealed class StepUpRequestLogging(StepUpSettings settings, StepUpLoggin
         }
 
         diagnosticContext.Set("Headers", RequestHeaderRedaction.RedactRequestHeaders(request.Headers, settings.SensitiveHeaders, patterns, redactions.Note));
-        SetIfPresent(diagnosticContext, "ClientIp", RequestClient.Addresses(context, settings.TrustForwardedHeaders, patterns).ClientIp);
+        SetIfPresent(diagnosticContext, "ClientIp", RequestClient.Addresses(context, settings.TrustForwardedHeaders, settings.ClientIpLogging, patterns).ClientIp);
         if (redactions.Close())
         {
             activity?.SetTag("security.redaction_applied", true);

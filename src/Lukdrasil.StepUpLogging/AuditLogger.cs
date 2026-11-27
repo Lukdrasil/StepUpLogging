@@ -127,11 +127,11 @@ internal sealed class AuditTrail(
         // in the package, so the audit trail resolves the client the same way request logging does
         // (including the TrustForwardedHeaders decision).
         var (clientIp, _) = RequestClient.Addresses(
-            httpContext, settings.TrustForwardedHeaders, redactionPatterns);
+            httpContext, settings.TrustForwardedHeaders, settings.ClientIpAudit, redactionPatterns);
         var rawUserAgent = RequestClient.UserAgent(httpContext.Request);
 
         // Redaction follows the origin of the value: the User-Agent is client-supplied and is
-        // redacted as it is everywhere else in the package. So is the client IP, but only on the
+        // redacted as it is everywhere else in the package. So is a Full client IP, but only on the
         // branch that took it from X-Forwarded-For — a connection address reaches the sink bare.
         return (clientIp, rawUserAgent is null ? null : redactionPatterns.Redact(rawUserAgent));
     }

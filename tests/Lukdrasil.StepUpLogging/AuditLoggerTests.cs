@@ -126,7 +126,9 @@ public class AuditLoggerTests
             HttpContext? httpContext = null,
             string[]? redactionRegexes = null,
             bool trustForwardedHeaders = false,
-            string[]? neverStepUpCategories = null)
+            string[]? neverStepUpCategories = null,
+            ClientIpMode clientIpAudit = ClientIpMode.Full,
+            ClientIpMode clientIpLogging = ClientIpMode.Off)
         {
             var options = new StepUpLoggingOptions
             {
@@ -134,6 +136,8 @@ public class AuditLoggerTests
                 StepUpLevel = "Information",
                 DurationSeconds = 10,
                 TrustForwardedHeaders = trustForwardedHeaders,
+                ClientIpAudit = clientIpAudit,
+                ClientIpLogging = clientIpLogging,
                 RedactionRegexes = redactionRegexes ?? [],
                 NeverStepUpCategories = neverStepUpCategories ?? [],
                 FrameworkCategoryDefaults = FrameworkCategoryPreset.None
@@ -363,6 +367,28 @@ public class AuditLoggerTests
         await harness.AuditLogger.AuditAsync(SuccessEvent());
 
         Assert.Equal(RemoteIp, Assert.Single(sink.Written).SourceIp);
+    }
+
+    [Fact]
+    public async Task AuditAsync_OmitsSourceIp_WhenClientIpAuditIsOff_EvenWithClientIpLoggingFull()
+    {
+        var sink = new RecordingAuditSink();
+        using var harness = new Harness(sink, HttpContextWith(), clientIpAudit: ClientIpMode.Off, clientIpLogging: ClientIpMode.Full);
+
+        await harness.AuditLogger.AuditAsync(SuccessEvent());
+
+        Assert.Null(Assert.Single(sink.Written).SourceIp);
+    }
+
+    [Fact]
+    public async Task AuditAsync_WritesTheClientPrefix_WhenClientIpAuditIsPrefix()
+    {
+        var sink = new RecordingAuditSink();
+        using var harness = new Harness(sink, HttpContextWith(), clientIpAudit: ClientIpMode.Prefix);
+
+        await harness.AuditLogger.AuditAsync(SuccessEvent());
+
+        Assert.Equal("198.51.100.0/24", Assert.Single(sink.Written).SourceIp);
     }
 
     [Fact]

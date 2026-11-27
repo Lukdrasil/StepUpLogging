@@ -1,3 +1,23 @@
+# Migrating to v9.0.0
+
+## The client address is off by default
+
+**What changed.** `ClientIpLogging` and `ClientIpAudit` default to `Off`. The request summary and the completion event
+leave out `ClientIp` and `ForwardedFor`, audit events leave out `SourceIp`, and `X-Forwarded-For`, `Forwarded`,
+`X-Real-IP` and `X-Original-For` are `[REDACTED]` in the logged `Headers`.
+
+**Why.** A client IP address is personal data under GDPR. Logging it should be a decision, not a default.
+
+**Migrate.** To keep the 8.x output, set both options to `Full`:
+
+```json
+{ "SerilogStepUp": { "ClientIpLogging": "Full", "ClientIpAudit": "Full" } }
+```
+
+Set either to `Prefix` to write only the network (`203.0.113.0/24`, `2001:db8:1234::/48`). The field names and the
+`Minimal` short key `ip` are unchanged. An audit endpoint that validates `SourceIp` as a bare address must accept CIDR
+text before you choose `Prefix` for `ClientIpAudit`.
+
 # Migrating to v8.0.0
 
 No option, log output or audit wire format changed. The public surface shrank to the members an application uses.

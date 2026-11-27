@@ -77,7 +77,7 @@ Check it after the first deployment. `outputs none` means no log leaves the proc
 | Request body capture | Off |
 | Excluded paths | `/healthz`, `/metrics`, `/health` |
 | Redaction | `Authorization`, `Proxy-Authorization`, `Cookie`, `X-API-Key`, `X-Auth-Token`, `X-Access-Token` and other credential headers always; no regex patterns |
-| Client IP | The connection's remote address; `X-Forwarded-For` is logged as `ForwardedFor` but not trusted |
+| Client IP | Not logged and not audited: `ClientIp`, `ForwardedFor` and `SourceIp` are left out, and `X-Forwarded-For`, `Forwarded`, `X-Real-IP` and `X-Original-For` are redacted in the logged headers (see [Client IP](#ip-address-detection)) |
 | Enrichment | `Application`, `Environment`, `MachineName`, trace and span ids, structured exception details |
 | Invalid configuration | The host does not start; the error names each failing key and its value. Unknown keys under `SerilogStepUp` are logged as warnings |
 
@@ -212,6 +212,8 @@ The file sink is enabled by the `logFilePath` parameter of `AddStepUpLogging`: d
 | `ExcludePaths` | `/healthz`, `/metrics`, `/health` | A configured list replaces these, so list them again if you still want them excluded, or set `AdditionalExcludePaths` to add paths and keep the defaults |
 | `AdditionalExcludePaths` | none | Added to `ExcludePaths` (to the defaults when `ExcludePaths` is not configured), so `SerilogStepUp__AdditionalExcludePaths__0=/.well-known/*` adds one path without restating the defaults |
 | `TrustForwardedHeaders` | `false` | `true` takes `ClientIp` from `X-Forwarded-For`, which any client can forge unless your proxy overwrites it |
+| `ClientIpLogging` | `Off` | `Prefix` logs the client prefix (`203.0.113.0/24`, `2001:db8:1234::/48`); `Full` logs the address and the IP headers unchanged, as 8.x did |
+| `ClientIpAudit` | `Off` | `Prefix` or `Full` writes `SourceIp` on audit events; independent of `ClientIpLogging` |
 | `TreatServerErrorStatusAsError` | `true` | `false` logs a 5xx without an exception at `Warning`, so it no longer steps up or flushes. Unhandled exceptions are still `Error` |
 
 **Buffer, redaction and enrichment**
@@ -269,7 +271,7 @@ The `UseStepUpRequestLogging()` middleware enriches each request with detailed c
 - **QueryString** - Query parameters (redacted based on `RedactionRegexes`)
 - **RouteParameters** - Route parameter values (e.g., `{id}`, `{role}`), redacted based on `RedactionRegexes`; a value whose text sits inside a redacted part of the path becomes `[REDACTED]`
 - **Headers** - HTTP request headers with automatic redaction of sensitive headers
-- **ClientIp** - `Connection.RemoteIpAddress`, or the first `X-Forwarded-For` entry with `TrustForwardedHeaders` (see [Security](#security)); left out when unknown
+- **ClientIp** - `Connection.RemoteIpAddress`, or the first `X-Forwarded-For` entry with `TrustForwardedHeaders` (see [Security](#security)), written as `ClientIpLogging` says; left out when unknown or when `ClientIpLogging` is `Off`
 - **RequestBody** - POST/PUT/PATCH bodies (when `CaptureRequestBody` is enabled and logging is stepped-up)
 
 ### Example Log Output
@@ -338,14 +340,14 @@ t=17:13:45.110 l=INF tid=55b5a5163e2d4b008bfa8938d5189c3c msg="Outbound GET /v1/
 | `Route` | yes | yes | the matched route template, e.g. `/orders/{id}` |
 | `Aborted` | yes | yes | `true` when the client aborted the request; left out otherwise |
 | `ClientId` | yes | yes | `azp` claim, else `client_id`; redacted like `Jti` |
-| `ClientIp` | yes | yes | `Connection.RemoteIpAddress`, or the first `X-Forwarded-For` entry with `TrustForwardedHeaders` (see [Security](#security)) |
+| `ClientIp` | yes | yes | `Connection.RemoteIpAddress`, or the first `X-Forwarded-For` entry with `TrustForwardedHeaders` (see [Security](#security)), written as `ClientIpLogging` says; left out under `Off` |
 | `Jti` | yes | yes | `jti` claim, redacted unless listed in `RedactionExemptProperties` |
 | `Protocol`, `Scheme`, `Host` | | yes | request line; `Host` redacted |
 | `RequestContentLength`, `ResponseContentLength` | | yes | when known |
 | `IsAuthenticated`, `AuthScheme` | | yes | `User.Identity` |
 | `EndpointName` | | yes | `Endpoint.DisplayName` |
 | `QueryString`, `RouteParameters` | | yes | redacted |
-| `ForwardedFor` | | yes | raw `X-Forwarded-For`, redacted, untrusted |
+| `ForwardedFor` | | yes | `X-Forwarded-For`, redacted, untrusted, written as `ClientIpLogging` says; left out under `Off` |
 
 Not logged: `Referer`, `sub`, email and name claims, cookies, `Authorization`.
 
@@ -419,12 +421,22 @@ still log at Error.
 
 ### IP Address Detection
 
-By default the library takes `ClientIp` from `HttpContext.Connection.RemoteIpAddress` and
-**does not** trust the `X-Forwarded-For` (XFF) header, because that header is client-supplied
-and spoofable. When XFF is present, its raw value is still logged separately as `ForwardedFor`
-(redacted) for diagnostics.
+`ClientIpLogging` (logs) and `ClientIpAudit` (audit `SourceIp`) decide whether the client address is written (ADR 0042):
 
-1. **Default (`TrustForwardedHeaders: false`)** - `ClientIp` = `Connection.RemoteIpAddress`; XFF is ignored for `ClientIp` but surfaced as `ForwardedFor`.
+| Mode | Written |
+|---|---|
+| `Off` (default) | Nothing. `ClientIp`, `ForwardedFor` and `SourceIp` are left out, and the IP headers are redacted in the logged `Headers` |
+| `Prefix` | The client prefix: /24 for IPv4, /48 for IPv6, an IPv4-mapped address as IPv4. `ForwardedFor` is masked per entry. A value that does not parse is left out. The IP headers are redacted in the logged `Headers` |
+| `Full` | The address unchanged, as 8.x did |
+
+The library only changes what it logs. Request headers reach your app and downstream services unchanged. See [CONFIGURATION.md](CONFIGURATION.md) for every option.
+
+Which address is used: the library takes `ClientIp` from `HttpContext.Connection.RemoteIpAddress` and
+**does not** trust the `X-Forwarded-For` (XFF) header, because that header is client-supplied
+and spoofable. When XFF is present and `ClientIpLogging` is not `Off`, its value is logged separately as
+`ForwardedFor` (redacted) for diagnostics.
+
+1. **Default (`TrustForwardedHeaders: false`)** - `ClientIp` = `Connection.RemoteIpAddress`; XFF is ignored for `ClientIp` but surfaced as `ForwardedFor` unless `ClientIpLogging` is `Off`.
 2. **`TrustForwardedHeaders: true`** - `ClientIp` = first `X-Forwarded-For` entry when present (v2 behavior). Only enable this behind a reverse proxy you control **and** with `ForwardedHeadersMiddleware` configured. See [Security](#security).
 3. **Graceful degradation** - Omits `ClientIp` if detection fails.
 
@@ -796,7 +808,7 @@ Every `AuditEvent` has:
 - **Caller-supplied, optional:** `TargetType`, `TargetId`, `Reason`, `Data`, `OldValues`, `NewValues` (state before/after the action, like `Data` never redacted — supply only the fields that changed, not a whole entity), `OnBehalfOfId`, `TenantId`.
 - **Library-filled:** `EventId` (a UUIDv7 stamped on every call; a caller-set value is overwritten — this is the field a retrying or spooling sink deduplicates on), `TimestampUtc` (UTC), `TraceId`, `SpanId` (from OpenTelemetry), `SourceIp` (redacted on only one of its two branches — see below), `UserAgent` (always redacted; see [Security](#security)).
 
-`SourceIp` is redacted asymmetrically, by where the address came from: an address read from `X-Forwarded-For` (only when `TrustForwardedHeaders = true`) is client-supplied and goes through redaction, while an address read from the connection is supplied by the network layer, cannot be forged, and reaches your sink bare. This is the same client-IP rule request logging uses (ADR 0008), reused rather than restated.
+`SourceIp` is written only when `ClientIpAudit` is `Prefix` or `Full` (default `Off`). It is redacted asymmetrically, by where the address came from: an address read from `X-Forwarded-For` (only when `TrustForwardedHeaders = true`) is client-supplied and goes through redaction, while an address read from the connection is supplied by the network layer, cannot be forged, and reaches your sink bare. This is the same client-IP rule request logging uses (ADR 0008), reused rather than restated.
 
 The library does **not** copy the `Data` dictionary — if your sink buffers the event and your code mutates the dictionary afterwards, the audit record sees the mutations. Pass a snapshot if you need to mutate it: `Data = new Dictionary<string, object?>(myDict)`.
 
@@ -1245,6 +1257,8 @@ the entries you still want in it.
 
 ## Configuration Options
 
+Every option, with its type and effect, is also listed in [CONFIGURATION.md](CONFIGURATION.md).
+
 | Option | Default | Environment Variable | Description |
 |---|---|---|---|
 | **Step-Up Behavior** |
@@ -1300,6 +1314,8 @@ the entries you still want in it.
 | `RedactLogEventProperties` | `false` | - | Opt-in: also sweep the string-valued and URI-like (`PathString`, `QueryString`, `HostString`, `Uri`) scalar properties of application log events with `RedactionRegexes`, not just request metadata. See [Security](#security) |
 | `AdditionalSensitiveHeaders` | `[]` | - | Custom header names to redact in request logging |
 | `TrustForwardedHeaders` | `false` | - | When `true`, `ClientIp` is taken from the first `X-Forwarded-For` entry (v2 behavior). Only enable behind a proxy you control with `ForwardedHeadersMiddleware`. See [Security](#security). |
+| `ClientIpLogging` | `Off` | `SerilogStepUp__ClientIpLogging` | `Off`, `Prefix` or `Full`: how `ClientIp`, `ForwardedFor` and the IP headers are logged. See [IP Address Detection](#ip-address-detection) |
+| `ClientIpAudit` | `Off` | `SerilogStepUp__ClientIpAudit` | `Off`, `Prefix` or `Full`: how audit `SourceIp` is written |
 | `TreatServerErrorStatusAsError` | `true` | - | When `false`, a request completing with status >= 500 but **no** exception is logged at Warning instead of Error, so it does not trigger step-up. Set this in a reverse proxy / BFF where most 5xx are relayed from a backend. An unhandled exception is still Error. |
 | **Hosting** |
 | `SetStaticLogger` | `false` | - | When `true`, the built logger is assigned to Serilog's static `Log.Logger` and host dispose calls `Log.CloseAndFlush()` (pre-5.0.0 behavior). By default `Log.Logger` is left unchanged: log through DI `ILogger<T>`. Read once at registration. See [MIGRATION.md](MIGRATION.md#migrating-to-v500). |
@@ -1550,7 +1566,7 @@ only enable it behind a proxy you fully control. By default the library does not
 proxy and need the real client address, configure ASP.NET Core's
 [`ForwardedHeadersMiddleware`](https://learn.microsoft.com/aspnet/core/host-and-deploy/proxy-load-balancer)
 with your known proxies so `Connection.RemoteIpAddress` reflects the true client, and leave
-`TrustForwardedHeaders` at `false`. The raw header is always logged (redacted) as
+`TrustForwardedHeaders` at `false`. Unless `ClientIpLogging` is `Off`, the header is logged (redacted, and masked per entry under `Prefix`) as
 `ForwardedFor` for diagnostics.
 
 ### Redaction: always-on for request data, opt-in for application logs

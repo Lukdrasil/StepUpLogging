@@ -52,7 +52,7 @@ public class RequestFieldBenchmarks
     /// <summary>Extracts and redacts the client address and the forwarded-for header.</summary>
     [Benchmark]
     public (string? ClientIp, string? ForwardedFor) ClientAddresses() =>
-        RequestClient.Addresses(_context, trustForwardedHeaders: false, _patterns);
+        RequestClient.Addresses(_context, trustForwardedHeaders: false, ClientIpMode.Full, _patterns);
 
     /// <summary>Extracts the user agent.</summary>
     [Benchmark]
