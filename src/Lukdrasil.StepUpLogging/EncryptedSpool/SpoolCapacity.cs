@@ -66,8 +66,8 @@ internal sealed class SpoolCapacity(EncryptedSpoolOptions options)
 /// <remarks>
 /// Writers reserve room before they write (<see cref="TryReserve"/>), so the cap holds for writers
 /// in flight without any of them waiting for another's fsync. The tally is only ever too high,
-/// never too low: records leave the spool behind this tracker's back — the drain worker deletes
-/// them once delivered and says so through <see cref="Released"/>, which a measure may overtake —
+/// never too low: records leave the spool behind this tracker's back — <see cref="Spool"/> deletes
+/// or dead-letters them and says so through <see cref="Released"/>, which a measure may overtake —
 /// so it can report the spool full early, but never late. Early would drop a record for room that
 /// already exists, so a full verdict is confirmed against the disk, at most once per recheck
 /// interval and by one thread at a time; every other writer at the cap is refused from the tally.

@@ -14,8 +14,7 @@ namespace Lukdrasil.StepUpLogging.Audit.EncryptedSpool;
 /// </summary>
 internal sealed class EncryptedSpoolAuditSink(
     IOptions<EncryptedSpoolOptions> options,
-    SpoolWriter writer,
-    SpoolUsageTracker usageTracker,
+    Spool spool,
     IAuditPayloadEncryptor encryptor,
     TimeProvider timeProvider,
     ILogger<EncryptedSpoolAuditSink> logger) : IAuditEventSink, IDisposable
@@ -35,25 +34,23 @@ internal sealed class EncryptedSpoolAuditSink(
         // taken before the encrypted size is known, and a record dropped for room the drain worker
         // freed a microsecond later is gone for good.
         var encryptedPayload = await EncryptAsync(payload).ConfigureAwait(false);
-        var record = SpoolWriter.Prepare(new SpoolEnvelope
+        // Reserving room, not holding a gate, is what makes the cap hold: concurrent writers each
+        // reserve their record before writing it, so none of them is admitted into room another one
+        // has already taken, and none waits for another's fsync (issue #69).
+        var reservation = spool.Reserve(new SpoolEnvelope
         {
             EventId = auditEvent.EventId,
             CreatedUtc = auditEvent.TimestampUtc,
             Payload = encryptedPayload
         });
+        ReportReachingWarnThreshold(reservation.Verdict);
 
-        // Reserving room, not holding a gate, is what makes the cap hold: concurrent writers each
-        // reserve their record before writing it, so none of them is admitted into room another one
-        // has already taken, and none waits for another's fsync (issue #69).
-        var verdict = usageTracker.TryReserve(record.Contents.Length);
-        ReportReachingWarnThreshold(verdict);
-
-        if (!verdict.Admitted)
+        if (!reservation.Verdict.Admitted)
         {
-            return Drop(auditEvent, verdict.Usage);
+            return Drop(auditEvent, reservation.Verdict.Usage);
         }
 
-        await WriteToSpoolAsync(record).ConfigureAwait(false);
+        await reservation.WriteAsync().ConfigureAwait(false);
         _dropLog.Stored();
         return AuditWriteResult.Stored;
     }
@@ -74,23 +71,6 @@ internal sealed class EncryptedSpoolAuditSink(
             EncryptedSpoolMetrics.EncryptionFailureCounter.Add(1);
             throw;
         }
-    }
-
-    private async Task WriteToSpoolAsync(SpoolRecord record)
-    {
-        try
-        {
-            await writer.WriteAsync(record).ConfigureAwait(false);
-        }
-        catch
-        {
-            // A write that failed part-way leaves a `.tmp` occupying the spool until the next
-            // start-up sweep, never bigger than the record, so the record stays counted.
-            usageTracker.Abandon(record.Contents.Length);
-            throw;
-        }
-
-        usageTracker.Commit(record.Contents.Length);
     }
 
     /// <summary>

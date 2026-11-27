@@ -49,15 +49,11 @@ internal static class SpoolBenchmarkSupport
         EndpointBaseUrl = "https://audit.example/api"
     };
 
-    internal static SpoolUsageTracker TrackerFor(EncryptedSpoolOptions options) =>
-        new(new SpoolCapacity(options), TimeProvider.System, options.SpoolFullRecheckInterval);
-
     /// <summary>A sink over <paramref name="options"/>'s spool, built the way the host builds it, minus the DI container.</summary>
     internal static EncryptedSpoolAuditSink SinkFor(EncryptedSpoolOptions options) =>
         new(
             Options.Create(options),
-            new SpoolWriter(options.SpoolDirectory),
-            TrackerFor(options),
+            new Spool(options, TimeProvider.System),
             new PassThroughEncryptor(),
             TimeProvider.System,
             NullLogger<EncryptedSpoolAuditSink>.Instance);

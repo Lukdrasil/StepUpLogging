@@ -22,13 +22,11 @@ namespace Lukdrasil.StepUpLogging.Audit.EncryptedSpool;
 /// </summary>
 internal sealed class EncryptedSpoolHealthCheck(
     IOptions<EncryptedSpoolOptions> options,
-    DeadLetterBox deadLetterBox,
+    Spool spool,
     EndpointReachability reachability,
-    SpoolHead spoolHead,
     TimeProvider timeProvider) : IHealthCheck
 {
     private readonly EncryptedSpoolOptions _options = options.Value;
-    private readonly SpoolCapacity _capacity = new(options.Value);
 
     /// <inheritdoc />
     public Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken = default)
@@ -46,7 +44,7 @@ internal sealed class EncryptedSpoolHealthCheck(
 
     private Signal SpoolFillSignal()
     {
-        var usage = _capacity.Measure();
+        var usage = spool.Measure();
         var holdings =
             $"The audit spool at {_options.SpoolDirectory} holds {usage.Records} of {_options.SpoolMaxEntries} records " +
             $"({usage.Bytes} of {_options.SpoolMaxBytes} bytes).";
@@ -60,10 +58,10 @@ internal sealed class EncryptedSpoolHealthCheck(
     }
 
     private Signal DeadLetterSignal() =>
-        deadLetterBox.HoldsRecords
+        spool.HoldsDeadLetters
             ? new(
                 HealthStatus.Unhealthy,
-                $"Audit records the endpoint will never accept are waiting in {deadLetterBox.DirectoryPath}. They never reached the audit store, and nothing removes them: investigate each one and clear the directory by hand.")
+                $"Audit records the endpoint will never accept are waiting in {spool.DeadLetterDirectory}. They never reached the audit store, and nothing removes them: investigate each one and clear the directory by hand.")
             : new(HealthStatus.Healthy, "No audit record has been dead-lettered.");
 
     private Signal EndpointSignal() =>
@@ -75,7 +73,7 @@ internal sealed class EncryptedSpoolHealthCheck(
 
     private Signal OldestRecordSignal()
     {
-        var age = spoolHead.AgeAt(timeProvider.GetUtcNow());
+        var age = spool.OldestRecordAgeAt(timeProvider.GetUtcNow());
         var waiting = $"The oldest spooled audit record has been waiting {(long)age.TotalSeconds} seconds.";
 
         return _options.OldestRecordMaxAge is { } maxAge && age > maxAge

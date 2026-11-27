@@ -97,7 +97,7 @@ public class EncryptedSpoolResilienceTests
     }
 
     private static async Task SpoolOneRecordAsync(IHost host) =>
-        await host.Services.GetRequiredService<SpoolWriter>().WriteAsync(SpoolEnvelopes.CreatedAt(DateTimeOffset.UtcNow));
+        await host.Services.GetRequiredService<Spool>().Reserve(SpoolEnvelopes.CreatedAt(DateTimeOffset.UtcNow)).WriteAsync();
 
     private static DrainWorker DrainWorkerOf(IHost host) =>
         host.Services.GetServices<IHostedService>().OfType<DrainWorker>().Single();

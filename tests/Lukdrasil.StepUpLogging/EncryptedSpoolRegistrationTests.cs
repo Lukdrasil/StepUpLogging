@@ -15,7 +15,7 @@ namespace Lukdrasil.StepUpLogging.Tests;
 /// <summary>
 /// DI wiring of <see cref="StepUpLoggingEncryptedSpoolExtensions.AddEncryptedSpoolAuditSink"/>:
 /// what it registers, how it fails when a required option is missing, and the hand-off items B07
-/// and B08 left for it (a single shared <see cref="SpoolWriter"/>, a redirect-disabled delivery
+/// and B08 left for it (a single shared <see cref="Spool"/>, a redirect-disabled delivery
 /// client, a health check under the <c>"audit"</c> tag).
 /// </summary>
 public class EncryptedSpoolRegistrationTests
@@ -293,13 +293,13 @@ public class EncryptedSpoolRegistrationTests
     }
 
     [Fact]
-    public void AddEncryptedSpoolAuditSink_SpoolWriter_ResolvesToTheSameInstanceEveryTime()
+    public void AddEncryptedSpoolAuditSink_Spool_ResolvesToTheSameInstanceEveryTime()
     {
         using var spool = new TempSpoolDirectory();
         using var host = ValidHostBuilder(spool).Build();
 
-        var first = host.Services.GetRequiredService<SpoolWriter>();
-        var second = host.Services.GetRequiredService<SpoolWriter>();
+        var first = host.Services.GetRequiredService<Spool>();
+        var second = host.Services.GetRequiredService<Spool>();
 
         Assert.Same(first, second);
     }
