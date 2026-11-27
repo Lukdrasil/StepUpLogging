@@ -1,80 +1,14 @@
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using Microsoft.Extensions.Time.Testing;
-using Serilog;
 using Serilog.Events;
-using Serilog.Core;
 using Xunit;
 
 namespace Lukdrasil.StepUpLogging.Tests
 {
     public class StepUpLoggingControllerTests
     {
-        private sealed class CaptureSink : ILogEventSink
-        {
-            public LogEvent? LastEvent { get; private set; }
-            public void Emit(LogEvent logEvent)
-            {
-                LastEvent = logEvent;
-            }
-        }
-
-        [Fact(DisplayName = "EmitRequestSummary_WritesSummaryToSummaryLogger")]
-        public void EmitRequestSummary_WritesSummaryToSummaryLogger()
-        {
-            var opts = new StepUpLoggingOptions();
-            var sink = new CaptureSink();
-            var logger = new LoggerConfiguration().WriteTo.Sink(sink).CreateLogger();
-
-            var controller = new StepUpLoggingController(opts, logger);
-
-            var routeParams = new Dictionary<string, object?> { ["id"] = "1", ["order"] = "abc" };
-            controller.EmitRequestSummary(TestSummaries.Inbound("GET", "/api/values", 200, 123.45, queryString: "id=1&order=abc", routeParameters: routeParams));
-
-            Assert.NotNull(sink.LastEvent);
-            Assert.Equal("{Direction} {Method} {Path} {StatusCode} {ElapsedMs} ms {ClientKind} {UserAgent}", sink.LastEvent!.MessageTemplate.Text);
-            Assert.True(sink.LastEvent.Properties.ContainsKey("IsRequestSummary"));
-            // Check some properties
-            Assert.Equal("GET", ((ScalarValue)sink.LastEvent.Properties["Method"]).Value);
-            Assert.Equal("/api/values", ((ScalarValue)sink.LastEvent.Properties["Path"]).Value);
-            Assert.Equal(200, Convert.ToInt32(((ScalarValue)sink.LastEvent.Properties["StatusCode"]).Value));
-            Assert.Equal("id=1&order=abc", ((ScalarValue)sink.LastEvent.Properties["QueryString"]).Value);
-            Assert.True(sink.LastEvent.Properties.ContainsKey("RouteParameters"));
-        }
-
-        [Fact(DisplayName = "EmitRequestSummary_WithUserAgentAndClientIp_AddsProperties")]
-        public void EmitRequestSummary_WithUserAgentAndClientIp_AddsProperties()
-        {
-            var opts = new StepUpLoggingOptions();
-            var sink = new CaptureSink();
-            var logger = new LoggerConfiguration().WriteTo.Sink(sink).CreateLogger();
-            var controller = new StepUpLoggingController(opts, logger);
-
-            controller.EmitRequestSummary(TestSummaries.Inbound("GET", "/api/test", 200, 50.0, userAgent: "Mozilla/5.0", clientIp: "127.0.0.1"));
-
-            Assert.NotNull(sink.LastEvent);
-            Assert.Equal("Mozilla/5.0", ((ScalarValue)sink.LastEvent!.Properties["UserAgent"]).Value);
-            Assert.Equal("127.0.0.1", ((ScalarValue)sink.LastEvent.Properties["ClientIp"]).Value);
-        }
-
-        [Fact(DisplayName = "EmitRequestSummary_WithNullUserAgentAndClientIp_WritesNoneAndOmitsClientIp")]
-        public void EmitRequestSummary_WithNullUserAgentAndClientIp_WritesNoneAndOmitsClientIp()
-        {
-            var opts = new StepUpLoggingOptions();
-            var sink = new CaptureSink();
-            var logger = new LoggerConfiguration().WriteTo.Sink(sink).CreateLogger();
-            var controller = new StepUpLoggingController(opts, logger);
-
-            controller.EmitRequestSummary(TestSummaries.Inbound("GET", "/api/test", 200, 50.0, userAgent: null, clientIp: null));
-
-            Assert.NotNull(sink.LastEvent);
-            Assert.Equal("(none)", (sink.LastEvent!.Properties.GetValueOrDefault("UserAgent") as ScalarValue)?.Value);
-            Assert.Equal("None", (sink.LastEvent.Properties.GetValueOrDefault("ClientKind") as ScalarValue)?.Value);
-            Assert.False(sink.LastEvent.Properties.ContainsKey("ClientIp"));
-        }
-
         [Fact(DisplayName = "BaseLevel_DefaultOptions_IsWarning")]
         public void BaseLevel_DefaultOptions_IsWarning()
         {

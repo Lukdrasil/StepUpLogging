@@ -4,7 +4,7 @@ using Serilog;
 namespace Lukdrasil.StepUpLogging.Benchmarks;
 
 /// <summary>
-/// What <see cref="StepUpLoggingController.EmitRequestSummary"/> costs to build and write one request
+/// What <see cref="RequestSummaryWriter.Write"/> costs to build and write one request
 /// summary to a logger that only counts, with the four required values alone and with the optional
 /// fields: query string, route parameters, user agent, client address, token identifier and
 /// forwarded-for header.
@@ -27,32 +27,33 @@ public class RequestSummaryBenchmarks
     private static readonly CompiledRedactionPatterns NoPatterns = new([]);
 
     private readonly NullLogEventSink _summaries = new();
-    private StepUpLoggingController _controller = null!;
+    private Serilog.Core.Logger _logger = null!;
+    private RequestSummaryWriter _writer = null!;
 
     /// <summary>Whether the summary carries every optional field, or only the method, path, status code and elapsed time.</summary>
     [Params(false, true)]
     public bool AllFields { get; set; }
 
-    /// <summary>Builds the controller over a counting logger and checks that one call writes one summary.</summary>
+    /// <summary>Builds the writer over a counting logger and checks that one call writes one summary.</summary>
     [GlobalSetup]
     public void Setup()
     {
-        var logger = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(_summaries).CreateLogger();
-        _controller = new StepUpLoggingController(new StepUpLoggingOptions(), logger);
+        _logger = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(_summaries).CreateLogger();
+        _writer = new RequestSummaryWriter(new StepUpSettings(new StepUpLoggingOptions()), NoPatterns, () => _logger);
 
         var written = _summaries.Received;
         EmitRequestSummary();
         BenchmarkFixtures.Require(_summaries.Received - written == 1, "one call did not write exactly one request summary");
     }
 
-    /// <summary>Disposes the controller, which disposes the logger under it.</summary>
+    /// <summary>Disposes the logger under the writer.</summary>
     [GlobalCleanup]
-    public void Cleanup() => _controller.Dispose();
+    public void Cleanup() => _logger.Dispose();
 
     /// <summary>One request summary.</summary>
     [Benchmark]
     public void EmitRequestSummary() =>
-        _controller.EmitRequestSummary(
+        _writer.Write(
             new RequestSummary(
                     RequestSummary.Inbound,
                     Method,

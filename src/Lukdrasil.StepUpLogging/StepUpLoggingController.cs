@@ -92,9 +92,13 @@ public sealed class StepUpLoggingController : IDisposable
     /// <summary>True from construction in Diagnostic mode until its timer fires or the controller is disposed.</summary>
     internal bool IsDiagnosticActive => Volatile.Read(ref _diagnosticActive);
 
-    // The Log.Logger fallback is reached only by a controller built without a bypass logger: the pipeline attaches
-    // its bypass logger when the logger is built, before any request or trigger.
-    private Serilog.ILogger Output => _summaryLogger ?? Log.Logger;
+    /// <summary>
+    /// The bypass logger, which the controller's Warnings and <see cref="RequestSummaryWriter"/> write through. The
+    /// <c>Log.Logger</c> fallback is reached only by a controller built without a bypass logger, or after
+    /// <see cref="Dispose"/>: the pipeline attaches its bypass logger when the logger is built, before any request or
+    /// trigger.
+    /// </summary>
+    internal Serilog.ILogger BypassLogger => _summaryLogger ?? Log.Logger;
 
     private DateTimeOffset StartDiagnostic()
     {
@@ -116,28 +120,6 @@ public sealed class StepUpLoggingController : IDisposable
         _summaryLogger = summaryLogger;
     }
 
-    /// <summary>Writes <paramref name="summary"/> through the summary logger at the request summary level.</summary>
-    /// <remarks>
-    /// Route values are converted per value with the logger's scalar conversion, so a <c>ToMaximumCollectionCount</c>
-    /// or destructuring depth limit on a consumer-supplied summary logger is not applied to <c>RouteParameters</c>
-    /// (ADR 0009). The library's own bypass logger has no such settings.
-    /// </remarks>
-    internal void EmitRequestSummary(RequestSummary summary)
-    {
-        try
-        {
-            var logger = Output;
-            if (logger.IsEnabled(_settings.RequestSummaryLevel))
-            {
-                logger.Write(summary.ToLogEvent(_settings.RequestSummaryLevel, logger));
-            }
-        }
-        catch
-        {
-            // Swallow to avoid affecting request pipeline
-        }
-    }
-
     private void EndDiagnostic()
     {
         lock (_gate)
@@ -150,7 +132,7 @@ public sealed class StepUpLoggingController : IDisposable
             Volatile.Write(ref _diagnosticActive, false);
             LevelSwitch.MinimumLevel = _settings.BaseLevel;
             DiagnosticActiveCounter.Add(-1);
-            Output.Warning("StepUp Diagnostic mode ended, running as Auto at {BaseLevel}", _settings.BaseLevel);
+            BypassLogger.Warning("StepUp Diagnostic mode ended, running as Auto at {BaseLevel}", _settings.BaseLevel);
         }
     }
 
@@ -243,7 +225,7 @@ public sealed class StepUpLoggingController : IDisposable
             TriggerCounter.Add(1);
             _activeStepUpCounter.Add(1);
 
-            Output.Warning("Logging step up: increased minimum level to {Level} for {DurationSeconds} seconds",
+            BypassLogger.Warning("Logging step up: increased minimum level to {Level} for {DurationSeconds} seconds",
                 _settings.StepUpLevel, (int)_settings.StepUpDuration.TotalSeconds);
 
             ArmTimer();
@@ -312,7 +294,7 @@ public sealed class StepUpLoggingController : IDisposable
         StepUpDurationHistogram.Record(_time.GetElapsedTime(_stepUpStartTimestamp).TotalSeconds);
         _activeStepUpCounter.Add(-1);
 
-        Output.Warning("Logging step down: restored minimum level to {Level}", _settings.BaseLevel);
+        BypassLogger.Warning("Logging step down: restored minimum level to {Level}", _settings.BaseLevel);
     }
 
     /// <summary>

@@ -23,6 +23,8 @@ internal sealed class StepUpRequestLogging(StepUpSettings settings, StepUpLoggin
     private static readonly Counter<long> BodyCaptureCounter = Meter.CreateCounter<long>("request_body_captured_total", "count", "Number of requests with captured body");
     private static readonly Counter<long> RedactionCounter = Meter.CreateCounter<long>("request_redaction_applied_total", "count", "Number of requests with redaction applied");
 
+    private readonly RequestSummaryWriter _summaries = new(settings, patterns, controller);
+
     /// <summary>Adds the request logging middleware to <paramref name="app"/>; completion events go to <paramref name="logger"/>.</summary>
     internal void UseIn(IApplicationBuilder app, ILogger? logger)
     {
@@ -70,26 +72,7 @@ internal sealed class StepUpRequestLogging(StepUpSettings settings, StepUpLoggin
         }
         finally
         {
-            Summarize(context, failed ? StatusCodes.Status500InternalServerError : context.Response.StatusCode, Stopwatch.GetElapsedTime(start));
-        }
-    }
-
-    private void Summarize(HttpContext context, int statusCode, TimeSpan elapsed)
-    {
-        var path = ExcludedPaths.NormalizedPath(context.Request);
-        if (settings.ExcludedPaths.Contains(path))
-        {
-            return;
-        }
-
-        try
-        {
-            controller.EmitRequestSummary(InboundRequestSummary.From(
-                context, path, statusCode, elapsed.TotalMilliseconds, settings.RequestSummaryDetail, settings.TrustForwardedHeaders, patterns));
-        }
-        catch
-        {
-            // Never let summary emission mask the original request outcome.
+            _summaries.WriteInbound(context, failed ? StatusCodes.Status500InternalServerError : context.Response.StatusCode, Stopwatch.GetElapsedTime(start).TotalMilliseconds);
         }
     }
 

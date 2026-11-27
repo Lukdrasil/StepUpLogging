@@ -81,6 +81,11 @@ Three facts about the existing pipeline constrain the answer:
    > now behind the root enrichment gate (see the D5 amendment). A pre-error buffer flush still replays
    > redacted events: the buffer holds only events at or above `StepUpLevel`, which the gate lets through.
 
+   > **Amended (2026-11-27, request summary module):** the second writer above is now
+   > `RequestSummaryWriter` (ADR 0032 amendment), which writes the inbound and outbound summaries
+   > through the bypass logger. It still carries no consumer-authored log event, and the summary
+   > values are still redacted with the compiled patterns when the summary is built.
+
 5. **The enricher is registered last — after the consumer hook**
    `configure?.Invoke(services, lc)` (`StepUpLoggingExtensions.cs:287`), not at the library's own
    enricher block. A redaction sweep that runs before other enrichers can still add properties is

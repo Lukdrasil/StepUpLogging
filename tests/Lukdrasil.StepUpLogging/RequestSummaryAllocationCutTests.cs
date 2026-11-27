@@ -6,7 +6,7 @@ using Serilog.Events;
 namespace Lukdrasil.StepUpLogging.Tests;
 
 /// <summary>
-/// Pins what <see cref="StepUpLoggingController.EmitRequestSummary"/> writes to the summary logger (property
+/// Pins what <see cref="RequestSummaryWriter.Write"/> writes to the summary logger (property
 /// order, omitted optionals, value conversion, enrichers, trace context, level gate) while each optional field
 /// it carries costs a fraction of the logger chain it used to build. Serilog's <c>MaximumStringLength</c> does
 /// not truncate plain scalar strings, so the summary's path and user agent stay whole under it.
@@ -44,21 +44,20 @@ public class RequestSummaryAllocationCutTests
         }
     }
 
-    private static StepUpLoggingController Controller(LastEventSink sink, Func<LoggerConfiguration, LoggerConfiguration>? configure = null)
+    private static Logger SummaryLogger(LastEventSink sink, Func<LoggerConfiguration, LoggerConfiguration>? configure = null)
     {
         var configuration = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(sink);
-        var summaryLogger = (configure?.Invoke(configuration) ?? configuration).CreateLogger();
-        return new StepUpLoggingController(new StepUpLoggingOptions(), summaryLogger);
+        return (configure?.Invoke(configuration) ?? configuration).CreateLogger();
     }
 
-    private static void EmitFull(StepUpLoggingController controller) =>
-        controller.EmitRequestSummary(TestSummaries.Inbound(
+    private static void EmitFull(RequestSummaryWriter writer) =>
+        writer.Write(TestSummaries.Inbound(
             Method, Path, StatusCode, ElapsedMs,
             queryString: QueryString, routeParameters: RouteParameters, userAgent: UserAgent,
             clientIp: ClientIp, jti: Jti, forwardedFor: ForwardedFor));
 
-    private static void EmitMinimal(StepUpLoggingController controller) =>
-        controller.EmitRequestSummary(TestSummaries.Inbound(Method, Path, StatusCode, ElapsedMs));
+    private static void EmitMinimal(RequestSummaryWriter writer) =>
+        writer.Write(TestSummaries.Inbound(Method, Path, StatusCode, ElapsedMs));
 
     private static long AllocatedBytesOfSecondRun(Action run)
     {
@@ -69,12 +68,13 @@ public class RequestSummaryAllocationCutTests
     }
 
     [Fact]
-    public void EmitRequestSummary_AllFields_KeepsThePropertyOrder()
+    public void Write_AllFields_KeepsThePropertyOrder()
     {
         var sink = new LastEventSink();
-        using var controller = Controller(sink);
+        using var logger = SummaryLogger(sink);
+        var writer = TestSummaries.Writer(logger);
 
-        EmitFull(controller);
+        EmitFull(writer);
 
         Assert.Equal(
             ["Direction", "Method", "Path", "StatusCode", "ElapsedMs", "ClientKind", "UserAgent", "ClientIp", "Jti", "QueryString", "RouteParameters", "ForwardedFor", "IsRequestSummary"],
@@ -82,12 +82,13 @@ public class RequestSummaryAllocationCutTests
     }
 
     [Fact]
-    public void EmitRequestSummary_EmptyOptionals_LeavesThemOut()
+    public void Write_EmptyOptionals_LeavesThemOut()
     {
         var sink = new LastEventSink();
-        using var controller = Controller(sink);
+        using var logger = SummaryLogger(sink);
+        var writer = TestSummaries.Writer(logger);
 
-        controller.EmitRequestSummary(TestSummaries.Inbound(
+        writer.Write(TestSummaries.Inbound(
             Method, Path, StatusCode, ElapsedMs,
             queryString: string.Empty, routeParameters: new Dictionary<string, object?>(), userAgent: string.Empty,
             clientIp: string.Empty, jti: string.Empty, forwardedFor: string.Empty));
@@ -96,78 +97,84 @@ public class RequestSummaryAllocationCutTests
     }
 
     [Fact]
-    public void EmitRequestSummary_RouteParameters_IsADictionaryValue()
+    public void Write_RouteParameters_IsADictionaryValue()
     {
         var sink = new LastEventSink();
-        using var controller = Controller(sink);
+        using var logger = SummaryLogger(sink);
+        var writer = TestSummaries.Writer(logger);
 
-        EmitFull(controller);
+        EmitFull(writer);
 
         var routeParameters = Assert.IsType<DictionaryValue>(sink.LastEvent!.Properties["RouteParameters"]);
         Assert.Equal("\"12345\"", Assert.Single(routeParameters.Elements).Value.ToString());
     }
 
     [Fact]
-    public void EmitRequestSummary_SummaryLoggerEnrichers_StillRun()
+    public void Write_SummaryLoggerEnrichers_StillRun()
     {
         var sink = new LastEventSink();
-        using var controller = Controller(sink, c => c.Enrich.WithProperty("Application", "orders"));
+        using var logger = SummaryLogger(sink, c => c.Enrich.WithProperty("Application", "orders"));
+        var writer = TestSummaries.Writer(logger);
 
-        EmitFull(controller);
+        EmitFull(writer);
 
         Assert.Equal("\"orders\"", sink.LastEvent!.Properties["Application"].ToString());
         Assert.Equal("true", sink.LastEvent.Properties["IsRequestSummary"].ToString(), ignoreCase: true);
     }
 
     [Fact]
-    public void EmitRequestSummary_InsideAnActivity_CarriesItsTraceIdAndSpanId()
+    public void Write_InsideAnActivity_CarriesItsTraceIdAndSpanId()
     {
         var sink = new LastEventSink();
-        using var controller = Controller(sink);
+        using var logger = SummaryLogger(sink);
+        var writer = TestSummaries.Writer(logger);
         using var activity = new Activity("request").SetIdFormat(ActivityIdFormat.W3C).Start();
 
-        EmitFull(controller);
+        EmitFull(writer);
 
         Assert.Equal(activity.TraceId, sink.LastEvent!.TraceId);
         Assert.Equal(activity.SpanId, sink.LastEvent.SpanId);
     }
 
     [Fact]
-    public void EmitRequestSummary_MaximumStringLength_LeavesPathAndUserAgentWhole()
+    public void Write_MaximumStringLength_LeavesPathAndUserAgentWhole()
     {
         var sink = new LastEventSink();
-        using var controller = Controller(sink, c => c.Destructure.ToMaximumStringLength(10));
+        using var logger = SummaryLogger(sink, c => c.Destructure.ToMaximumStringLength(10));
+        var writer = TestSummaries.Writer(logger);
 
-        EmitFull(controller);
+        EmitFull(writer);
 
         Assert.Equal($"\"{Path}\"", sink.LastEvent!.Properties["Path"].ToString());
         Assert.Equal($"\"{UserAgent}\"", sink.LastEvent.Properties["UserAgent"].ToString());
     }
 
     [Fact]
-    public void EmitRequestSummary_SummaryLoggerAtWarning_WritesNothing()
+    public void Write_SummaryLoggerAtWarning_WritesNothing()
     {
         var sink = new LastEventSink();
-        using var controller = Controller(sink, c => c.MinimumLevel.Warning());
+        using var logger = SummaryLogger(sink, c => c.MinimumLevel.Warning());
+        var writer = TestSummaries.Writer(logger);
 
-        EmitFull(controller);
+        EmitFull(writer);
 
         Assert.Equal(0, sink.Count);
     }
 
     [Fact]
-    public void EmitRequestSummary_EachOptionalField_AllocatesUnder60PercentOfTheLoggerChain()
+    public void Write_EachOptionalField_AllocatesUnder60PercentOfTheLoggerChain()
     {
         var sink = new LastEventSink();
-        using var controller = Controller(sink);
+        using var logger = SummaryLogger(sink);
+        var writer = TestSummaries.Writer(logger);
 
         var fullBytes = AllocatedBytesOfSecondRun(() =>
         {
-            for (var i = 0; i < SummariesPerRun; i++) EmitFull(controller);
+            for (var i = 0; i < SummariesPerRun; i++) EmitFull(writer);
         });
         var minimalBytes = AllocatedBytesOfSecondRun(() =>
         {
-            for (var i = 0; i < SummariesPerRun; i++) EmitMinimal(controller);
+            for (var i = 0; i < SummariesPerRun; i++) EmitMinimal(writer);
         });
         var bytesPerOptionalField = (fullBytes - minimalBytes) / SummariesPerRun / OptionalFieldCount;
 
