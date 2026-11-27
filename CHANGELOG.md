@@ -6,6 +6,14 @@ Releases from 1.8.0 onward are recorded here. Entries backfilled from each relea
 `PackageReleaseNotes` and, where those were not updated per release, from the commits between tags.
 Tags before 1.8.0 predate this file.
 
+## [Unreleased]
+
+### Added
+- `CaptureScopesOnException` (default `true`): `false` stops recording scopes on every thrown exception. See ADR 0038.
+
+### Fixed
+- **An event that logs an exception carries the log scopes open where the exception was thrown.** The request completion event, the `ExceptionHandlerMiddleware` event and a `LogError(ex, ...)` in a `catch` outside the `using` block lost every `BeginScope` and `LogContext` property, because the scope was disposed while the exception unwound. Each first-chance exception now records its scopes and the root pipeline adds them, for the exception and its inner exceptions (every entry of an `AggregateException` included, the deepest throw site first), to the event that logs it; a property the event already has keeps its value. Adapted from Serilog.ThrowContext (MIT).
+
 ## [8.0.0] - 2026-11-19
 
 ### Changed

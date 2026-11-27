@@ -4,6 +4,7 @@
 - Date: 2026-10-08
 - Amends: ADR 0005, ADR 0015, ADR 0022 D5, ADR 0024 D4 (notes only; their decisions stand)
 - Amended 2026-10-09 (redaction gate): D1, D3 and D5 below; ADR 0001 and ADR 0022 D4, D5 and D7 carry their own amendments
+- Amended 2026-11-27 (ADR 0038): D3 and D7 below
 
 ## Context
 
@@ -90,6 +91,10 @@ separate work). The bypass logger runs the same enrichers ungated: everything th
 > event alive per thread until the next rejection (a root filter that drops it, or a disposed sink, leaves it
 > there).
 
+> **Amended (2026-11-27, ADR 0038):** with `CaptureScopesOnException` on (the default), `ThrowContextEnricher`
+> runs ungated between `FromLogContext` and `AlwaysExportEnricher`. It adds only absent properties, so a
+> `SourceContext` pushed through the current `LogContext` still reaches the always-export match first.
+
 **D4. Config-declared root settings are not gated.** `Serilog:Enrich`, `Serilog:Properties`,
 `Serilog:Using` and `Serilog:MinimumLevel:Override` are read by the root before the library's enrichers
 and behave as before. `Serilog:MinimumLevel:Default` stays ignored: the root is Verbose after the
@@ -121,6 +126,10 @@ configuration and escapes the condition. The optional enrichers are a table of (
 by the flag, which also takes the method from cyclomatic complexity 12 to 3. `ApplyRootEnrichers` wires
 `FromLogContext`, the always-export enricher and then `Enrich.When(gate, ...)`; `CreateBypassLogger`
 applies `FromLogContext` and then `ApplyCommonEnrichers(cfg.Enrich, ...)` directly.
+
+> **Amended (2026-11-27, ADR 0038):** `ApplyRootEnrichers` wires `FromLogContext`, `ThrowContextEnricher`
+> (when `CaptureScopesOnException` is on), the always-export enricher and then `Enrich.When(gate, ...)`.
+> `CreateBypassLogger` does not add `ThrowContextEnricher`: its events were enriched on the root.
 
 ## Consequences
 

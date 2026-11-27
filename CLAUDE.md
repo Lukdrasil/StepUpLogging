@@ -48,6 +48,7 @@ dotnet pack src/Lukdrasil.StepUpLogging/Lukdrasil.StepUpLogging.csproj --configu
 | `RequestClient` | Internal static class. The one client-address and User-Agent rule (ADR 0008), shared by request logging, the summary and the audit trail. |
 | `ExcludedPaths` | Internal. Matches `ExcludePaths` entries: exact, or a `*` prefix on a segment boundary, ignoring case. |
 | `StepUpLoggingActivitySources` | Internal static class. The `ActivitySource` instances, so only the library starts activities under its names. |
+| `ThrowContextEnricher` | Internal root enricher, registered only when `CaptureScopesOnException` is on (ADR 0038). A process-wide `FirstChanceException` handler records `LogContext` and `ExecutionContext` per exception; an event carrying that exception, or one wrapping it, gets the throw site's scopes as absent properties, deepest throw site first. |
 | `AlwaysExportEnricher` | Internal root enricher, registered only when `AlwaysExportCategories` has a non-blank entry. Sets `IsImmediate=true` on a matching `SourceContext`, so `BypassSink.Immediate` exports it once and `StepUpSink` and the pre-error buffer skip it. |
 | `EnrichmentGate` | Internal. `Needs(LogEvent)` is true when the level is at or above `min(live LevelSwitch, StepUpLevel, Error)` or the event carries `IsImmediate` or `IsRequestSummary`; `For(...)` returns the predicate the root enrichers run behind (`Enrich.When`), or always-true when the `configure` hook is set or `Serilog:AuditTo` has an entry (ADR 0026). |
 | `CategoryPrefix` | Internal static class. The one `SourceContext` prefix rule for every category option (ADR 0021 D3): ordinal equal, or starts with prefix + `.`. |
@@ -58,7 +59,7 @@ dotnet pack src/Lukdrasil.StepUpLogging/Lukdrasil.StepUpLogging.csproj --configu
 
 ### Serilog pipeline (wired in `StepUpPipeline`)
 
-The root logger is deliberately set to `MinimumLevel.Verbose()` so the buffer and trigger sinks see every event regardless of the current level. Actual export is gated inside sub-loggers. The root's library enrichers (`ApplyCommonEnrichers`) run behind the `EnrichmentGate`, so a Debug event nobody will export is not enriched; `AlwaysExportEnricher` runs before the gate, `RedactionEnricher` stays last and ungated, and the bypass logger enriches ungated. Inside `Enrich.When` make one call per enricher on the `LoggerEnrichmentConfiguration`; a chained `.Enrich.` escapes the gate (ADR 0026):
+The root logger is deliberately set to `MinimumLevel.Verbose()` so the buffer and trigger sinks see every event regardless of the current level. Actual export is gated inside sub-loggers. The root's library enrichers (`ApplyCommonEnrichers`) run behind the `EnrichmentGate`, so a Debug event nobody will export is not enriched; `ThrowContextEnricher` and `AlwaysExportEnricher` run before the gate (ADR 0038), `RedactionEnricher` stays last and ungated, and the bypass logger enriches ungated. Inside `Enrich.When` make one call per enricher on the `LoggerEnrichmentConfiguration`; a chained `.Enrich.` escapes the gate (ADR 0026):
 
 ```
 Root (Verbose)

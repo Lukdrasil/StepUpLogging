@@ -116,14 +116,20 @@ internal sealed class StepUpPipeline(IHostApplicationBuilder builder, StepUpSett
     }
 
     /// <summary>
-    /// Applies the root pipeline enrichers (ADR 0026). <c>FromLogContext</c> and <see cref="AlwaysExportEnricher"/>
-    /// run first and ungated, in that order: a <c>SourceContext</c> or marker pushed through <c>LogContext</c> must
-    /// reach the always-export match and the gate. Every other enricher runs only when
+    /// Applies the root pipeline enrichers (ADR 0026). <c>FromLogContext</c>, <see cref="ThrowContextEnricher"/> and
+    /// <see cref="AlwaysExportEnricher"/> run first and ungated, in that order: a <c>SourceContext</c> or marker pushed
+    /// through <c>LogContext</c> must reach the always-export match and the gate, and the current context wins over
+    /// the throw site's. Every other enricher runs only when
     /// <paramref name="needsEnrichment"/> accepts the event.
     /// </summary>
     internal void ApplyRootEnrichers(LoggerConfiguration lc, Func<LogEvent, bool> needsEnrichment)
     {
         lc.Enrich.FromLogContext();
+
+        if (Options.CaptureScopesOnException)
+        {
+            lc.Enrich.With(new ThrowContextEnricher());
+        }
 
         if (settings.AlwaysExportCategories.Length > 0)
         {
