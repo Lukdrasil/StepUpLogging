@@ -21,6 +21,7 @@ internal sealed class StepUpLoggingOptionsValidator(string sectionName) : IValid
         RequireDefined(options.ConsoleFormat, nameof(StepUpLoggingOptions.ConsoleFormat), failures);
         RequireDefined(options.ConsoleTraceFormat, nameof(StepUpLoggingOptions.ConsoleTraceFormat), failures);
         RequireDefined(options.RequestSummaryDetail, nameof(StepUpLoggingOptions.RequestSummaryDetail), failures);
+        RequireDefined(options.RequestSummaryOnError, nameof(StepUpLoggingOptions.RequestSummaryOnError), failures);
         RequireDefined(options.ClientIpLogging, nameof(StepUpLoggingOptions.ClientIpLogging), failures);
         RequireDefined(options.ClientIpAudit, nameof(StepUpLoggingOptions.ClientIpAudit), failures);
         RequireLevel(options.BaseLevel, nameof(StepUpLoggingOptions.BaseLevel), failures);

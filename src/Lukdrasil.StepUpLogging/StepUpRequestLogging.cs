@@ -19,6 +19,9 @@ internal sealed class StepUpRequestLogging(StepUpSettings settings, StepUpLoggin
     // Read a margin beyond the limit so a secret straddling the cut still matches its pattern (ADR 0009 F2).
     private const int RedactionMargin = 256;
 
+    // HttpContext.Items key marking a request whose pipeline threw.
+    private static readonly object Threw = new();
+
     private static readonly Meter Meter = new("StepUpLogging.RequestLogging", "1.0.0");
     private static readonly Counter<long> BodyCaptureCounter = Meter.CreateCounter<long>("request_body_captured_total", "count", "Number of requests with captured body");
     private static readonly Counter<long> RedactionCounter = Meter.CreateCounter<long>("request_redaction_applied_total", "count", "Number of requests with redaction applied");
@@ -42,7 +45,7 @@ internal sealed class StepUpRequestLogging(StepUpSettings settings, StepUpLoggin
         {
             options.Logger = logger;
             options.EnrichDiagnosticContext = Enrich;
-            options.GetLevel = LevelOf;
+            options.GetLevel = LevelNotingThrow;
             options.GetMessageTemplateProperties = (context, _, elapsedMs, statusCode) =>
             [
                 new LogEventProperty("RequestMethod", new ScalarValue(context.Request.Method)),
@@ -53,26 +56,32 @@ internal sealed class StepUpRequestLogging(StepUpSettings settings, StepUpLoggin
         });
     }
 
+    private bool OmitsSummaryOnError => settings.AlwaysLogRequestSummary && settings.RequestSummaryOnError == RequestSummaryOnErrorMode.Omit;
+
     /// <summary>
-    /// Runs the request and writes its summary afterwards. An unhandled exception must not swallow the summary,
-    /// since failing requests are the ones worth summarizing, so it is written with 500 and the exception rethrown.
+    /// Runs the request and writes its summary afterwards, unless its exported completion event carried it, which its
+    /// <see cref="CompletionReceipt"/> records (ADR 0043). An unhandled exception must not swallow the summary, since
+    /// failing requests are the ones worth summarizing, so it is written with 500 and the exception rethrown.
     /// </summary>
     internal async Task SummarizeAsync(HttpContext context, Func<Task> next)
     {
         var start = Stopwatch.GetTimestamp();
-        var failed = false;
+        var receipt = OmitsSummaryOnError ? CompletionReceipt.Issue() : null;
         try
         {
             await next();
         }
         catch
         {
-            failed = true;
+            context.Items[Threw] = true;
             throw;
         }
         finally
         {
-            _summaries.WriteInbound(context, failed ? StatusCodes.Status500InternalServerError : context.Response.StatusCode, Stopwatch.GetElapsedTime(start).TotalMilliseconds);
+            if (receipt is not { SummaryOmitted: true })
+            {
+                _summaries.WriteInbound(context, StatusOf(context), Stopwatch.GetElapsedTime(start).TotalMilliseconds);
+            }
         }
     }
 
@@ -112,6 +121,21 @@ internal sealed class StepUpRequestLogging(StepUpSettings settings, StepUpLoggin
         return exception is null ? StatusLevel(context.Response.StatusCode) : LogEventLevel.Error;
     }
 
+    /// <summary><see cref="LevelOf"/>, marking a request that threw for <see cref="StatusOf"/>, which <see cref="Enrich"/> runs after.</summary>
+    private LogEventLevel LevelNotingThrow(HttpContext context, double elapsedMs, Exception? exception)
+    {
+        if (exception is not null)
+        {
+            context.Items[Threw] = true;
+        }
+
+        return LevelOf(context, elapsedMs, exception);
+    }
+
+    /// <summary>The status of the request: an unhandled exception is answered with 500, which is not on the response while it propagates.</summary>
+    private static int StatusOf(HttpContext context)
+        => context.Items.ContainsKey(Threw) ? StatusCodes.Status500InternalServerError : context.Response.StatusCode;
+
     // A 5xx with no exception is often a backend failure relayed by a proxy, not this application's;
     // TreatServerErrorStatusAsError = false keeps those out of the trigger path.
     private LogEventLevel StatusLevel(int status) => status switch
@@ -126,18 +150,19 @@ internal sealed class StepUpRequestLogging(StepUpSettings settings, StepUpLoggin
         using var activity = StartLogRequestActivity(context);
         var request = context.Request;
         var redactions = new RedactionNotes(settings.ActivityInstrumentation);
+        CarrySummaryIfFailed(diagnosticContext, context);
 
         var path = ExcludedPaths.NormalizedPath(request);
         var redactedPath = redactions.Redact(patterns, path, "path");
         diagnosticContext.Set("RequestPath", redactedPath);
-        diagnosticContext.Set("QueryString", redactions.Redact(patterns, request.QueryString.Value ?? string.Empty, "query_string"));
+        diagnosticContext.Set(LogProperties.QueryString, redactions.Redact(patterns, request.QueryString.Value ?? string.Empty, "query_string"));
         if (request.RouteValues.Count > 0)
         {
-            diagnosticContext.Set("RouteParameters", RequestPathRedaction.RedactRouteValues(request.RouteValues, path, redactedPath, patterns, redactions.Note));
+            diagnosticContext.Set(LogProperties.RouteParameters, RequestPathRedaction.RedactRouteValues(request.RouteValues, path, redactedPath, patterns, redactions.Note));
         }
 
         diagnosticContext.Set("Headers", RequestHeaderRedaction.RedactRequestHeaders(request.Headers, settings.SensitiveHeaders, patterns, redactions.Note));
-        SetIfPresent(diagnosticContext, "ClientIp", RequestClient.Addresses(context, settings.TrustForwardedHeaders, settings.ClientIpLogging, patterns).ClientIp);
+        SetIfPresent(diagnosticContext, LogProperties.ClientIp, RequestClient.Addresses(context, settings.TrustForwardedHeaders, settings.ClientIpLogging, patterns).ClientIp);
         if (redactions.Close())
         {
             activity?.SetTag("security.redaction_applied", true);
@@ -147,10 +172,43 @@ internal sealed class StepUpRequestLogging(StepUpSettings settings, StepUpLoggin
         SetIfPresent(diagnosticContext, LogProperties.Jti, string.IsNullOrEmpty(jti) ? null : patterns.RedactProperty(LogProperties.Jti, jti));
 
         // The step-up trigger sink is asynchronous, so the request whose Error causes the step-up is not stepped up
-        // yet when this runs. A 5xx status is knowable here, so the failing request is captured too.
+        // yet when this runs. A 5xx status, or an exception's 500, is knowable here, so the failing request is captured too.
         if (ShouldCaptureBody(context))
         {
             diagnosticContext.Set("RequestBody", CaptureBody(context));
+        }
+    }
+
+    /// <summary>
+    /// When the request holds a <see cref="CompletionReceipt"/> and failed (status 400 or above, or an exception), sets
+    /// the summary's fields on its completion event and marks the receipt; whether the summary is then omitted depends
+    /// on the event being exported. A failure here leaves the summary to be written.
+    /// </summary>
+    private void CarrySummaryIfFailed(IDiagnosticContext diagnosticContext, HttpContext context)
+    {
+        var status = StatusOf(context);
+        if (CompletionReceipt.Current is not { } receipt || status < StatusCodes.Status400BadRequest)
+        {
+            return;
+        }
+
+        try
+        {
+            if (_summaries.BuildInbound(context, status, 0) is not { } summary)
+            {
+                return;
+            }
+
+            foreach (var (name, value) in InboundRequestSummary.CompletionFields(summary))
+            {
+                diagnosticContext.Set(name, value);
+            }
+
+            receipt.MarkCarried();
+        }
+        catch
+        {
+            // Never let the summary fail the request; it is written as under Keep.
         }
     }
 
@@ -182,7 +240,7 @@ internal sealed class StepUpRequestLogging(StepUpSettings settings, StepUpLoggin
     // Body.CanSeek is true only when the early buffering middleware ran for this request.
     private bool ShouldCaptureBody(HttpContext context)
         => settings.CaptureRequestBody
-           && (controller.IsSteppedUp || context.Response.StatusCode >= 500)
+           && (controller.IsSteppedUp || StatusOf(context) >= 500)
            && HasBody(context.Request)
            && context.Request.Body.CanSeek;
 

@@ -31,6 +31,8 @@ internal static class StartupReport
             opts => opts.RedactLogEventProperties && StepUpSettings.NonBlank(opts.RedactionRegexes).Length == 0),
         (nameof(StepUpLoggingOptions.RequestSummaryDetail), "AlwaysLogRequestSummary and AlwaysLogOutboundRequestSummary are false",
             opts => opts.RequestSummaryDetail != RequestSummaryDetail.Full && !opts.AlwaysLogRequestSummary && !opts.AlwaysLogOutboundRequestSummary),
+        (nameof(StepUpLoggingOptions.RequestSummaryOnError), "AlwaysLogRequestSummary is false",
+            opts => opts.RequestSummaryOnError != RequestSummaryOnErrorMode.Keep && !opts.AlwaysLogRequestSummary),
     ];
 
     internal static void Write(Serilog.ILogger logger, StepUpSettings settings, IConfigurationSection section, string? logFilePath, DateTimeOffset diagnosticExpiresAt)
@@ -94,10 +96,13 @@ internal static class StartupReport
         => (opts.AlwaysLogRequestSummary, opts.AlwaysLogOutboundRequestSummary) switch
         {
             (false, false) => "off",
-            (true, false) => $"inbound at {opts.RequestSummaryLevel}, {opts.RequestSummaryDetail}",
+            (true, false) => $"inbound at {opts.RequestSummaryLevel}, {opts.RequestSummaryDetail}{OnErrorText(opts)}",
             (false, true) => $"outbound at {opts.RequestSummaryLevel}, {opts.RequestSummaryDetail}",
-            (true, true) => $"inbound and outbound at {opts.RequestSummaryLevel}, {opts.RequestSummaryDetail}",
+            (true, true) => $"inbound and outbound at {opts.RequestSummaryLevel}, {opts.RequestSummaryDetail}{OnErrorText(opts)}",
         };
+
+    private static string OnErrorText(StepUpLoggingOptions opts)
+        => opts.RequestSummaryOnError == RequestSummaryOnErrorMode.Omit ? ", omitted on error" : string.Empty;
 
     private static string Outputs(StepUpLoggingOptions opts, string? logFilePath)
     {

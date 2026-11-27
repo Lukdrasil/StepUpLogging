@@ -208,6 +208,7 @@ The file sink is enabled by the `logFilePath` parameter of `AddStepUpLogging`: d
 | `AlwaysLogRequestSummary` | `false` | `true` exports one summary per request at `RequestSummaryLevel` whatever the level: an access log whose volume equals your traffic |
 | `AlwaysLogOutboundRequestSummary` | `false` | `true` exports one summary per `IHttpClientFactory` call (not the library's audit client or the OTLP exporter), read once at startup: volume grows with every outgoing call |
 | `RequestSummaryDetail` | `Full` | `Compact` drops `Protocol`, `Scheme`, `Host` (inbound), content lengths, identity, `EndpointName`, `QueryString`, `RouteParameters`, `ForwardedFor` and `ExceptionType` from both summaries; `Minimal` writes the `Compact` fields under short keys; the rendered message is unchanged |
+| `RequestSummaryOnError` | `Keep` | `Omit` leaves out the inbound summary of a failed request (4xx, 5xx, exception) whose completion event is exported, and puts the summary's fields on that event: one line per failed request instead of two |
 | `CaptureRequestBody` | `false` | `true` adds POST, PUT and PATCH bodies, up to `MaxBodyCaptureBytes` characters (16384), while stepped up or when the response is 5xx. Bodies can carry personal data: add `RedactionRegexes` for it. Each request body is buffered in memory |
 | `ExcludePaths` | `/healthz`, `/metrics`, `/health` | A configured list replaces these, so list them again if you still want them excluded, or set `AdditionalExcludePaths` to add paths and keep the defaults |
 | `AdditionalExcludePaths` | none | Added to `ExcludePaths` (to the defaults when `ExcludePaths` is not configured), so `SerilogStepUp__AdditionalExcludePaths__0=/.well-known/*` adds one path without restating the defaults |
@@ -350,6 +351,8 @@ t=17:13:45.110 l=INF tid=55b5a5163e2d4b008bfa8938d5189c3c msg="Outbound GET /v1/
 | `ForwardedFor` | | yes | `X-Forwarded-For`, redacted, untrusted, written as `ClientIpLogging` says; left out under `Off` |
 
 Not logged: `Referer`, `sub`, email and name claims, cookies, `Authorization`.
+
+**RequestSummaryOnError** (`Keep` by default) set to `Omit` writes one line per failed request instead of two. A request that ends with status 400 or above or an unhandled exception gets no summary when its completion event is exported; the completion event carries the summary's fields instead, at `RequestSummaryDetail`, under the same keys the summary uses. When the completion event is not exported (a 4xx `Warning` under `BaseLevel` `Error`, say), the summary is written as usual, so every request keeps at least one line. A 2xx always writes its summary. See ADR 0043.
 
 Summary events are marked with the "IsRequestSummary" property and are processed by the library's BypassSink so they are exported independently of the StepUp level switch (base Warning) and the normal step-up flow.
 
@@ -1304,6 +1307,7 @@ Every option, with its type and effect, is also listed in [CONFIGURATION.md](CON
 | `AlwaysLogRequestSummary` | `false` | - | Export one summary per request at `RequestSummaryLevel`, whatever the current level |
 | `RequestSummaryLevel` | `"Information"` | - | Level of the inbound and outbound request summary |
 | `RequestSummaryDetail` | `Full` | - | `Full`, `Compact` or `Minimal` (the `Compact` fields under short keys): which fields the inbound and outbound summary carries; the rendered message is the same. See [Request summary](#request-summary) |
+| `RequestSummaryOnError` | `Keep` | - | `Keep` or `Omit`: with `Omit` a failed inbound request whose completion event is exported writes no summary, and the completion event carries its fields. See [Request summary](#request-summary) |
 | `AlwaysLogOutboundRequestSummary` | `false` | - | Export one summary per `IHttpClientFactory` call, outermost in the handler chain; the audit and OTLP exporter clients are excluded. Read once at registration. See [Outbound request summary](#outbound-request-summary) |
 | `CaptureRequestBody` | `false` | - | Capture POST/PUT/PATCH bodies during step-up |
 | `MaxBodyCaptureBytes` | `16384` | - | Max bytes to capture from request body |

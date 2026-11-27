@@ -11,6 +11,9 @@ namespace Lukdrasil.StepUpLogging;
 /// </summary>
 internal static class InboundRequestSummary
 {
+    // The summary fields the request completion event sets itself.
+    private static readonly HashSet<string> SetByCompletion = [LogProperties.ClientIp, LogProperties.Jti, LogProperties.QueryString, LogProperties.RouteParameters];
+
     /// <summary>The summary of the request in <paramref name="context"/>.</summary>
     internal static RequestSummary From(HttpContext context, string path, int statusCode, double elapsedMs, RequestSummaryDetail detail, bool trustForwardedHeaders, ClientIpMode clientIpMode, CompiledRedactionPatterns patterns)
     {
@@ -29,15 +32,21 @@ internal static class InboundRequestSummary
         return summary;
     }
 
+    /// <summary>
+    /// The fields of <paramref name="summary"/> the request completion event carries (ADR 0043 D4): all but those the
+    /// completion event sets itself, under the summary's keys.
+    /// </summary>
+    internal static IEnumerable<KeyValuePair<string, object>> CompletionFields(RequestSummary summary) => summary.CarriedFields(SetByCompletion);
+
     /// <summary>The <c>azp</c> claim, else the <c>client_id</c> claim, else <see langword="null"/>.</summary>
     internal static string? ClientIdOf(ClaimsPrincipal? user)
         => user?.FindFirst("azp")?.Value ?? user?.FindFirst("client_id")?.Value;
 
     private static void AddSharedCompact(RequestSummary summary, string? clientIp, string? jti)
-        => summary.With("ClientIp", clientIp).With(LogProperties.Jti, jti);
+        => summary.With(LogProperties.ClientIp, clientIp).With(LogProperties.Jti, jti);
 
     private static void AddSharedFull(RequestSummary summary, string? queryString, IReadOnlyDictionary<string, object?>? routeParameters, string? forwardedFor)
-        => summary.With("QueryString", queryString).With("RouteParameters", routeParameters).With("ForwardedFor", forwardedFor);
+        => summary.With(LogProperties.QueryString, queryString).With(LogProperties.RouteParameters, routeParameters).With("ForwardedFor", forwardedFor);
 
     private static void AddFull(RequestSummary summary, HttpContext context, string path, string redactedPath, string? forwardedFor, CompiledRedactionPatterns patterns)
     {

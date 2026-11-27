@@ -36,6 +36,7 @@ public class OptionsValidationTests
     [InlineData("ConsoleFormat")]
     [InlineData("ConsoleTraceFormat")]
     [InlineData("RequestSummaryDetail")]
+    [InlineData("RequestSummaryOnError")]
     [InlineData("ClientIpLogging")]
     [InlineData("ClientIpAudit")]
     public void UndefinedEnumNumber_FailsValidationOnStart(string option)

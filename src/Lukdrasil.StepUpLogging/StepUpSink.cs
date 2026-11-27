@@ -44,6 +44,7 @@ internal sealed class StepUpSink : ILogEventSink, IDisposable
             return;
         }
 
+        CompletionReceipt.NoteExported(logEvent);
         _innerLogger.Write(logEvent);
     }
 
