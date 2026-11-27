@@ -14,6 +14,9 @@ Tags before 1.8.0 predate this file.
 ### Added
 - `ClientIpLogging` and `ClientIpAudit` (`Off`, `Prefix`, `Full`, default `Off`). `Prefix` writes the client prefix in CIDR form, /24 for IPv4 and /48 for IPv6 (an IPv4-mapped address as IPv4), masks `ForwardedFor` per entry and leaves out a value that does not parse. The startup report names both modes.
 
+### Fixed
+- The XML docs of `EnableActivityInstrumentation` and `ServiceInstanceId` describe what the options do: the flag does not gate the buffer flush activity, and an unset `ServiceInstanceId` adds nothing.
+
 ## [8.1.0] - 2026-11-27
 
 ### Added

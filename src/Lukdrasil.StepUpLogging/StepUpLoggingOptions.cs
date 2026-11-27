@@ -318,14 +318,11 @@ public sealed class StepUpLoggingOptions
     internal static bool OtlpEndpointIsSet(string? endpoint) => !string.IsNullOrWhiteSpace(endpoint);
 
     /// <summary>
-    /// Enables ActivitySource instrumentation for distributed tracing (default: true).
-    /// When enabled, activities are created for:
-    /// - Request logging (LogRequest, CaptureRequestBody, ApplyRedaction)
-    /// - Step-up/step-down transitions (TriggerStepUp, PerformStepDown)
-    /// - Buffer operations (FlushBufferedEvents, BufferEvent)
-    /// 
-    /// Activities are created regardless, but only propagated if registered in OpenTelemetry config.
-    /// Set to false to disable activity creation entirely (minimal performance overhead reduction).
+    /// Lets the library start its own activities (default: true): <c>LogRequest</c>, <c>CaptureRequestBody</c> and
+    /// <c>ApplyRedaction</c> for request logging, <c>TriggerStepUp</c> and <c>PerformStepDown</c> for step-up
+    /// transitions. An activity is created only when a listener such as OpenTelemetry has its source registered
+    /// (<c>AddSource</c>). Set to false to start none of them. The pre-error buffer's <c>FlushBufferedEvents</c>
+    /// activity is not affected.
     /// </summary>
     public bool EnableActivityInstrumentation { get; set; } = true;
 
@@ -363,7 +360,7 @@ public sealed class StepUpLoggingOptions
     public bool StructuredExceptionDetails { get; set; } = true;
 
     /// <summary>
-    /// Service instance ID. If not set, uses host name and process ID
+    /// Service instance ID, added to every event as <c>ServiceInstanceId</c>. If not set, the property is not added.
     /// </summary>
     public string? ServiceInstanceId { get; set; }
 
