@@ -75,11 +75,83 @@ public class ExceptionScopeCaptureTests
 
                     return "ok";
                 });
+                app.MapGet("/rethrown", (ILoggerFactory factory) =>
+                {
+                    var log = factory.CreateLogger("ScopeCapture.Rethrown");
+                    try
+                    {
+                        using (log.BeginScope(new Dictionary<string, object> { ["Site"] = "wrapper" }))
+                        {
+                            try
+                            {
+                                using (log.BeginScope(new Dictionary<string, object> { ["Site"] = "deep" }))
+                                {
+                                    throw new InvalidOperationException("deep");
+                                }
+                            }
+                            catch (InvalidOperationException ex)
+                            {
+                                throw new ApplicationException("wrapper", ex);
+                            }
+                        }
+                    }
+                    catch (ApplicationException ex)
+                    {
+                        log.LogError(ex, "Rethrown failed");
+                    }
+
+                    return "ok";
+                });
+                app.MapGet("/aggregate", (ILoggerFactory factory) =>
+                {
+                    var log = factory.CreateLogger("ScopeCapture.Aggregate");
+                    var failures = new List<Exception>();
+                    foreach (var key in new[] { "First", "Second" })
+                    {
+                        try
+                        {
+                            using (log.BeginScope(new Dictionary<string, object> { [key] = key }))
+                            {
+                                throw new InvalidOperationException(key);
+                            }
+                        }
+                        catch (InvalidOperationException ex)
+                        {
+                            failures.Add(ex);
+                        }
+                    }
+
+                    log.LogError(new AggregateException(failures), "Aggregate failed");
+                    return "ok";
+                });
+                app.MapGet("/current", (ILoggerFactory factory) =>
+                {
+                    var log = factory.CreateLogger("ScopeCapture.Current");
+                    using (log.BeginScope(new Dictionary<string, object> { ["Step"] = 1 }))
+                    {
+                        try
+                        {
+                            using (log.BeginScope(new Dictionary<string, object> { ["Step"] = 2 }))
+                            {
+                                throw new InvalidOperationException("current");
+                            }
+                        }
+                        catch (InvalidOperationException ex)
+                        {
+                            log.LogError(ex, "Current failed");
+                        }
+                    }
+
+                    return "ok";
+                });
 
                 await app.StartAsync(TestContext.Current.CancellationToken);
                 using var client = app.GetTestClient();
                 (await client.GetAsync("/unhandled", TestContext.Current.CancellationToken)).Dispose();
                 (await client.GetAsync("/caught", TestContext.Current.CancellationToken)).Dispose();
+                (await client.GetAsync("/rethrown", TestContext.Current.CancellationToken)).Dispose();
+                (await client.GetAsync("/aggregate", TestContext.Current.CancellationToken)).Dispose();
+                (await client.GetAsync("/current", TestContext.Current.CancellationToken)).Dispose();
                 await app.StopAsync(TestContext.Current.CancellationToken);
             }
 
@@ -91,36 +163,61 @@ public class ExceptionScopeCaptureTests
         }
     }
 
-    private static LogEvent Single(LogEvent[] events, string sourceContext) =>
+    private static LogEvent EventFrom(LogEvent[] events, string sourceContext) =>
         Assert.Single(events, e => e.Properties.TryGetValue("SourceContext", out var sc) && sc is ScalarValue { Value: string s } && s == sourceContext);
 
-    private static object? Value(LogEvent evt, string property) =>
+    private static object? ScalarOf(LogEvent evt, string property) =>
         evt.Properties.TryGetValue(property, out var value) ? Assert.IsType<ScalarValue>(value).Value : null;
 
     [Fact]
     public async Task ScopeAtThrowSite_IsOnTheRequestCompletionEvent()
     {
-        var evt = Single(await RunAsync(null), "Serilog.AspNetCore.RequestLoggingMiddleware");
+        var evt = EventFrom(await RunAsync(null), "Serilog.AspNetCore.RequestLoggingMiddleware");
 
-        Assert.Equal(42, Value(evt, "OrderId"));
-        Assert.Equal("t1", Value(evt, "Tenant"));
+        Assert.Equal(42, ScalarOf(evt, "OrderId"));
+        Assert.Equal("t1", ScalarOf(evt, "Tenant"));
     }
 
     [Fact]
     public async Task ScopeAtThrowSite_IsOnTheExceptionHandlerEvent()
     {
-        var evt = Single(await RunAsync(null), "Microsoft.AspNetCore.Diagnostics.ExceptionHandlerMiddleware");
+        var evt = EventFrom(await RunAsync(null), "Microsoft.AspNetCore.Diagnostics.ExceptionHandlerMiddleware");
 
-        Assert.Equal(42, Value(evt, "OrderId"));
-        Assert.Equal("t1", Value(evt, "Tenant"));
+        Assert.Equal(42, ScalarOf(evt, "OrderId"));
+        Assert.Equal("t1", ScalarOf(evt, "Tenant"));
     }
 
     [Fact]
     public async Task ScopeAtThrowSite_OfTheInnerException_IsOnTheEventLoggingTheWrapper()
     {
-        var evt = Single(await RunAsync(null), typeof(ExceptionScopeCaptureTests).FullName!);
+        var evt = EventFrom(await RunAsync(null), typeof(ExceptionScopeCaptureTests).FullName!);
 
-        Assert.Equal(43, Value(evt, "OrderId"));
+        Assert.Equal(43, ScalarOf(evt, "OrderId"));
+    }
+
+    [Fact]
+    public async Task ScopeAtThrowSite_OfTheDeepestThrow_WinsOverTheRethrownWrapper()
+    {
+        var evt = EventFrom(await RunAsync(null), "ScopeCapture.Rethrown");
+
+        Assert.Equal("deep", ScalarOf(evt, "Site"));
+    }
+
+    [Fact]
+    public async Task ScopeAtThrowSite_OfEveryAggregatedException_IsOnTheEventLoggingTheAggregate()
+    {
+        var evt = EventFrom(await RunAsync(null), "ScopeCapture.Aggregate");
+
+        Assert.Equal("First", ScalarOf(evt, "First"));
+        Assert.Equal("Second", ScalarOf(evt, "Second"));
+    }
+
+    [Fact]
+    public async Task ScopeAtLogSite_KeepsItsValue_OverTheThrowSiteScope()
+    {
+        var evt = EventFrom(await RunAsync(null), "ScopeCapture.Current");
+
+        Assert.Equal(1, ScalarOf(evt, "Step"));
     }
 
     [Fact]

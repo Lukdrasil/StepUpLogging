@@ -1,4 +1,4 @@
-// Adapted from Serilog.ThrowContext (https://github.com/Tolyandre/serilog-throw-context-enricher).
+// Adapted from Serilog.ThrowContext (https://github.com/Tolyandre/serilog-throw-context-enricher); see THIRD-PARTY-NOTICES.md.
 // MIT License. Copyright (c) 2020 Anatoly Buranov.
 // Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
 // documentation files (the "Software"), to deal in the Software without restriction, including without limitation
@@ -20,15 +20,18 @@ namespace Lukdrasil.StepUpLogging;
 
 /// <summary>
 /// Adds to an event that carries an exception the log scopes that were open where that exception, or one of its inner
-/// exceptions, was thrown. Every first-chance exception records the <c>LogContext</c> and the execution context; the
-/// execution context restores the <c>AsyncLocal</c> scope of <c>Serilog.Extensions.Logging</c>, so <c>BeginScope</c>
-/// scopes come back as well. A property the event already has is kept, and the deepest throw site wins among the
-/// captures. The <c>FirstChanceException</c> subscription is process-wide and made once.
+/// exceptions (every entry of an <see cref="AggregateException"/> included), was thrown. Every first-chance exception
+/// records the <c>LogContext</c> and the execution context; the execution context restores the <c>AsyncLocal</c> scope
+/// of <c>Serilog.Extensions.Logging</c>, so <c>BeginScope</c> scopes come back as well. A property the event already
+/// has is kept, and the deepest throw site wins: inner exceptions are replayed before the exception that wraps them,
+/// and an exception's first throw before its rethrows. The <c>FirstChanceException</c> subscription is process-wide,
+/// made once and never removed (ADR 0038).
 /// </summary>
 internal sealed class ThrowContextEnricher : ILogEventEnricher
 {
-    private static readonly ConditionalWeakTable<Exception, List<(ILogEventEnricher LogContext, ExecutionContext ExecutionContext)>> Captured = new();
-    private static readonly ConditionalWeakTable<LogEvent, object?> Enriching = new();
+    private readonly record struct ThrowSite(ILogEventEnricher LogContext, ExecutionContext ExecutionContext);
+
+    private static readonly ConditionalWeakTable<Exception, List<ThrowSite>> Captured = new();
 
     static ThrowContextEnricher() => AppDomain.CurrentDomain.FirstChanceException += OnFirstChance;
 
@@ -39,37 +42,49 @@ internal sealed class ThrowContextEnricher : ILogEventEnricher
             return;
         }
 
-        var captures = Captured.GetOrCreateValue(e.Exception);
-        lock (captures)
+        var sites = Captured.GetOrCreateValue(e.Exception);
+        lock (sites)
         {
-            captures.Add((LogContext.Clone(), executionContext));
+            sites.Add(new ThrowSite(LogContext.Clone(), executionContext));
         }
     }
 
     public void Enrich(LogEvent logEvent, ILogEventPropertyFactory propertyFactory)
     {
-        if (logEvent.Exception is null || !Enriching.TryAdd(logEvent, null))
+        if (logEvent.Exception is { } exception)
+        {
+            Replay(exception, logEvent, propertyFactory);
+        }
+    }
+
+    private static void Replay(Exception exception, LogEvent logEvent, ILogEventPropertyFactory propertyFactory)
+    {
+        if (exception is AggregateException aggregate)
+        {
+            foreach (var inner in aggregate.InnerExceptions)
+            {
+                Replay(inner, logEvent, propertyFactory);
+            }
+        }
+        else if (exception.InnerException is { } inner)
+        {
+            Replay(inner, logEvent, propertyFactory);
+        }
+
+        if (!Captured.TryGetValue(exception, out var sites))
         {
             return;
         }
 
-        for (var exception = logEvent.Exception; exception is not null; exception = exception.InnerException)
+        ThrowSite[] snapshot;
+        lock (sites)
         {
-            if (!Captured.TryGetValue(exception, out var captures))
-            {
-                continue;
-            }
+            snapshot = [.. sites];
+        }
 
-            (ILogEventEnricher LogContext, ExecutionContext ExecutionContext)[] snapshot;
-            lock (captures)
-            {
-                snapshot = [.. captures];
-            }
-
-            foreach (var (logContext, executionContext) in snapshot)
-            {
-                ExecutionContext.Run(executionContext, _ => logContext.Enrich(logEvent, propertyFactory), null);
-            }
+        foreach (var site in snapshot)
+        {
+            ExecutionContext.Run(site.ExecutionContext, _ => site.LogContext.Enrich(logEvent, propertyFactory), null);
         }
     }
 }
