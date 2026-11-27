@@ -17,7 +17,7 @@ internal sealed class RequestSummaryWriter(StepUpSettings settings, CompiledReda
 {
     /// <summary>A writer over the bypass logger of <paramref name="controller"/>.</summary>
     internal RequestSummaryWriter(StepUpSettings settings, CompiledRedactionPatterns patterns, StepUpLoggingController controller)
-        : this(settings, patterns, () => controller.SummaryLogger)
+        : this(settings, patterns, () => controller.BypassLogger)
     {
     }
 
@@ -51,7 +51,7 @@ internal sealed class RequestSummaryWriter(StepUpSettings settings, CompiledReda
         }
     }
 
-    /// <summary>Writes a summary already built.</summary>
+    /// <summary>Writes a summary already built: the seam tests and benchmarks write a prepared summary through.</summary>
     /// <remarks>
     /// Route values are converted per value with the logger's scalar conversion, so a <c>ToMaximumCollectionCount</c>
     /// or destructuring depth limit on a consumer-supplied summary logger is not applied to <c>RouteParameters</c>

@@ -58,7 +58,7 @@ Every benchmark class carries exactly one suite category, which `--anyCategories
 `Pipeline` and `RequestLogging` build a real host with `AddStepUpLogging()` and no OTLP, console or file
 output; their only output sink counts events. They show what the library adds to a log call or a request,
 not what an exporter costs. `SideSinkBenchmarks` calls `StepUpTriggerSink`, `SummarySink` and `ImmediateSink`
-directly, and `RequestSummaryBenchmarks` calls `StepUpLoggingController.EmitRequestSummary` over a logger
+directly, and `RequestSummaryBenchmarks` calls `RequestSummaryWriter.Write` over a logger
 that only counts.
 
 ### The Disk suite

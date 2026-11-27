@@ -61,5 +61,5 @@ a File path shared by both loggers does not throw / drop.
 
 > **Amended (2026-11-27, request summary module):** the controller still owns and disposes the bypass logger set by
 > `SetSummaryLogger`, and still writes its own step Warnings through it. Request summaries are now written by
-> `RequestSummaryWriter`, which reads the controller's `SummaryLogger` on each write and never owns or disposes it, so
+> `RequestSummaryWriter`, which reads the controller's `BypassLogger` on each write and never owns or disposes it, so
 > the disposal order above is unchanged.

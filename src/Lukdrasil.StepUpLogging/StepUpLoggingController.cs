@@ -98,7 +98,7 @@ public sealed class StepUpLoggingController : IDisposable
     /// <see cref="Dispose"/>: the pipeline attaches its bypass logger when the logger is built, before any request or
     /// trigger.
     /// </summary>
-    internal Serilog.ILogger SummaryLogger => _summaryLogger ?? Log.Logger;
+    internal Serilog.ILogger BypassLogger => _summaryLogger ?? Log.Logger;
 
     private DateTimeOffset StartDiagnostic()
     {
@@ -132,7 +132,7 @@ public sealed class StepUpLoggingController : IDisposable
             Volatile.Write(ref _diagnosticActive, false);
             LevelSwitch.MinimumLevel = _settings.BaseLevel;
             DiagnosticActiveCounter.Add(-1);
-            SummaryLogger.Warning("StepUp Diagnostic mode ended, running as Auto at {BaseLevel}", _settings.BaseLevel);
+            BypassLogger.Warning("StepUp Diagnostic mode ended, running as Auto at {BaseLevel}", _settings.BaseLevel);
         }
     }
 
@@ -225,7 +225,7 @@ public sealed class StepUpLoggingController : IDisposable
             TriggerCounter.Add(1);
             _activeStepUpCounter.Add(1);
 
-            SummaryLogger.Warning("Logging step up: increased minimum level to {Level} for {DurationSeconds} seconds",
+            BypassLogger.Warning("Logging step up: increased minimum level to {Level} for {DurationSeconds} seconds",
                 _settings.StepUpLevel, (int)_settings.StepUpDuration.TotalSeconds);
 
             ArmTimer();
@@ -294,7 +294,7 @@ public sealed class StepUpLoggingController : IDisposable
         StepUpDurationHistogram.Record(_time.GetElapsedTime(_stepUpStartTimestamp).TotalSeconds);
         _activeStepUpCounter.Add(-1);
 
-        SummaryLogger.Warning("Logging step down: restored minimum level to {Level}", _settings.BaseLevel);
+        BypassLogger.Warning("Logging step down: restored minimum level to {Level}", _settings.BaseLevel);
     }
 
     /// <summary>
