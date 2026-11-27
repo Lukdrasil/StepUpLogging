@@ -62,6 +62,10 @@ the bypass logger — pre-existing behaviour, unchanged by this ADR, documented 
 > every other property-bearing event carries. The flush is still unfiltered by the deny-list;
 > only its redaction changed. See ADR 0022 D4.
 
+> **Amended (2026-11-27, category policy):** the gate still decides in `StepUpSink.Emit`, but the pin
+> is matched by `CategoryPolicy`, which reads the deny-list, clears it in `AlwaysOn` and returns the
+> export minimum. `StepUpSink` no longer takes `baseLevel` and `neverStepUpCategories`.
+
 **2. A listed category is pinned to `BaseLevel`, not silenced.** It behaves as though
 step-up did not exist: EF `Warning`/`Error` still export, `Information` SQL never does.
 Formally the effective minimum for a listed category is

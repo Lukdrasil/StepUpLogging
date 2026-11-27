@@ -35,10 +35,12 @@ public class StepUpSinkBenchmarks
         _sink = new StepUpSink(
             output,
             new LoggingLevelSwitch(LogEventLevel.Warning),
-            LogEventLevel.Warning,
-            WithCategoryRules ? ["Microsoft.EntityFrameworkCore.Database.Command"] : [],
-            heldBackBuffer: null,
-            WithCategoryRules ? (WithFrameworkDefaults ? new CategoryFloorMap(new Dictionary<string, LogEventLevel>(), [], FrameworkCategoryDefaultTable.Recommended) : new CategoryFloorMap(CategoryFloors(), [])) : null);
+            new CategoryPolicy(new StepUpLoggingOptions
+            {
+                NeverStepUpCategories = WithCategoryRules ? ["Microsoft.EntityFrameworkCore.Database.Command"] : [],
+                CategoryFloors = WithCategoryRules && !WithFrameworkDefaults ? CategoryFloors() : [],
+                FrameworkCategoryDefaults = WithCategoryRules && WithFrameworkDefaults ? FrameworkCategoryPreset.Recommended : FrameworkCategoryPreset.None,
+            }));
         _belowSwitch = BenchmarkFixtures.HandledEvent(LogEventLevel.Debug, extra: 4);
         _atSwitch = BenchmarkFixtures.HandledEvent(LogEventLevel.Warning, extra: 4);
 
@@ -60,10 +62,10 @@ public class StepUpSinkBenchmarks
     [Benchmark]
     public void EmitExported() => _sink.Emit(_atSwitch);
 
-    private static Dictionary<string, LogEventLevel> CategoryFloors() => new(StringComparer.Ordinal)
+    private static Dictionary<string, string> CategoryFloors() => new(StringComparer.Ordinal)
     {
-        ["Microsoft.AspNetCore"] = LogEventLevel.Warning,
-        ["System.Net.Http"] = LogEventLevel.Warning,
-        ["MyApp"] = LogEventLevel.Warning,
+        ["Microsoft.AspNetCore"] = "Warning",
+        ["System.Net.Http"] = "Warning",
+        ["MyApp"] = "Warning",
     };
 }

@@ -14,8 +14,8 @@ namespace Lukdrasil.StepUpLogging;
 /// In-memory per-context ring buffer of held-back events: events <see cref="StepUpSink"/> did not
 /// export, passed to <see cref="Hold"/> at or above <paramref name="minimumLevel"/>. They are
 /// flushed to an inner logger when an Error or Fatal event is observed and dropped on dispose.
-/// Events below <paramref name="minimumLevel"/> are dropped before buffering, and so are events below Warning whose
-/// <c>SourceContext</c> matches a <paramref name="excludedCategories"/> prefix. Context is keyed by OpenTelemetry/Activity <c>TraceId</c> when available;
+/// Events below <paramref name="minimumLevel"/> are dropped before buffering; <see cref="StepUpSink"/> does not hold
+/// an event its <see cref="CategoryVerdict"/> keeps out of the buffer. Context is keyed by OpenTelemetry/Activity <c>TraceId</c> when available;
 /// otherwise a global buffer is used.
 /// Traces are tracked in up to 16 independent LRU stripes, so a hold locks only its own stripe, and a trace's ring grows
 /// on demand up to <paramref name="capacityPerContext"/> events.
@@ -24,10 +24,9 @@ namespace Lukdrasil.StepUpLogging;
 /// Optionally instruments buffer flush operations with ActivitySource for distributed tracing.
 /// To enable tracing, register StepUpLoggingExtensions.BufferActivitySourceName in your OpenTelemetry config.
 /// </summary>
-internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerContext, int maxContexts, LogEventLevel minimumLevel, string[]? excludedCategories = null) : ILogEventSink, IDisposable
+internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerContext, int maxContexts, LogEventLevel minimumLevel) : ILogEventSink, IDisposable
 {
     private readonly ILogger _bypassLogger = bypassLogger ?? throw new ArgumentNullException(nameof(bypassLogger));
-    private readonly string[] _excludedCategories = excludedCategories ?? [];
     private readonly int _capacityPerContext = Math.Max(1, capacityPerContext);
 
     private const int MinTracesPerStripe = 64;
@@ -234,27 +233,20 @@ internal sealed class PreErrorBufferSink(ILogger bypassLogger, int capacityPerCo
     }
 
     /// <summary>
-    /// Buffers an event <see cref="StepUpSink"/> did not export, under its trace key. Events below the minimum level,
-    /// Error/Fatal events and excluded-category events below Warning are ignored. Bypass-marked events never arrive here:
-    /// <see cref="StepUpSink"/> refuses them before holding.
-    /// <paramref name="categoryExcluded"/> marks an event a framework default keeps out of the buffer (ADR 0029).
+    /// Buffers an event <see cref="StepUpSink"/> did not export, under its trace key. Events below the minimum level
+    /// and Error/Fatal events are ignored. Bypass-marked events and events the <see cref="CategoryPolicy"/> keeps out of
+    /// the buffer never arrive here: <see cref="StepUpSink"/> does not hold them.
     /// </summary>
-    internal void Hold(LogEvent logEvent, bool categoryExcluded = false)
+    internal void Hold(LogEvent logEvent)
     {
         if (logEvent is null || _disposed || logEvent.Level >= LogEventLevel.Error || logEvent.Level < minimumLevel)
         {
             return;
         }
 
-        if (IsExcluded(logEvent, categoryExcluded))
-            return;
-
         BufferEvent(GetContextKey(logEvent), logEvent);
         BufferedEventsCounter.Add(1);
     }
-
-    private bool IsExcluded(LogEvent logEvent, bool categoryExcluded)
-        => logEvent.Level < LogEventLevel.Warning && (categoryExcluded || CategoryPrefix.MatchesAny(logEvent, _excludedCategories));
 
     // Get-or-create, LRU touch, eviction and enqueue for a key must complete as one unit under the key's stripe lock;
     // otherwise a concurrent touch for another key of the same stripe could evict this key's buffer between the

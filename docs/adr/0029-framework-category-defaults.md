@@ -57,6 +57,10 @@ could never lower the longer default `System.Net.Http.HttpClient`. A user entry 
 is kept in the buffer (ADR 0024 D2); listing it in `PreErrorBufferExcludeCategories` keeps it out. This
 amends ADR 0024 D5 for the defaults.
 
+> **Amended (2026-11-27, category policy):** `CategoryFloorMap` became `CategoryPolicy`, which reads all six category
+> options. The lookup order is unchanged. A per-`SourceContext` memo stays rejected for the reason given
+> under Consequences: it grows with every distinct category and saves less than the scan costs.
+
 **D4. Modes.** `AlwaysOn` skips the defaults, as it skips `NeverStepUpCategories` (ADR 0021 D4): a
 developer running it wants the detail. Diagnostic mode lifts the defaults like any floor, so their events
 export at `DiagnosticLevel`, and also lifts their buffer exclusion; a `DiagnosticExemptCategories` entry

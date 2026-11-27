@@ -41,7 +41,7 @@ public class DroppedPathBenchmarks
         _controller = new StepUpLoggingController(new StepUpLoggingOptions());
         var output = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(_exported).CreateLogger();
         _buffer = new PreErrorBufferSink(Logger.None, 100, 1024, _controller.StepUpLevel);
-        _stepUpSink = new StepUpSink(output, _controller.LevelSwitch, _controller.BaseLevel, [], _buffer, categoryFloors: null, () => _controller.IsDiagnosticActive);
+        _stepUpSink = new StepUpSink(output, _controller.LevelSwitch, new CategoryPolicy(new StepUpLoggingOptions { NeverStepUpCategories = [], FrameworkCategoryDefaults = FrameworkCategoryPreset.None }), _buffer, () => _controller.IsDiagnosticActive);
         _triggerSink = new StepUpTriggerSink(_controller);
         _summarySink = BypassSink.RequestSummaries(Logger.None);
         _immediateSink = BypassSink.Immediate(Logger.None);

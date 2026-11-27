@@ -27,6 +27,13 @@ the switch sits at `DiagnosticLevel`, so a listed category's events at or above 
 default) are exported directly there. Filtering in `StepUpSink` before `Hold` was rejected: the rule
 is about what the buffer keeps, and `Hold` already owns the other buffer filters.
 
+> **Amended (2026-11-27, category policy):** the match moved out of `Hold`. After ADR 0029 the "keep out of the
+> buffer" rule was split across three modules: the framework rule flag in the floor lookup, a bool
+> `StepUpSink` passed to `Hold`, and this list matched again in `Hold`. `CategoryPolicy` now answers it
+> once, as `KeptOutOfBuffer` of the verdict `StepUpSink` already asks for, and `StepUpSink` does not hold
+> such an event. `PreErrorBufferSink` reads no category option. D1 to D3 hold unchanged: the list filters
+> the buffer only, below `Warning` only, and blank entries are dropped.
+
 **D2. Only events below `Warning` are dropped.** A `Warning` of a listed category is held when the
 switch or a floor rejects it (for example `BaseLevel = Error`) and an `Error` flushes it, so the list
 can never hide a warning that leads up to an error. `Error` and `Fatal` are never held anyway.
