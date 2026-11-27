@@ -46,6 +46,7 @@ internal sealed class BypassSink : ILogEventSink, IDisposable
             {
                 _target.Write(logEvent);
                 _forwarded.Add(1);
+                CompletionReceipt.NoteExported(logEvent);
             }
         }
         catch

@@ -30,7 +30,7 @@ public class RequestBodyCaptureTests
     }
 
     private static async Task<IHost> BuildServerAsync(Serilog.ILogger logger,
-        int? maxBodyCaptureBytes = null, StepUpMode mode = StepUpMode.AlwaysOn, int statusCode = 200)
+        int? maxBodyCaptureBytes = null, StepUpMode mode = StepUpMode.AlwaysOn, int statusCode = 200, bool throws = false)
     {
         var options = new StepUpLoggingOptions
         {
@@ -65,6 +65,11 @@ public class RequestBodyCaptureTests
                         // leaveOpen so we don't dispose Request.Body (model binding doesn't either).
                         var reader = new StreamReader(ctx.Request.Body, Encoding.UTF8, true, 1024, leaveOpen: true);
                         var received = await reader.ReadToEndAsync();
+                        if (throws)
+                        {
+                            throw new InvalidOperationException("boom");
+                        }
+
                         ctx.Response.StatusCode = statusCode;
                         await ctx.Response.WriteAsync($"len={received.Length}");
                     });
@@ -190,6 +195,33 @@ public class RequestBodyCaptureTests
 
             var body = "{\"user\":\"bob\"}";
             await client.PostAsync("/api/test", new StringContent(body, Encoding.UTF8, "application/json"), TestContext.Current.CancellationToken);
+            await Task.Delay(50, TestContext.Current.CancellationToken);
+
+            var captured = FindRequestBody(capture);
+            Assert.NotNull(captured);
+            Assert.Contains("bob", captured);
+        }
+        finally
+        {
+            Log.Logger = previous;
+            logger.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task RequestBody_IsCaptured_WhenTheEndpointThrows_EvenWhenNotSteppedUp()
+    {
+        var capture = new CaptureSink();
+        var logger = new LoggerConfiguration().WriteTo.Sink(capture).CreateLogger();
+        var previous = Log.Logger;
+        Log.Logger = logger;
+        try
+        {
+            using var host = await BuildServerAsync(logger, mode: StepUpMode.Auto, throws: true);
+            using var client = host.GetTestClient();
+
+            var body = "{\"user\":\"bob\"}";
+            await Assert.ThrowsAnyAsync<Exception>(() => client.PostAsync("/api/test", new StringContent(body, Encoding.UTF8, "application/json"), TestContext.Current.CancellationToken));
             await Task.Delay(50, TestContext.Current.CancellationToken);
 
             var captured = FindRequestBody(capture);

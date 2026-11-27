@@ -25,23 +25,39 @@ writes its summary, even when its Information completion event is exported (Base
 Diagnostic). A client abort is not a failure by itself: its completion event is Information, and its summary is
 omitted only when it also ends with status 400 or above or an exception, and Information is exported.
 
-**D3. The summary is omitted only when the completion event is exported.** The decision is made in the completion
-event's `EnrichDiagnosticContext` callback, which Serilog.AspNetCore calls only for an event the root logger accepts,
-right before it writes it. There the module asks `CategoryPolicy.Exports`, the rule `StepUpSink` applies, for the
-source `Serilog.AspNetCore.RequestLoggingMiddleware` at the live switch level. When the answer is yes, the module also
-marks the event `IsImmediate`, so it exports through the immediate route and a step-down between the decision and
-`StepUpSink` cannot drop it after its summary was left out. When the answer is no (for example `BaseLevel` `Error` and a 4xx `Warning`), the summary is written as
-under `Keep`, so no request ends with zero lines. An event held back into the pre-error buffer counts as not exported.
-The level and status are noted in `GetLevel`, because an exception's 500 is not on the response yet when the event
-is written. A
-test pins the source name, so a Serilog.AspNetCore upgrade that renames it fails a test.
+**D3. The summary is omitted only when the completion event was exported, and the sinks that export it say so.**
+Under `Omit` the summary middleware issues a `CompletionReceipt` per request and stores it in an `AsyncLocal`. That
+channel works because Serilog.AspNetCore writes the completion event inside the middleware's `await next()`, and the
+root sinks run synchronously within that write. Three things then happen on the same execution context:
+1. The completion event's `EnrichDiagnosticContext` callback sets the summary's fields on a failed request and marks
+   the receipt carried.
+2. `StepUpSink`, right before it hands an event to the output logger, and `BypassSink`, right after it writes one to
+   the bypass logger, call `CompletionReceipt.NoteExported`. That call marks the receipt exported when the event is
+   the completion event, recognised by the source `Serilog.AspNetCore.RequestLoggingMiddleware`.
+3. Once `next()` returns, the middleware writes the summary unless the receipt is both carried and exported.
+
+So the decision follows the export instead of predicting it. In every case below the event is not exported, so the
+summary is written as under `Keep` and no request ends with zero lines:
+- A completion event below the export minimum, for example a 4xx `Warning` under `BaseLevel` `Error`.
+- An event held back into the pre-error buffer, including one the buffer later flushes.
+- An event dropped by a root `Serilog:Filter`.
+- An event a step-down leaves behind between enrichment and `StepUpSink`.
+- An event written to a consumer-supplied completion logger that does not write to the library's root sinks.
+
+An exception is noted in `GetLevel`, which runs before the callback, because its 500 is not on the response yet when
+the event is written. The same note gives the body capture of ADR 0009 its 500. A test pins the source name, so a
+Serilog.AspNetCore upgrade that renames it fails a test.
+
+The channel is hidden from the sink interfaces. **A sink added later that hands events to an output logger must call
+`CompletionReceipt.NoteExported` too.** If it does not, its completion events leave the summary in place, which costs
+a line but never loses one.
 
 **D4. The completion event carries the summary's fields.** The module builds the inbound summary at
 `RequestSummaryDetail`, with its redaction (ADR 0032 D5), and sets on the completion event `ClientKind`, `UserAgent`
 and every optional field under the key the summary writes it with: the long name, or in `Minimal` the short key of
 ADR 0033, so a query written against the summary finds the same field on the completion event. The summary fields
 the completion event sets itself (`ClientIp`, `Jti`, `QueryString`, `RouteParameters`) are not copied, so no value
-appears twice under two keys. `Direction`, `Method`, `Path`, `StatusCode` and
+appears twice under two keys. `InboundRequestSummary` owns that list next to the fields it builds. `Direction`, `Method`, `Path`, `StatusCode` and
 `ElapsedMs` are not copied: `RequestMethod`, `RequestPath`, `StatusCode` and `Elapsed` carry them. The summary's
 `ElapsedMs` is measured around the whole inner pipeline, the completion event's `Elapsed` inside it, so the two differ
 by the time of the middleware between them. A failure while building the fields leaves the summary to be written.
@@ -52,7 +68,9 @@ by the time of the middleware between them. A failure while building the fields 
   event. A query for failed requests that reads `IsRequestSummary` events must read the completion event instead.
 - The completion event of a failed request gains the summary's properties, under the summary's keys; with
   `RequestSummaryDetail` `Minimal` the event mixes its own long names with the summary's short keys.
-- That event carries `IsImmediate=true` and exports through the bypass logger, like an `AlwaysExportCategories`
-  event; it is not held in the pre-error buffer, which it would not have entered anyway.
-- A root `Serilog:Filter` that drops the completion event after enrichment is not seen by D3; that request then has no
-  line. The library adds no filter of its own.
+- The completion event is exported through its normal route. Under `Omit` it gains no marker, and the step-up switch,
+  the category options and every filter apply to it as under `Keep`.
+- The completion event of a failed request carries the summary's fields whenever a receipt is issued, also when it is
+  then held back. A buffered completion event that is flushed later is therefore written next to the summary.
+- Every exported event costs one `AsyncLocal` read in `StepUpSink` or `BypassSink`. It costs more only inside a
+  request whose completion event carries the summary, and there only a `SourceContext` comparison.

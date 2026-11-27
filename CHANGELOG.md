@@ -11,6 +11,9 @@ Tags before 1.8.0 predate this file.
 ### Added
 - `RequestSummaryOnError` (`Keep`, `Omit`, default `Keep`). With `Omit` and `AlwaysLogRequestSummary`, a request that fails (status 400 or above, or an unhandled exception) writes no request summary when its completion event is exported; the completion event carries the summary's fields instead (`ClientKind`, `UserAgent`, `ClientId`, `Route`, and the rest at `RequestSummaryDetail`). When the completion event is not exported, for example a 4xx `Warning` under `BaseLevel` `Error`, the summary is still written. The startup report names the mode. See ADR 0043.
 
+### Fixed
+- With `CaptureRequestBody`, a request whose endpoint throws an unhandled exception now has its body captured on the completion event, as a 5xx status already had; the exception's 500 was not on the response when the body was considered.
+
 ## [9.0.0] - 2026-11-27
 
 ### Changed

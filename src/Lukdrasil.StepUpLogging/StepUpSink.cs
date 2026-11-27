@@ -38,12 +38,13 @@ internal sealed class StepUpSink : ILogEventSink, IDisposable
         if (Refuses(logEvent)) return;
 
         var verdict = _policy.Resolve(logEvent, _levelSwitch.MinimumLevel, _isDiagnosticActive);
-        if (!verdict.Exports(logEvent.Level))
+        if (logEvent.Level < verdict.ExportMinimum)
         {
             if (!verdict.KeptOutOfBuffer) _heldBackBuffer?.Hold(logEvent);
             return;
         }
 
+        CompletionReceipt.NoteExported(logEvent);
         _innerLogger.Write(logEvent);
     }
 

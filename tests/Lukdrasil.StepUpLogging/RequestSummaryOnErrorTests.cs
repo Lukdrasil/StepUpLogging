@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Serilog;
 using Serilog.Events;
 using Xunit;
 
@@ -20,9 +21,12 @@ public class RequestSummaryOnErrorTests
     private const string UserAgent = "curl/8.4.0";
 
     private static Task<LogEvent[]> ExportedAsync(string path, params (string Key, string Value)[] options)
-        => ExportedAsync(path, steppedUp: false, options);
+        => ExportedAsync(path, steppedUp: false, configure: null, options);
 
-    private static async Task<LogEvent[]> ExportedAsync(string path, bool steppedUp, params (string Key, string Value)[] options)
+    private static Task<LogEvent[]> ExportedAsync(string path, bool steppedUp, params (string Key, string Value)[] options)
+        => ExportedAsync(path, steppedUp, configure: null, options);
+
+    private static async Task<LogEvent[]> ExportedAsync(string path, bool steppedUp, Action<IServiceProvider, LoggerConfiguration>? configure, params (string Key, string Value)[] options)
     {
         var captureKey = Guid.NewGuid().ToString("N");
         var settings = new Dictionary<string, string?>
@@ -43,7 +47,14 @@ public class RequestSummaryOnErrorTests
             var builder = WebApplication.CreateBuilder();
             builder.WebHost.UseTestServer();
             builder.Configuration.AddInMemoryCollection(settings);
-            builder.AddStepUpLogging();
+            if (configure is null)
+            {
+                builder.AddStepUpLogging();
+            }
+            else
+            {
+                builder.AddStepUpLogging(configure);
+            }
 
             await using (var app = builder.Build())
             {
@@ -176,11 +187,11 @@ public class RequestSummaryOnErrorTests
     }
 
     [Fact]
-    public async Task TheCompletionEvent_HasTheSourceContextThePolicyIsAskedAbout()
+    public async Task TheCompletionEvent_HasTheSourceContextTheReceiptRecognizes()
     {
         var events = await ExportedAsync("/status/429");
 
-        Assert.Equal(StepUpRequestLogging.CompletionSourceContext, Scalar(Assert.Single(events, IsCompletion), "SourceContext"));
+        Assert.Equal(CompletionReceipt.SourceContext, Scalar(Assert.Single(events, IsCompletion), "SourceContext"));
     }
 
     [Fact]
@@ -193,11 +204,31 @@ public class RequestSummaryOnErrorTests
     }
 
     [Fact]
-    public async Task Omit_TheCarriedCompletionEvent_IsExportedPastTheLevelSwitch()
+    public async Task Omit_ACompletionEventARootFilterDrops_KeepsTheSummary()
+    {
+        var events = await ExportedAsync("/status/429", steppedUp: false,
+            (_, configuration) => configuration.Filter.ByExcluding(e => e.Properties.ContainsKey("RequestMethod")),
+            ("RequestSummaryOnError", "Omit"));
+
+        Assert.True(IsSummary(Assert.Single(events)));
+    }
+
+    [Fact]
+    public async Task Omit_ACompletionEventExportedThroughAlwaysExport_WritesOnlyTheCompletionEvent()
+    {
+        var events = await ExportedAsync("/status/429", ("RequestSummaryOnError", "Omit"), ("BaseLevel", "Error"), ("AlwaysExportCategories:0", CompletionReceipt.SourceContext));
+
+        var completion = Assert.Single(events);
+        Assert.True(IsCompletion(completion));
+        Assert.Equal(UserAgent, Scalar(completion, "UserAgent"));
+    }
+
+    [Fact]
+    public async Task Omit_TheCarriedCompletionEvent_IsNotMarkedImmediate()
     {
         var events = await ExportedAsync("/status/429", ("RequestSummaryOnError", "Omit"));
 
-        Assert.True(LogProperties.HasFlag(Assert.Single(events), LogProperties.IsImmediate));
+        Assert.False(LogProperties.HasFlag(Assert.Single(events), LogProperties.IsImmediate));
     }
 
     [Theory]
