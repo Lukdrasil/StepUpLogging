@@ -6,6 +6,11 @@ Releases from 1.8.0 onward are recorded here. Entries backfilled from each relea
 `PackageReleaseNotes` and, where those were not updated per release, from the commits between tags.
 Tags before 1.8.0 predate this file.
 
+## [Unreleased]
+
+### Changed
+- Dependencies: on `net11.0` Serilog.AspNetCore 11.0.0 and Microsoft.Extensions.Http.Resilience 11.0.1; on `net10.0` Serilog.AspNetCore stays 10.0.0 and Microsoft.Extensions.Http.Resilience moves to 10.11.1, so a .NET 10 project keeps the 10.x Microsoft.Extensions packages. Serilog.Sinks.OpenTelemetry 4.3.0 on both. A project that references `Microsoft.Extensions.Telemetry.Abstractions` directly at a lower version than the one Microsoft.Extensions.Http.Resilience brings gets restore error NU1605 and should raise that reference. The options, the log output and the audit wire format are unchanged.
+
 ## [9.1.0] - 2026-11-27
 
 ### Added

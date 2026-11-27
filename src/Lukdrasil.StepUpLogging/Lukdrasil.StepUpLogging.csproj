@@ -52,18 +52,19 @@
   <ItemGroup>
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.21.0" />
     <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.21.0" />
-    <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
+    <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" Condition="'$(TargetFramework)' == 'net10.0'" />
+    <PackageReference Include="Serilog.AspNetCore" Version="11.0.0" Condition="'$(TargetFramework)' == 'net11.0'" />
     <PackageReference Include="Serilog.Sinks.Async" Version="2.1.0" />
     <PackageReference Include="Serilog.Formatting.Compact" Version="3.0.0" />
     <PackageReference Include="Serilog.Enrichers.OpenTelemetry" Version="1.0.1" />
-    <PackageReference Include="Serilog.Sinks.OpenTelemetry" Version="4.2.0" />
+    <PackageReference Include="Serilog.Sinks.OpenTelemetry" Version="4.3.0" />
     <PackageReference Include="Serilog.Exceptions" Version="8.4.0" />
     <PackageReference Include="Serilog.Enrichers.Thread" Version="4.0.0" />
     <PackageReference Include="Serilog.Enrichers.Process" Version="3.0.0" />
     <PackageReference Include="Serilog.Enrichers.Environment" Version="3.0.1" />
     <PackageReference Include="Serilog.Enrichers.CallStack" Version="1.0.358" />
-    <PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="10.0.0" PrivateAssets="build;buildtransitive;analyzers;contentfiles" Condition="'$(TargetFramework)' == 'net10.0'" />
-    <PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="11.0.0" PrivateAssets="build;buildtransitive;analyzers;contentfiles" Condition="'$(TargetFramework)' == 'net11.0'" />
+    <PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="10.11.1" PrivateAssets="build;buildtransitive;analyzers;contentfiles" Condition="'$(TargetFramework)' == 'net10.0'" />
+    <PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="11.0.1" PrivateAssets="build;buildtransitive;analyzers;contentfiles" Condition="'$(TargetFramework)' == 'net11.0'" />
   </ItemGroup>
 
 </Project>
