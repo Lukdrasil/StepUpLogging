@@ -4,7 +4,7 @@ using Serilog.Events;
 
 namespace Lukdrasil.StepUpLogging.Tests;
 
-/// <summary>Pins how <see cref="StepUpLoggingController.EmitRequestSummary"/> converts route values that are not strings.</summary>
+/// <summary>Pins how <see cref="RequestSummaryWriter.Write"/> converts route values that are not strings.</summary>
 public class RequestSummaryRouteValueTests
 {
     private sealed class LastEventSink : ILogEventSink
@@ -15,15 +15,14 @@ public class RequestSummaryRouteValueTests
     }
 
     [Fact]
-    public void EmitRequestSummary_NonStringRouteValues_AreConvertedLikeTheLogger()
+    public void Write_NonStringRouteValues_AreConvertedLikeTheLogger()
     {
         var sink = new LastEventSink();
-        using var controller = new StepUpLoggingController(
-            new StepUpLoggingOptions(),
-            new LoggerConfiguration().WriteTo.Sink(sink).CreateLogger());
+        using var logger = new LoggerConfiguration().WriteTo.Sink(sink).CreateLogger();
+        var writer = TestSummaries.Writer(logger);
         var routeParameters = new Dictionary<string, object?> { ["id"] = 42, ["slug"] = null, ["name"] = "orders" };
 
-        controller.EmitRequestSummary(TestSummaries.Inbound("GET", "/orders/42", 200, 1.5, routeParameters: routeParameters));
+        writer.Write(TestSummaries.Inbound("GET", "/orders/42", 200, 1.5, routeParameters: routeParameters));
 
         var elements = Assert.IsType<DictionaryValue>(sink.LastEvent!.Properties["RouteParameters"]).Elements;
         Assert.Equal(

@@ -28,7 +28,7 @@ public class OutboundRequestSummaryHandlerTests
 
     private sealed class Harness : IDisposable
     {
-        private readonly StepUpLoggingController _controller;
+        private readonly Logger _logger;
 
         public Harness(
             Func<HttpRequestMessage, HttpResponseMessage>? respond = null,
@@ -36,8 +36,10 @@ public class OutboundRequestSummaryHandlerTests
             RequestSummaryDetail detail = RequestSummaryDetail.Full,
             CompiledRedactionPatterns? patterns = null)
         {
-            _controller = new StepUpLoggingController(new StepUpLoggingOptions(), new LoggerConfiguration().WriteTo.Sink(Sink).CreateLogger());
-            var handler = new OutboundRequestSummaryHandler(clientName, _controller, patterns ?? NoPatterns, detail)
+            _logger = new LoggerConfiguration().WriteTo.Sink(Sink).CreateLogger();
+            var options = new StepUpLoggingOptions { RequestSummaryDetail = detail };
+            var writer = new RequestSummaryWriter(new StepUpSettings(options), patterns ?? NoPatterns, () => _logger);
+            var handler = new OutboundRequestSummaryHandler(clientName, writer)
             {
                 InnerHandler = new StubHandler(respond ?? (_ => new HttpResponseMessage(HttpStatusCode.OK))),
             };
@@ -54,7 +56,7 @@ public class OutboundRequestSummaryHandlerTests
         public void Dispose()
         {
             Invoker.Dispose();
-            _controller.Dispose();
+            _logger.Dispose();
         }
     }
 

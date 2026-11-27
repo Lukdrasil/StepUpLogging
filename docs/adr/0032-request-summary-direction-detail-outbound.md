@@ -72,3 +72,11 @@ created with `new HttpClient()` is not covered.
 - The property order of the summary changes: template properties, then `ClientIp`, `Jti`, `QueryString`,
   `RouteParameters`, `ForwardedFor`.
 - Outbound summaries add one event per outgoing call at `RequestSummaryLevel`; the option is off by default.
+
+> **Amended (2026-11-27, request summary module):** both summaries are written by one internal module,
+> `RequestSummaryWriter`. Its `WriteInbound` (which also skips `ExcludedPaths`) and `WriteOutbound` build the summary
+> at `RequestSummaryDetail` with the redaction patterns and write it at `RequestSummaryLevel`; neither throws, so the
+> "writing the summary never fails the call" rule of D4 holds for both directions in one place. The outbound builder
+> moved from `OutboundRequestSummaryHandler` to `OutboundRequestSummary`, beside `InboundRequestSummary`; the handler
+> only times the call. `StepUpLoggingController` no longer writes summaries. The decisions above are unchanged, and so
+> is every summary's level, template, property set and order.

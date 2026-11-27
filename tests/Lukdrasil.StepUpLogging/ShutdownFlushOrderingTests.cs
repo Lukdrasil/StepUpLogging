@@ -69,7 +69,7 @@ public class ShutdownFlushOrderingTests
     }
 
     [Fact]
-    public void EmitRequestSummary_AfterControllerDisposed_DoesNotThrow()
+    public void Write_AfterControllerDisposed_DoesNotThrow()
     {
         var opts = new StepUpLoggingOptions
         {
@@ -79,11 +79,12 @@ public class ShutdownFlushOrderingTests
             DurationSeconds = 300,
         };
         var controller = new StepUpLoggingController(opts, null);
+        var writer = new RequestSummaryWriter(new StepUpSettings(opts), new CompiledRedactionPatterns([]), controller);
 
         controller.Dispose();
 
         var ex = Record.Exception(() =>
-            controller.EmitRequestSummary(TestSummaries.Inbound("GET", "/health", 200, 1.2)));
+            writer.Write(TestSummaries.Inbound("GET", "/health", 200, 1.2)));
         Assert.Null(ex);
     }
 }

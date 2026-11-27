@@ -1,6 +1,6 @@
 namespace Lukdrasil.StepUpLogging.Tests;
 
-/// <summary>Inbound request summaries built from already redacted field values, for tests of what the controller writes.</summary>
+/// <summary>Inbound request summaries built from already redacted field values, and the writer that writes them.</summary>
 internal static class TestSummaries
 {
     private static readonly CompiledRedactionPatterns NoPatterns = new([]);
@@ -22,4 +22,12 @@ internal static class TestSummaries
             .With("QueryString", queryString)
             .With("RouteParameters", routeParameters)
             .With("ForwardedFor", forwardedFor);
+
+    /// <summary>A writer over <paramref name="logger"/> with <paramref name="options"/>, defaults applied, and no redaction patterns.</summary>
+    internal static RequestSummaryWriter Writer(Serilog.ILogger logger, StepUpLoggingOptions? options = null)
+    {
+        options ??= new StepUpLoggingOptions();
+        StepUpSettings.ApplyDefaults(options);
+        return new RequestSummaryWriter(new StepUpSettings(options), NoPatterns, () => logger);
+    }
 }

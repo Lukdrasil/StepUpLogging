@@ -11,6 +11,8 @@ namespace Lukdrasil.StepUpLogging;
 /// </summary>
 internal sealed class OutboundRequestSummaryFilter(StepUpLoggingController controller, CompiledRedactionPatterns patterns, StepUpSettings settings) : IHttpMessageHandlerBuilderFilter
 {
+    private readonly RequestSummaryWriter _summaries = new(settings, patterns, controller);
+
     /// <summary>
     /// The library's own audit client and the OTLP exporter clients. The OTLP names are the ones
     /// OpenTelemetry.Exporter.OpenTelemetryProtocol 1.15.3 creates in TryEnableIHttpClientFactoryIntegration; the log
@@ -32,7 +34,7 @@ internal sealed class OutboundRequestSummaryFilter(StepUpLoggingController contr
             next(builder);
             if (!IsExcluded(builder.Name))
             {
-                builder.AdditionalHandlers.Insert(0, new OutboundRequestSummaryHandler(builder.Name ?? string.Empty, controller, patterns, settings.RequestSummaryDetail));
+                builder.AdditionalHandlers.Insert(0, new OutboundRequestSummaryHandler(builder.Name ?? string.Empty, _summaries));
             }
         }
         : next;
