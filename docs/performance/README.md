@@ -140,7 +140,7 @@ Eight claims are also pinned by ordinary unit tests, which fail the build when t
 | `StepUpSink_DroppedWithDenyListAndFloors_DoesNotAllocate` | the same with the deny-list and category floors on |
 | `Hold_RepeatedInOneW3CTrace_DoesNotAllocate` | `PreErrorBufferSink.Hold` allocates nothing once an event is in a trace's buffer |
 | `Redact_ReturnsSameInstance_WhenNoPatternMatches` | a value no pattern matches comes back as the same string |
-| `TryGetFloor_DoesNotAllocate_QS01` | `CategoryFloorMap.TryGetFloor` allocates nothing |
+| `Resolve_DoesNotAllocate_QS01` | `CategoryPolicy.Resolve` allocates nothing |
 | `JoinHeaderValues_SingleValue_DoesNotAllocateOnTheSecondCall` | a request header with one value is joined without allocating |
 | `RedactRequestHeaders_EachExtraPlainHeader_AllocatesLessThan64Bytes` | each further plain request header costs under 64 B in the redacted header dictionary |
 | `EmitRequestSummary_EachOptionalField_AllocatesUnder60PercentOfTheLoggerChain` | each optional field of the request summary costs under 60 % of what the `ForContext` chain cost |

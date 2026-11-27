@@ -233,7 +233,7 @@ public class StepUpTriggerSinkTests
     public async Task Emit_Error_FromNeverTriggerCategory_DoesNotTrigger_UnlistedDoes()
     {
         var callCount = 0;
-        using var sink = new StepUpTriggerSink(() => Interlocked.Increment(ref callCount), ["Polly"]);
+        using var sink = new StepUpTriggerSink(() => Interlocked.Increment(ref callCount), new CategoryPolicy(new StepUpLoggingOptions { NeverTriggerCategories = ["Polly"] }));
 
         var parser = new MessageTemplateParser();
         LogEvent ErrorFrom(string sourceContext) => new(DateTimeOffset.UtcNow, LogEventLevel.Error, exception: null,

@@ -31,7 +31,7 @@ public class EnricherBenchmarks
     {
         _activity = InActivity ? StartWithRemoteParent() : null;
         _activityContext = new ActivityContextEnricher();
-        _alwaysExport = new AlwaysExportEnricher(["MyApp.Orders"]);
+        _alwaysExport = new AlwaysExportEnricher(new CategoryPolicy(new StepUpLoggingOptions { AlwaysExportCategories = ["MyApp.Orders"] }));
         _redaction = new RedactionEnricher(BenchmarkFixtures.SamplePatterns());
 
         BenchmarkFixtures.Require(ActivityContext().Properties.ContainsKey("TraceFlags") == InActivity, "ActivityContextEnricher does not follow the current activity");

@@ -49,6 +49,11 @@ rejected: it cannot express a sub-category floor below its parent.
 **D6. One prefix rule.** Every category option matches through `CategoryPrefix`, the ADR 0021 D3
 rule moved out of `StepUpSink` unchanged.
 
+> **Amended (2026-11-27, category policy):** every category option is now read by one module, `CategoryPolicy`,
+> which matches through `CategoryPrefix`. `StepUpSink`, `PreErrorBufferSink`, `StepUpTriggerSink` and
+> `AlwaysExportEnricher` ask it a question and match no prefix. D1 to D5 and D7 are unchanged: the
+> diagnostic flag is still controller-owned and passed to `CategoryPolicy.Resolve` by `StepUpSink`.
+
 **D7. `StepUpSink` reads a controller-owned diagnostic flag, never `StepUpMode`.** This amends
 ADR 0021 D4: the sink stays free of any mode dependency, and the controller decides whether
 Diagnostic is active.

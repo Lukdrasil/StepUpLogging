@@ -22,13 +22,27 @@ public class StepUpSinkTests
 
     private const string EfCommandCategory = "Microsoft.EntityFrameworkCore.Database.Command";
 
+    private static CategoryPolicy Categories(
+        string[]? neverStepUpCategories = null,
+        (string Key, LogEventLevel Floor)[]? floors = null,
+        string[]? diagnosticExempt = null,
+        LogEventLevel baseLevel = LogEventLevel.Warning) =>
+        new(new StepUpLoggingOptions
+        {
+            BaseLevel = baseLevel.ToString(),
+            NeverStepUpCategories = neverStepUpCategories ?? [],
+            CategoryFloors = (floors ?? []).ToDictionary(f => f.Key, f => f.Floor.ToString(), StringComparer.Ordinal),
+            DiagnosticExemptCategories = diagnosticExempt ?? [],
+            FrameworkCategoryDefaults = FrameworkCategoryPreset.None,
+        });
+
     [Fact]
     public void SteppedUp_ListedCategory_InformationEvent_IsDropped()
     {
         var collector = new CollectingSink();
         var inner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
         var levelSwitch = new LoggingLevelSwitch(LogEventLevel.Information);
-        using var sink = new StepUpSink(inner, levelSwitch, LogEventLevel.Warning, [EfCommandCategory]);
+        using var sink = new StepUpSink(inner, levelSwitch, Categories([EfCommandCategory]));
 
         sink.Emit(MakeEvent(LogEventLevel.Information, SourceContext(EfCommandCategory)));
 
@@ -41,7 +55,7 @@ public class StepUpSinkTests
         var collector = new CollectingSink();
         var inner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
         var levelSwitch = new LoggingLevelSwitch(LogEventLevel.Information);
-        using var sink = new StepUpSink(inner, levelSwitch, LogEventLevel.Warning, [EfCommandCategory]);
+        using var sink = new StepUpSink(inner, levelSwitch, Categories([EfCommandCategory]));
 
         sink.Emit(MakeEvent(LogEventLevel.Warning, SourceContext(EfCommandCategory)));
 
@@ -54,7 +68,7 @@ public class StepUpSinkTests
         var collector = new CollectingSink();
         var inner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
         var levelSwitch = new LoggingLevelSwitch(LogEventLevel.Information);
-        using var sink = new StepUpSink(inner, levelSwitch, LogEventLevel.Warning, [EfCommandCategory]);
+        using var sink = new StepUpSink(inner, levelSwitch, Categories([EfCommandCategory]));
 
         sink.Emit(MakeEvent(LogEventLevel.Information, SourceContext("My.App.Service")));
 
@@ -67,7 +81,7 @@ public class StepUpSinkTests
         var collector = new CollectingSink();
         var inner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
         var levelSwitch = new LoggingLevelSwitch(LogEventLevel.Information);
-        using var sink = new StepUpSink(inner, levelSwitch, LogEventLevel.Warning, [EfCommandCategory]);
+        using var sink = new StepUpSink(inner, levelSwitch, Categories([EfCommandCategory]));
 
         sink.Emit(MakeEvent(LogEventLevel.Information, SourceContext(EfCommandCategory + ".Internal")));
         Assert.Empty(collector.Events);
@@ -82,7 +96,7 @@ public class StepUpSinkTests
         var collector = new CollectingSink();
         var inner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
         var levelSwitch = new LoggingLevelSwitch(LogEventLevel.Information);
-        using var sink = new StepUpSink(inner, levelSwitch, LogEventLevel.Warning, [EfCommandCategory]);
+        using var sink = new StepUpSink(inner, levelSwitch, Categories([EfCommandCategory]));
 
         sink.Emit(MakeEvent(LogEventLevel.Information, SourceContext("microsoft.entityframeworkcore.database.command")));
 
@@ -95,7 +109,7 @@ public class StepUpSinkTests
         var collector = new CollectingSink();
         var inner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
         var levelSwitch = new LoggingLevelSwitch(LogEventLevel.Information);
-        using var sink = new StepUpSink(inner, levelSwitch, LogEventLevel.Warning, [EfCommandCategory]);
+        using var sink = new StepUpSink(inner, levelSwitch, Categories([EfCommandCategory]));
 
         sink.Emit(MakeEvent(LogEventLevel.Information));
 
@@ -108,7 +122,7 @@ public class StepUpSinkTests
         var collector = new CollectingSink();
         var inner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
         var levelSwitch = new LoggingLevelSwitch(LogEventLevel.Information);
-        using var sink = new StepUpSink(inner, levelSwitch, LogEventLevel.Warning, []);
+        using var sink = new StepUpSink(inner, levelSwitch, Categories());
 
         sink.Emit(MakeEvent(LogEventLevel.Information, SourceContext(EfCommandCategory)));
 
@@ -121,7 +135,7 @@ public class StepUpSinkTests
         var collector = new CollectingSink();
         var inner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
         var levelSwitch = new LoggingLevelSwitch(LogEventLevel.Warning);
-        using var sink = new StepUpSink(inner, levelSwitch, LogEventLevel.Warning, [EfCommandCategory]);
+        using var sink = new StepUpSink(inner, levelSwitch, Categories([EfCommandCategory]));
 
         sink.Emit(MakeEvent(LogEventLevel.Warning, SourceContext(EfCommandCategory)));
 
@@ -134,7 +148,7 @@ public class StepUpSinkTests
         var collector = new CollectingSink();
         var inner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
         var levelSwitch = new LoggingLevelSwitch(LogEventLevel.Information);
-        using var sink = new StepUpSink(inner, levelSwitch, LogEventLevel.Warning, [EfCommandCategory]);
+        using var sink = new StepUpSink(inner, levelSwitch, Categories([EfCommandCategory]));
 
         var summary = new LogEventProperty(LogProperties.IsRequestSummary, new ScalarValue(true));
         var immediate = new LogEventProperty(LogProperties.IsImmediate, new ScalarValue(true));
@@ -153,7 +167,7 @@ public class StepUpSinkTests
         var bypass = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(flushed).CreateLogger();
         using var buffer = new PreErrorBufferSink(bypass, capacityPerContext: 10, maxContexts: 16, minimumLevel: LogEventLevel.Verbose);
         var inner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(new CollectingSink()).CreateLogger();
-        using var sink = new StepUpSink(inner, new LoggingLevelSwitch(LogEventLevel.Warning), LogEventLevel.Warning, [], buffer);
+        using var sink = new StepUpSink(inner, new LoggingLevelSwitch(LogEventLevel.Warning), Categories(), buffer);
 
         sink.Emit(MakeEvent(LogEventLevel.Information, new LogEventProperty("Name", new ScalarValue("normal"))));
         sink.Emit(MakeEvent(LogEventLevel.Information, new LogEventProperty("Name", new ScalarValue("marked")), new LogEventProperty(marker, new ScalarValue(true))));
@@ -169,7 +183,7 @@ public class StepUpSinkTests
         var collector = new CollectingSink();
         var inner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
         var levelSwitch = new LoggingLevelSwitch(LogEventLevel.Warning);
-        using var sink = new StepUpSink(inner, levelSwitch, LogEventLevel.Warning, []);
+        using var sink = new StepUpSink(inner, levelSwitch, Categories());
 
         sink.Emit(MakeEvent(LogEventLevel.Warning));
         sink.Emit(MakeEvent(LogEventLevel.Error));
@@ -183,7 +197,7 @@ public class StepUpSinkTests
         var collector = new CollectingSink();
         var inner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
         var levelSwitch = new LoggingLevelSwitch(LogEventLevel.Warning);
-        using var sink = new StepUpSink(inner, levelSwitch, LogEventLevel.Warning, []);
+        using var sink = new StepUpSink(inner, levelSwitch, Categories());
 
         sink.Emit(MakeEvent(LogEventLevel.Debug));
         sink.Emit(MakeEvent(LogEventLevel.Information));
@@ -197,7 +211,7 @@ public class StepUpSinkTests
         var collector = new CollectingSink();
         var inner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
         var levelSwitch = new LoggingLevelSwitch(LogEventLevel.Verbose);
-        using var sink = new StepUpSink(inner, levelSwitch, LogEventLevel.Warning, []);
+        using var sink = new StepUpSink(inner, levelSwitch, Categories());
 
         var summaryProp = new LogEventProperty(LogProperties.IsRequestSummary, new ScalarValue(true));
         sink.Emit(MakeEvent(LogEventLevel.Information, summaryProp));
@@ -211,7 +225,7 @@ public class StepUpSinkTests
         var collector = new CollectingSink();
         var inner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
         var levelSwitch = new LoggingLevelSwitch(LogEventLevel.Verbose);
-        using var sink = new StepUpSink(inner, levelSwitch, LogEventLevel.Warning, []);
+        using var sink = new StepUpSink(inner, levelSwitch, Categories());
 
         var immediateProp = new LogEventProperty(LogProperties.IsImmediate, new ScalarValue(true));
         sink.Emit(MakeEvent(LogEventLevel.Information, immediateProp));
@@ -225,7 +239,7 @@ public class StepUpSinkTests
         var collector = new CollectingSink();
         var inner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
         var levelSwitch = new LoggingLevelSwitch(LogEventLevel.Verbose);
-        using var sink = new StepUpSink(inner, levelSwitch, LogEventLevel.Warning, []);
+        using var sink = new StepUpSink(inner, levelSwitch, Categories());
 
         // IsImmediate=false should not be treated as a bypass marker
         var immediateProp = new LogEventProperty(LogProperties.IsImmediate, new ScalarValue(false));
@@ -240,7 +254,7 @@ public class StepUpSinkTests
         var collector = new CollectingSink();
         var inner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
         var levelSwitch = new LoggingLevelSwitch(LogEventLevel.Warning);
-        using var sink = new StepUpSink(inner, levelSwitch, LogEventLevel.Warning, []);
+        using var sink = new StepUpSink(inner, levelSwitch, Categories());
 
         sink.Emit(MakeEvent(LogEventLevel.Information)); // dropped
         Assert.Empty(collector.Events);
@@ -256,7 +270,7 @@ public class StepUpSinkTests
         var collector = new CollectingSink();
         var inner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
         var levelSwitch = new LoggingLevelSwitch(LogEventLevel.Verbose);
-        var sink = new StepUpSink(inner, levelSwitch, LogEventLevel.Warning, []);
+        var sink = new StepUpSink(inner, levelSwitch, Categories());
 
         sink.Dispose();
         sink.Emit(MakeEvent(LogEventLevel.Warning));
@@ -268,14 +282,21 @@ public class StepUpSinkTests
     public void StepUpSink_NullInnerLogger_ThrowsArgumentNullException()
     {
         var levelSwitch = new LoggingLevelSwitch(LogEventLevel.Information);
-        Assert.Throws<ArgumentNullException>(() => new StepUpSink(null!, levelSwitch, LogEventLevel.Warning, []));
+        Assert.Throws<ArgumentNullException>(() => new StepUpSink(null!, levelSwitch, Categories()));
     }
 
     [Fact]
     public void StepUpSink_NullLevelSwitch_ThrowsArgumentNullException()
     {
         var inner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(new CollectingSink()).CreateLogger();
-        Assert.Throws<ArgumentNullException>(() => new StepUpSink(inner, null!, LogEventLevel.Warning, []));
+        Assert.Throws<ArgumentNullException>(() => new StepUpSink(inner, null!, Categories()));
+    }
+
+    [Fact]
+    public void StepUpSink_NullCategories_ThrowsArgumentNullException()
+    {
+        var inner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(new CollectingSink()).CreateLogger();
+        Assert.Throws<ArgumentNullException>(() => new StepUpSink(inner, new LoggingLevelSwitch(), null!));
     }
 
     [Fact]
@@ -284,7 +305,7 @@ public class StepUpSinkTests
         var collector = new CollectingSink();
         var inner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
         var levelSwitch = new LoggingLevelSwitch(LogEventLevel.Verbose);
-        using var sink = new StepUpSink(inner, levelSwitch, LogEventLevel.Warning, []);
+        using var sink = new StepUpSink(inner, levelSwitch, Categories());
 
         // "yes" is a string scalar, not a bool — IsBoolTrue returns false → event passes through
         var prop = new LogEventProperty(LogProperties.IsImmediate, new ScalarValue("yes"));
@@ -299,7 +320,7 @@ public class StepUpSinkTests
         var collector = new CollectingSink();
         var inner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
         var levelSwitch = new LoggingLevelSwitch(LogEventLevel.Verbose);
-        using var sink = new StepUpSink(inner, levelSwitch, LogEventLevel.Warning, []);
+        using var sink = new StepUpSink(inner, levelSwitch, Categories());
 
         // SequenceValue is not a ScalarValue — IsBoolTrue returns false → event passes through
         var prop = new LogEventProperty(LogProperties.IsImmediate, new SequenceValue(Enumerable.Empty<LogEventPropertyValue>()));
@@ -318,7 +339,7 @@ public class StepUpSinkTests
         var bypassLogger = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(immediateCollector).CreateLogger();
 
         var levelSwitch = new LoggingLevelSwitch(LogEventLevel.Information);
-        using var stepUpSink = new StepUpSink(stepUpInner, levelSwitch, LogEventLevel.Warning, []);
+        using var stepUpSink = new StepUpSink(stepUpInner, levelSwitch, Categories());
         using var immediateSink = BypassSink.Immediate(bypassLogger);
 
         var immediateProp = new LogEventProperty(LogProperties.IsImmediate, new ScalarValue(true));
@@ -340,7 +361,7 @@ public class StepUpSinkTests
         var collector = new CollectingSink();
         var inner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
         var levelSwitch = new LoggingLevelSwitch(LogEventLevel.Information);
-        using var sink = new StepUpSink(inner, levelSwitch, LogEventLevel.Warning, [EfCommandCategory]);
+        using var sink = new StepUpSink(inner, levelSwitch, Categories([EfCommandCategory]));
 
         var enricher = new RedactionEnricher(new CompiledRedactionPatterns(new[] { new Regex(".*", RegexOptions.Compiled) }));
         var logEvent = MakeEvent(LogEventLevel.Information, SourceContext(EfCommandCategory));
@@ -361,7 +382,7 @@ public class StepUpSinkTests
         var inner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(exported).CreateLogger();
         var bypass = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(flushed).CreateLogger();
         var buffer = new PreErrorBufferSink(bypass, capacityPerContext: 10, maxContexts: 16, minimumLevel: LogEventLevel.Information);
-        var sink = new StepUpSink(inner, new LoggingLevelSwitch(switchLevel), LogEventLevel.Warning, neverStepUpCategories, buffer);
+        var sink = new StepUpSink(inner, new LoggingLevelSwitch(switchLevel), Categories(neverStepUpCategories), buffer);
         return (sink, buffer, exported, flushed);
     }
 
@@ -431,6 +452,24 @@ public class StepUpSinkTests
         Assert.Equal("ef-info", Assert.Single(flushed.Events).MessageTemplate.Text);
     }
 
+    [Fact]
+    public void RejectedEvent_TheVerdictKeepsOutOfTheBuffer_IsNotHeld()
+    {
+        var flushed = new CollectingSink();
+        var bypass = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(flushed).CreateLogger();
+        using var buffer = new PreErrorBufferSink(bypass, capacityPerContext: 10, maxContexts: 16, minimumLevel: LogEventLevel.Information);
+        var inner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(new CollectingSink()).CreateLogger();
+        var categories = new CategoryPolicy(new StepUpLoggingOptions { NeverStepUpCategories = [], PreErrorBufferExcludeCategories = ["Noisy"] });
+        using var sink = new StepUpSink(inner, new LoggingLevelSwitch(LogEventLevel.Error), categories, buffer);
+
+        sink.Emit(Tagged(LogEventLevel.Information, "noisy-info", SourceContext("Noisy.Child")));
+        sink.Emit(Tagged(LogEventLevel.Warning, "noisy-warn", SourceContext("Noisy.Child")));
+        sink.Emit(Tagged(LogEventLevel.Information, "app-info", SourceContext("My.App")));
+        buffer.Emit(Tagged(LogEventLevel.Error, "err"));
+
+        Assert.Equal(["noisy-warn", "app-info"], flushed.Events.Select(e => e.MessageTemplate.Text));
+    }
+
     private const string FlooredCategory = "Test.Floored";
     private const string ExemptCategory = "Test.Exempt";
 
@@ -447,8 +486,7 @@ public class StepUpSinkTests
         var inner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(exported).CreateLogger();
         var bypass = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(flushed).CreateLogger();
         var buffer = new PreErrorBufferSink(bypass, capacityPerContext: 10, maxContexts: 16, minimumLevel: LogEventLevel.Verbose);
-        var map = new CategoryFloorMap(floors.ToDictionary(f => f.Key, f => f.Floor, StringComparer.Ordinal), diagnosticExempt ?? []);
-        var sink = new StepUpSink(inner, new LoggingLevelSwitch(switchLevel), baseLevel, neverStepUpCategories ?? [], buffer, map, isDiagnosticActive);
+        var sink = new StepUpSink(inner, new LoggingLevelSwitch(switchLevel), Categories(neverStepUpCategories, floors, diagnosticExempt, baseLevel), buffer, isDiagnosticActive);
         return (sink, buffer, exported, flushed);
     }
 
@@ -617,7 +655,7 @@ public class StepUpSinkTests
     {
         var exported = new CollectingSink();
         var inner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(exported).CreateLogger();
-        using var sink = new StepUpSink(inner, new LoggingLevelSwitch(LogEventLevel.Warning), LogEventLevel.Warning, []);
+        using var sink = new StepUpSink(inner, new LoggingLevelSwitch(LogEventLevel.Warning), Categories());
         var debug = Tagged(LogEventLevel.Debug, "dropped-debug");
 
         var delta = AllocatedBytesOfSecondRun(() =>
@@ -634,8 +672,7 @@ public class StepUpSinkTests
     {
         var exported = new CollectingSink();
         var inner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(exported).CreateLogger();
-        var floors = new CategoryFloorMap(new Dictionary<string, LogEventLevel>(StringComparer.Ordinal) { [FlooredCategory] = LogEventLevel.Warning }, []);
-        using var sink = new StepUpSink(inner, new LoggingLevelSwitch(LogEventLevel.Information), LogEventLevel.Warning, [EfCommandCategory], categoryFloors: floors);
+        using var sink = new StepUpSink(inner, new LoggingLevelSwitch(LogEventLevel.Information), Categories([EfCommandCategory], [(FlooredCategory, LogEventLevel.Warning)]));
         LogEvent[] dropped =
         [
             Tagged(LogEventLevel.Information, "floored-info", SourceContext(FlooredCategory)),

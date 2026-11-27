@@ -135,14 +135,15 @@ public class AuditLoggerTests
                 DurationSeconds = 10,
                 TrustForwardedHeaders = trustForwardedHeaders,
                 RedactionRegexes = redactionRegexes ?? [],
-                NeverStepUpCategories = neverStepUpCategories ?? []
+                NeverStepUpCategories = neverStepUpCategories ?? [],
+                FrameworkCategoryDefaults = FrameworkCategoryPreset.None
             };
 
             Controller = new StepUpLoggingController(options);
 
             var gatedInner = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(GatedOutput).CreateLogger();
             var bypassLogger = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(BypassOutput).CreateLogger();
-            _stepUpSink = new StepUpSink(gatedInner, Controller.LevelSwitch, Controller.BaseLevel, options.NeverStepUpCategories);
+            _stepUpSink = new StepUpSink(gatedInner, Controller.LevelSwitch, new CategoryPolicy(options));
             _immediateSink = BypassSink.Immediate(bypassLogger);
 
             var root = new LoggerConfiguration()

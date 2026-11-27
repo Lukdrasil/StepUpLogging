@@ -53,16 +53,14 @@ internal sealed class StepUpPipeline(IHostApplicationBuilder builder, StepUpSett
     private void WriteRootSinks(LoggerConfiguration lc, StepUpLoggingController controller, ILogger gatedOutput, ILogger bypassLogger)
     {
         var preErrorBuffer = Options.EnablePreErrorBuffering
-            ? new PreErrorBufferSink(bypassLogger, Options.PreErrorBufferSize, Options.PreErrorMaxContexts, settings.StepUpLevel, settings.PreErrorBufferExcludeCategories)
+            ? new PreErrorBufferSink(bypassLogger, Options.PreErrorBufferSize, Options.PreErrorMaxContexts, settings.StepUpLevel)
             : null;
 
         lc.WriteTo.Sink(new StepUpSink(
             gatedOutput,
             controller.LevelSwitch,
-            settings.BaseLevel,
-            settings.NeverStepUpCategories,
+            settings.Categories,
             preErrorBuffer,
-            settings.CategoryFloors,
             () => controller.IsDiagnosticActive));
 
         if (preErrorBuffer is not null)
@@ -70,7 +68,7 @@ internal sealed class StepUpPipeline(IHostApplicationBuilder builder, StepUpSett
             lc.WriteTo.Sink(preErrorBuffer);
         }
 
-        lc.WriteTo.Sink(new StepUpTriggerSink(controller, settings.NeverTriggerCategories));
+        lc.WriteTo.Sink(new StepUpTriggerSink(controller, settings.Categories));
         lc.WriteTo.Sink(BypassSink.RequestSummaries(bypassLogger));
         lc.WriteTo.Sink(BypassSink.Immediate(bypassLogger));
     }
@@ -131,9 +129,9 @@ internal sealed class StepUpPipeline(IHostApplicationBuilder builder, StepUpSett
             lc.Enrich.With(new ThrowContextEnricher());
         }
 
-        if (settings.AlwaysExportCategories.Length > 0)
+        if (settings.Categories.HasAlwaysExport)
         {
-            lc.Enrich.With(new AlwaysExportEnricher(settings.AlwaysExportCategories));
+            lc.Enrich.With(new AlwaysExportEnricher(settings.Categories));
         }
 
         lc.Enrich.When(needsEnrichment, ApplyCommonEnrichers);

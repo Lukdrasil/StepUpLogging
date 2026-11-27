@@ -56,7 +56,7 @@ public class RedactionShortcutGateTests
         var levelSwitch = new LoggingLevelSwitch(LogEventLevel.Warning);
         var gate = new EnrichmentGate(levelSwitch, LogEventLevel.Information);
         var collector = new CollectingSink();
-        using var sink = new StepUpSink(Inner(collector), levelSwitch, LogEventLevel.Warning, []);
+        using var sink = new StepUpSink(Inner(collector), levelSwitch, new CategoryPolicy(new StepUpLoggingOptions { NeverStepUpCategories = [] }));
         var debug = Event(LogEventLevel.Debug);
         Assert.False(gate.Needs(debug));
 
@@ -72,7 +72,7 @@ public class RedactionShortcutGateTests
         var levelSwitch = new LoggingLevelSwitch(LogEventLevel.Warning);
         var gate = new EnrichmentGate(levelSwitch, LogEventLevel.Information);
         var collector = new CollectingSink();
-        using var sink = new StepUpSink(Inner(collector), levelSwitch, LogEventLevel.Warning, []);
+        using var sink = new StepUpSink(Inner(collector), levelSwitch, new CategoryPolicy(new StepUpLoggingOptions { NeverStepUpCategories = [] }));
         var information = Event(LogEventLevel.Information);
         Assert.True(gate.Needs(information));
 

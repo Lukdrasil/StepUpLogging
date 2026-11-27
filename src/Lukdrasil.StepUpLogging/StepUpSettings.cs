@@ -4,9 +4,9 @@ namespace Lukdrasil.StepUpLogging;
 
 /// <summary>
 /// The <see cref="StepUpLoggingOptions"/> resolved once from <c>IOptions&lt;StepUpLoggingOptions&gt;</c>, after binding,
-/// defaults and validation (ADR 0007): typed levels, durations, category prefix lists without blank entries, the
-/// category floors, the excluded request paths and the sensitive headers. It is the only reader of the options at
-/// runtime; every module reads these instead of interpreting the raw options again.
+/// defaults and validation (ADR 0007): typed levels, durations, the <see cref="CategoryPolicy"/>, the excluded
+/// request paths and the sensitive headers. It is the only reader of the options at runtime; every module reads these
+/// instead of interpreting the raw options again.
 /// </summary>
 internal sealed class StepUpSettings
 {
@@ -29,11 +29,7 @@ internal sealed class StepUpSettings
         MaxContinuousStepUp = TimeSpan.FromSeconds(options.MaxContinuousStepUpSeconds);
         StepUpCooldown = TimeSpan.FromSeconds(options.StepUpCooldownSeconds);
         DiagnosticDuration = TimeSpan.FromMinutes(options.DiagnosticDurationMinutes);
-        NeverStepUpCategories = Mode == StepUpMode.AlwaysOn ? [] : NonBlank(options.NeverStepUpCategories);
-        NeverTriggerCategories = NonBlank(options.NeverTriggerCategories);
-        PreErrorBufferExcludeCategories = NonBlank(options.PreErrorBufferExcludeCategories);
-        AlwaysExportCategories = NonBlank(options.AlwaysExportCategories);
-        CategoryFloors = FloorMapOf(options);
+        Categories = new CategoryPolicy(options);
         ExcludedPaths = new ExcludedPaths(options.ExcludePaths ?? []);
         SensitiveHeaders = new HashSet<string>([.. BuiltInSensitiveHeaders, .. options.AdditionalSensitiveHeaders ?? []], StringComparer.OrdinalIgnoreCase);
         ActivityInstrumentation = options.EnableActivityInstrumentation;
@@ -82,17 +78,8 @@ internal sealed class StepUpSettings
 
     internal TimeSpan DiagnosticDuration { get; }
 
-    /// <summary>The NeverStepUp prefixes; empty in AlwaysOn mode, which never steps up (ADR 0021).</summary>
-    internal string[] NeverStepUpCategories { get; }
-
-    internal string[] NeverTriggerCategories { get; }
-
-    internal string[] PreErrorBufferExcludeCategories { get; }
-
-    internal string[] AlwaysExportCategories { get; }
-
-    /// <summary>The category floors (ADR 0024, ADR 0029), or <see langword="null"/> when no floor applies.</summary>
-    internal CategoryFloorMap? CategoryFloors { get; }
+    /// <summary>Every category option resolved into one policy (ADR 0021, ADR 0024, ADR 0028, ADR 0029).</summary>
+    internal CategoryPolicy Categories { get; }
 
     internal ExcludedPaths ExcludedPaths { get; }
 
@@ -140,17 +127,6 @@ internal sealed class StepUpSettings
     internal static FrameworkCategoryRule[] FrameworkDefaultsFor(FrameworkCategoryPreset preset)
         => preset == FrameworkCategoryPreset.Recommended ? FrameworkCategoryDefaultTable.Recommended : [];
 
-    private static CategoryFloorMap? FloorMapOf(StepUpLoggingOptions options)
-    {
-        var floors = (options.CategoryFloors ?? [])
-            .Where(f => !string.IsNullOrWhiteSpace(f.Key))
-            .ToDictionary(f => f.Key, f => Enum.Parse<LogEventLevel>(f.Value, ignoreCase: true), StringComparer.Ordinal);
-        var frameworkDefaults = options.Mode == StepUpMode.AlwaysOn ? [] : FrameworkDefaultsFor(options.FrameworkCategoryDefaults);
-        return floors.Count == 0 && frameworkDefaults.Length == 0
-            ? null
-            : new CategoryFloorMap(floors, NonBlank(options.DiagnosticExemptCategories), frameworkDefaults);
-    }
-
     // The validator rejects a level that does not parse (ADR 0007), so there is no fallback here.
-    private static LogEventLevel Level(string value) => Enum.Parse<LogEventLevel>(value, ignoreCase: true);
+    internal static LogEventLevel Level(string value) => Enum.Parse<LogEventLevel>(value, ignoreCase: true);
 }

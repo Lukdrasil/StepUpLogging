@@ -527,21 +527,6 @@ public class PreErrorBufferSinkTests
     }
 
     [Fact]
-    public void Hold_CategoryExcluded_DropsBelowWarning_AndHoldsWarning()
-    {
-        var collector = new CollectingSink();
-        var bypass = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(collector).CreateLogger();
-        using var sink = new PreErrorBufferSink(bypass, capacityPerContext: 10, maxContexts: 16, minimumLevel: LogEventLevel.Verbose);
-        var parser = new MessageTemplateParser();
-
-        sink.Hold(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Information, null, parser.Parse("excluded-info"), Array.Empty<LogEventProperty>()), categoryExcluded: true);
-        sink.Hold(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Warning, null, parser.Parse("excluded-warn"), Array.Empty<LogEventProperty>()), categoryExcluded: true);
-        sink.Emit(new LogEvent(DateTimeOffset.UtcNow, LogEventLevel.Error, null, parser.Parse("err"), Array.Empty<LogEventProperty>()));
-
-        Assert.Equal(["excluded-warn"], collector.Events.Select(e => e.MessageTemplate.Text));
-    }
-
-    [Fact]
     public void Hold_RepeatedInOneW3CTrace_DoesNotAllocate()
     {
         var collector = new CollectingSink();
