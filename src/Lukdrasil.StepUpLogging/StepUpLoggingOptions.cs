@@ -104,6 +104,25 @@ public enum RequestSummaryDetail
 }
 
 /// <summary>
+/// Whether a failed inbound request keeps its request summary next to its request completion event (ADR 0043).
+/// </summary>
+public enum RequestSummaryOnErrorMode
+{
+    /// <summary>
+    /// Every request writes its summary; a failed request also writes its completion event.
+    /// </summary>
+    Keep = 0,
+
+    /// <summary>
+    /// A request that fails (status 400 or above, or an unhandled exception) and whose completion event is exported
+    /// writes no summary: the completion event carries the summary's fields instead, at
+    /// <see cref="StepUpLoggingOptions.RequestSummaryDetail"/> under their long names. When the completion event is
+    /// not exported, the summary is written as under <see cref="Keep"/>.
+    /// </summary>
+    Omit = 1
+}
+
+/// <summary>
 /// Selects the built-in framework category rules applied under <see cref="StepUpLoggingOptions.CategoryFloors"/>.
 /// </summary>
 public enum FrameworkCategoryPreset
@@ -430,6 +449,14 @@ public sealed class StepUpLoggingOptions
     /// rendered message is the same in every mode.
     /// </summary>
     public RequestSummaryDetail RequestSummaryDetail { get; set; } = RequestSummaryDetail.Full;
+
+    /// <summary>
+    /// Whether a failed inbound request (status 400 or above, or an unhandled exception) also writes its request
+    /// summary when its request completion event is exported. <see cref="RequestSummaryOnErrorMode.Omit"/> writes one
+    /// line per failed request: the completion event, carrying the summary's fields. Applies only with
+    /// <see cref="AlwaysLogRequestSummary"/>. Default: <see cref="RequestSummaryOnErrorMode.Keep"/>, both lines.
+    /// </summary>
+    public RequestSummaryOnErrorMode RequestSummaryOnError { get; set; } = RequestSummaryOnErrorMode.Keep;
 
     /// <summary>
     /// When true, write a request summary with <c>Direction</c> <c>Outbound</c> for every call through an

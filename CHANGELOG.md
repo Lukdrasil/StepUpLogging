@@ -6,6 +6,11 @@ Releases from 1.8.0 onward are recorded here. Entries backfilled from each relea
 `PackageReleaseNotes` and, where those were not updated per release, from the commits between tags.
 Tags before 1.8.0 predate this file.
 
+## [Unreleased]
+
+### Added
+- `RequestSummaryOnError` (`Keep`, `Omit`, default `Keep`). With `Omit` and `AlwaysLogRequestSummary`, a request that fails (status 400 or above, or an unhandled exception) writes no request summary when its completion event is exported; the completion event carries the summary's fields instead (`ClientKind`, `UserAgent`, `ClientId`, `Route`, and the rest at `RequestSummaryDetail`). When the completion event is not exported, for example a 4xx `Warning` under `BaseLevel` `Error`, the summary is still written. The startup report names the mode. See ADR 0043.
+
 ## [9.0.0] - 2026-11-27
 
 ### Changed

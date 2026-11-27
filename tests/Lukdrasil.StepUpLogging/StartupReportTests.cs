@@ -142,6 +142,27 @@ public class StartupReportTests
         Assert.EndsWith(expected, summary.RenderMessage(), StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("true", "request summary inbound and outbound at Information, Full, omitted on error")]
+    [InlineData("false", "request summary outbound at Information, Full")]
+    public void Summary_NamesAnOmittedInboundSummaryOnError(string inbound, string expected)
+    {
+        using var run = Start(("AlwaysLogRequestSummary", inbound), ("AlwaysLogOutboundRequestSummary", "true"), ("RequestSummaryOnError", "Omit"));
+
+        var summary = Assert.Single(run.WithTemplate(StartupReport.SummaryTemplate));
+        Assert.EndsWith(expected, summary.RenderMessage(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("false", true)]
+    [InlineData("true", false)]
+    public void OmitOnError_WarnsUnusedOnlyWithoutTheInboundSummary(string inbound, bool warned)
+    {
+        using var run = Start(("AlwaysLogRequestSummary", inbound), ("RequestSummaryOnError", "Omit"));
+
+        Assert.Equal(warned, run.WithTemplate(StartupReport.UnusedOptionTemplate).Any(e => e.RenderMessage().Contains("RequestSummaryOnError", StringComparison.Ordinal)));
+    }
+
     [Fact]
     public void Summary_NamesTheClientIpModes()
     {

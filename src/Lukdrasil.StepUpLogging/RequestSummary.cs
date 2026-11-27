@@ -119,6 +119,20 @@ internal sealed class RequestSummary
     }
 
     /// <summary>
+    /// The fields a request completion event carries in place of this summary (ADR 0043): <c>ClientKind</c>,
+    /// <c>UserAgent</c>, then the optional fields in the order they were added, under their long names.
+    /// </summary>
+    internal IEnumerable<KeyValuePair<string, object>> CarriedFields()
+    {
+        yield return new("ClientKind", _clientKind);
+        yield return new("UserAgent", _userAgent);
+        foreach (var field in _fields)
+        {
+            yield return field;
+        }
+    }
+
+    /// <summary>
     /// The summary as one event at <paramref name="level"/>, with the trace and span of <see cref="Activity.Current"/>;
     /// values are converted with <paramref name="logger"/>.
     /// </summary>

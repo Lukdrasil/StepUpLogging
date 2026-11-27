@@ -43,6 +43,7 @@ internal sealed class StepUpSettings
         ClientIpAudit = options.ClientIpAudit;
         RequestSummaryDetail = options.RequestSummaryDetail;
         AlwaysLogRequestSummary = options.AlwaysLogRequestSummary;
+        RequestSummaryOnError = options.RequestSummaryOnError;
         AlwaysLogOutboundRequestSummary = options.AlwaysLogOutboundRequestSummary;
         TreatServerErrorStatusAsError = options.TreatServerErrorStatusAsError;
         CaptureRequestBody = options.CaptureRequestBody;
@@ -108,6 +109,8 @@ internal sealed class StepUpSettings
     internal RequestSummaryDetail RequestSummaryDetail { get; }
 
     internal bool AlwaysLogRequestSummary { get; }
+
+    internal RequestSummaryOnErrorMode RequestSummaryOnError { get; }
 
     internal bool AlwaysLogOutboundRequestSummary { get; }
 
