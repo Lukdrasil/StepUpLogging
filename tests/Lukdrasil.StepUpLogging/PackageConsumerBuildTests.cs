@@ -291,7 +291,7 @@ public class PackageConsumerBuildTests(PackedStepUpLoggingPackage package) : ICl
     {
         var consumer = WriteConsumer(
             "with-telemetry-abstractions",
-            extraPackageReferences: $"""<PackageReference Include="{TelemetryAbstractions}" Version="11.0.0" />""");
+            extraPackageReferences: $"""<PackageReference Include="{TelemetryAbstractions}" Version="11.0.1" />""");
 
         var build = await BuildAsync(consumer);
 
