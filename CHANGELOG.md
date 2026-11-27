@@ -6,7 +6,7 @@ Releases from 1.8.0 onward are recorded here. Entries backfilled from each relea
 `PackageReleaseNotes` and, where those were not updated per release, from the commits between tags.
 Tags before 1.8.0 predate this file.
 
-## [Unreleased]
+## [9.0.0] - 2026-11-27
 
 ### Changed
 - **Breaking: the client address is no longer logged or audited by default.** `ClientIp`, `ForwardedFor` and the audit `SourceIp` are left out, and `X-Forwarded-For`, `Forwarded`, `X-Real-IP` and `X-Original-For` are redacted in the logged `Headers`. Request headers themselves are not changed. Set `ClientIpLogging` and `ClientIpAudit` to `Full` to keep the 8.x output. See MIGRATION.md and ADR 0042.
