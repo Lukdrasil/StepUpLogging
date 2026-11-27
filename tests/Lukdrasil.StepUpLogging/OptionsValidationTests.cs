@@ -36,6 +36,8 @@ public class OptionsValidationTests
     [InlineData("ConsoleFormat")]
     [InlineData("ConsoleTraceFormat")]
     [InlineData("RequestSummaryDetail")]
+    [InlineData("ClientIpLogging")]
+    [InlineData("ClientIpAudit")]
     public void UndefinedEnumNumber_FailsValidationOnStart(string option)
     {
         Assert.Throws<OptionsValidationException>(
@@ -388,6 +390,14 @@ public class OptionsValidationTests
         using var host = BuildHost(("SerilogStepUp:ConsoleFormat", "Text"));
 
         Assert.Equal(ConsoleLogFormat.Text, ResolveOptions(host).ConsoleFormat);
+    }
+
+    [Fact]
+    public void ClientIpLoggingAndClientIpAudit_DefaultToOff()
+    {
+        var options = new StepUpLoggingOptions();
+
+        Assert.Equal((ClientIpMode.Off, ClientIpMode.Off), (options.ClientIpLogging, options.ClientIpAudit));
     }
 
     [Fact]

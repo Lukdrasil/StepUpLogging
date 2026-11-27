@@ -12,10 +12,10 @@ namespace Lukdrasil.StepUpLogging;
 internal static class InboundRequestSummary
 {
     /// <summary>The summary of the request in <paramref name="context"/>.</summary>
-    internal static RequestSummary From(HttpContext context, string path, int statusCode, double elapsedMs, RequestSummaryDetail detail, bool trustForwardedHeaders, CompiledRedactionPatterns patterns)
+    internal static RequestSummary From(HttpContext context, string path, int statusCode, double elapsedMs, RequestSummaryDetail detail, bool trustForwardedHeaders, ClientIpMode clientIpMode, CompiledRedactionPatterns patterns)
     {
         var redactedPath = patterns.Redact(path);
-        var (clientIp, forwardedFor) = RequestClient.Addresses(context, trustForwardedHeaders, patterns);
+        var (clientIp, forwardedFor) = RequestClient.Addresses(context, trustForwardedHeaders, clientIpMode, patterns);
         var summary = new RequestSummary(RequestSummary.Inbound, context.Request.Method, redactedPath, statusCode, elapsedMs, RequestClient.UserAgent(context.Request), patterns, detail == RequestSummaryDetail.Minimal)
             .With("Route", RouteOf(context))
             .WithTrue("Aborted", context.RequestAborted.IsCancellationRequested)

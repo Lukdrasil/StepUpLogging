@@ -122,6 +122,31 @@ public enum FrameworkCategoryPreset
     Recommended = 1
 }
 
+/// <summary>
+/// How much of the client IP address is written (ADR 0042): by the logs under
+/// <see cref="StepUpLoggingOptions.ClientIpLogging"/>, by audit records under
+/// <see cref="StepUpLoggingOptions.ClientIpAudit"/>.
+/// </summary>
+public enum ClientIpMode
+{
+    /// <summary>
+    /// No client IP: the field is omitted. In the logs <c>ForwardedFor</c> is omitted too and the
+    /// <c>X-Forwarded-For</c>, <c>Forwarded</c>, <c>X-Real-IP</c> and <c>X-Original-For</c> headers are redacted.
+    /// </summary>
+    Off = 0,
+
+    /// <summary>
+    /// The client prefix in CIDR form: /24 for IPv4 (<c>203.0.113.0/24</c>), /48 for IPv6
+    /// (<c>2001:db8:1234::/48</c>). An IPv4-mapped IPv6 address is masked as IPv4. A value that does not parse as an
+    /// address after redaction is omitted. In the logs each <c>ForwardedFor</c> entry is masked the same way and the
+    /// four IP headers are redacted. This is pseudonymisation, not anonymisation.
+    /// </summary>
+    Prefix = 1,
+
+    /// <summary>The full address, as 8.x wrote it. The logged headers are not changed.</summary>
+    Full = 2
+}
+
 public sealed class StepUpLoggingOptions
 {
     public StepUpMode Mode { get; set; } = StepUpMode.Auto;
@@ -293,14 +318,11 @@ public sealed class StepUpLoggingOptions
     internal static bool OtlpEndpointIsSet(string? endpoint) => !string.IsNullOrWhiteSpace(endpoint);
 
     /// <summary>
-    /// Enables ActivitySource instrumentation for distributed tracing (default: true).
-    /// When enabled, activities are created for:
-    /// - Request logging (LogRequest, CaptureRequestBody, ApplyRedaction)
-    /// - Step-up/step-down transitions (TriggerStepUp, PerformStepDown)
-    /// - Buffer operations (FlushBufferedEvents, BufferEvent)
-    /// 
-    /// Activities are created regardless, but only propagated if registered in OpenTelemetry config.
-    /// Set to false to disable activity creation entirely (minimal performance overhead reduction).
+    /// Lets the library start its own activities (default: true): <c>LogRequest</c>, <c>CaptureRequestBody</c> and
+    /// <c>ApplyRedaction</c> for request logging, <c>TriggerStepUp</c> and <c>PerformStepDown</c> for step-up
+    /// transitions. An activity is created only when a listener such as OpenTelemetry has its source registered
+    /// (<c>AddSource</c>). Set to false to start none of them. The pre-error buffer's <c>FlushBufferedEvents</c>
+    /// activity is not affected.
     /// </summary>
     public bool EnableActivityInstrumentation { get; set; } = true;
 
@@ -338,7 +360,7 @@ public sealed class StepUpLoggingOptions
     public bool StructuredExceptionDetails { get; set; } = true;
 
     /// <summary>
-    /// Service instance ID. If not set, uses host name and process ID
+    /// Service instance ID, added to every event as <c>ServiceInstanceId</c>. If not set, the property is not added.
     /// </summary>
     public string? ServiceInstanceId { get; set; }
 
@@ -426,6 +448,19 @@ public sealed class StepUpLoggingOptions
     /// Default: false — <c>ClientIp</c> comes from <c>Connection.RemoteIpAddress</c>.
     /// </summary>
     public bool TrustForwardedHeaders { get; set; } = false;
+
+    /// <summary>
+    /// How much of the client IP the logs write (ADR 0042): <c>ClientIp</c> in the request summary and in the
+    /// request completion event, the summary's <c>ForwardedFor</c>, and the IP headers in the logged
+    /// <c>Headers</c>. The request's own headers are never changed. Default: <see cref="ClientIpMode.Off"/>.
+    /// </summary>
+    public ClientIpMode ClientIpLogging { get; set; } = ClientIpMode.Off;
+
+    /// <summary>
+    /// How much of the client IP audit records carry in <see cref="AuditEvent.SourceIp"/> (ADR 0042), independent of
+    /// <see cref="ClientIpLogging"/>. Default: <see cref="ClientIpMode.Off"/>.
+    /// </summary>
+    public ClientIpMode ClientIpAudit { get; set; } = ClientIpMode.Off;
 
     /// <summary>
     /// When true, a request that completes with a status code &gt;= 500 but no exception is logged at

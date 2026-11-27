@@ -29,7 +29,7 @@ internal sealed class RequestSummaryWriter(StepUpSettings settings, CompiledReda
             var path = ExcludedPaths.NormalizedPath(context.Request);
             if (!settings.ExcludedPaths.Contains(path))
             {
-                Emit(InboundRequestSummary.From(context, path, statusCode, elapsedMs, settings.RequestSummaryDetail, settings.TrustForwardedHeaders, patterns));
+                Emit(InboundRequestSummary.From(context, path, statusCode, elapsedMs, settings.RequestSummaryDetail, settings.TrustForwardedHeaders, settings.ClientIpLogging, patterns));
             }
         }
         catch

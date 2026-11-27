@@ -16,6 +16,9 @@ internal sealed class StepUpSettings
         "Authorization-Token", "Proxy-Authorization", "WWW-Authenticate", "Sec-WebSocket-Key"
     ];
 
+    // Redacted in the logged headers unless ClientIpLogging is Full (ADR 0042 D5).
+    private static readonly string[] ClientIpHeaders = ["X-Forwarded-For", "Forwarded", "X-Real-IP", "X-Original-For"];
+
     internal StepUpSettings(StepUpLoggingOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -31,9 +34,13 @@ internal sealed class StepUpSettings
         DiagnosticDuration = TimeSpan.FromMinutes(options.DiagnosticDurationMinutes);
         Categories = new CategoryPolicy(options);
         ExcludedPaths = new ExcludedPaths(options.ExcludePaths ?? []);
-        SensitiveHeaders = new HashSet<string>([.. BuiltInSensitiveHeaders, .. options.AdditionalSensitiveHeaders ?? []], StringComparer.OrdinalIgnoreCase);
+        SensitiveHeaders = new HashSet<string>(
+            [.. BuiltInSensitiveHeaders, .. options.ClientIpLogging == ClientIpMode.Full ? [] : ClientIpHeaders, .. options.AdditionalSensitiveHeaders ?? []],
+            StringComparer.OrdinalIgnoreCase);
         ActivityInstrumentation = options.EnableActivityInstrumentation;
         TrustForwardedHeaders = options.TrustForwardedHeaders;
+        ClientIpLogging = options.ClientIpLogging;
+        ClientIpAudit = options.ClientIpAudit;
         RequestSummaryDetail = options.RequestSummaryDetail;
         AlwaysLogRequestSummary = options.AlwaysLogRequestSummary;
         AlwaysLogOutboundRequestSummary = options.AlwaysLogOutboundRequestSummary;
@@ -83,13 +90,20 @@ internal sealed class StepUpSettings
 
     internal ExcludedPaths ExcludedPaths { get; }
 
-    /// <summary>The built-in sensitive headers plus <see cref="StepUpLoggingOptions.AdditionalSensitiveHeaders"/>.</summary>
+    /// <summary>
+    /// The built-in sensitive headers, the client IP headers unless <see cref="StepUpLoggingOptions.ClientIpLogging"/>
+    /// is <see cref="ClientIpMode.Full"/>, plus <see cref="StepUpLoggingOptions.AdditionalSensitiveHeaders"/>.
+    /// </summary>
     internal IReadOnlySet<string> SensitiveHeaders { get; }
 
     /// <summary>Whether the library starts its own activities (<see cref="StepUpLoggingOptions.EnableActivityInstrumentation"/>).</summary>
     internal bool ActivityInstrumentation { get; }
 
     internal bool TrustForwardedHeaders { get; }
+
+    internal ClientIpMode ClientIpLogging { get; }
+
+    internal ClientIpMode ClientIpAudit { get; }
 
     internal RequestSummaryDetail RequestSummaryDetail { get; }
 

@@ -39,10 +39,10 @@ namespace Lukdrasil.StepUpLogging.Tests
             }
         }
 
-        private static async Task<IHost> CreateTestServerAsync(CaptureSink captureSink, bool trustForwardedHeaders = false, string? jtiClaim = null, string[]? redactionRegexes = null, RequestSummaryDetail requestSummaryDetail = RequestSummaryDetail.Full)
+        private static async Task<IHost> CreateTestServerAsync(CaptureSink captureSink, bool trustForwardedHeaders = false, string? jtiClaim = null, string[]? redactionRegexes = null, RequestSummaryDetail requestSummaryDetail = RequestSummaryDetail.Full, ClientIpMode clientIpLogging = ClientIpMode.Full)
         {
             var summaryLogger = new LoggerConfiguration().WriteTo.Sink(captureSink).CreateLogger();
-            var opts = new StepUpLoggingOptions { AlwaysLogRequestSummary = true, RequestSummaryLevel = "Information", TrustForwardedHeaders = trustForwardedHeaders, RedactionRegexes = redactionRegexes ?? new[] { "secret-[A-Za-z0-9]+" }, RequestSummaryDetail = requestSummaryDetail };
+            var opts = new StepUpLoggingOptions { AlwaysLogRequestSummary = true, RequestSummaryLevel = "Information", TrustForwardedHeaders = trustForwardedHeaders, RedactionRegexes = redactionRegexes ?? new[] { "secret-[A-Za-z0-9]+" }, RequestSummaryDetail = requestSummaryDetail, ClientIpLogging = clientIpLogging };
 
             var host = new HostBuilder()
                 .ConfigureWebHost(web => web
@@ -204,6 +204,25 @@ namespace Lukdrasil.StepUpLogging.Tests
             // The raw header is still captured — separately, as ForwardedFor — even though it is untrusted.
             Assert.True(logEvent!.Properties.ContainsKey("ForwardedFor"), "ForwardedFor should carry the raw header when present");
             Assert.Equal("203.0.113.42, 198.51.100.100", StringProperty(logEvent, "ForwardedFor"));
+        }
+
+        [Theory(DisplayName = "EmitRequestSummary_WritesClientIpAndForwardedFor_AsClientIpLoggingSays")]
+        [InlineData(ClientIpMode.Off, null, null)]
+        [InlineData(ClientIpMode.Prefix, "198.51.100.0/24", "203.0.113.0/24, 198.51.100.0/24")]
+        public async Task EmitRequestSummary_WritesClientIpAndForwardedFor_AsClientIpLoggingSays(ClientIpMode mode, string? clientIp, string? forwardedFor)
+        {
+            var capture = new CaptureSink();
+            using var host = await CreateTestServerAsync(capture, clientIpLogging: mode);
+            var client = host.GetTestClient();
+
+            var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/test");
+            request.Headers.Add("X-Forwarded-For", "203.0.113.42, 198.51.100.100");
+
+            await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+            Assert.NotNull(capture.LastEvent);
+            Assert.Equal(clientIp, StringProperty(capture.LastEvent!, "ClientIp"));
+            Assert.Equal(forwardedFor, StringProperty(capture.LastEvent!, "ForwardedFor"));
         }
 
         [Fact(DisplayName = "EmitRequestSummary_ClientIpIsFirstXForwardedForEntry_WhenTrusted")]

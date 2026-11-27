@@ -143,6 +143,15 @@ public class StartupReportTests
     }
 
     [Fact]
+    public void Summary_NamesTheClientIpModes()
+    {
+        using var run = Start(("ClientIpLogging", "Prefix"), ("ClientIpAudit", "Full"));
+
+        var summary = Assert.Single(run.WithTemplate(StartupReport.SummaryTemplate));
+        Assert.Contains("client IP logs Prefix, audit Full", summary.RenderMessage(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Summary_BothOff_SaysOff()
     {
         using var run = Start();
