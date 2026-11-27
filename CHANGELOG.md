@@ -6,7 +6,7 @@ Releases from 1.8.0 onward are recorded here. Entries backfilled from each relea
 `PackageReleaseNotes` and, where those were not updated per release, from the commits between tags.
 Tags before 1.8.0 predate this file.
 
-## [Unreleased]
+## [8.1.0] - 2026-11-27
 
 ### Added
 - `CaptureScopesOnException` (default `true`): `false` stops recording scopes on every thrown exception. See ADR 0038.
