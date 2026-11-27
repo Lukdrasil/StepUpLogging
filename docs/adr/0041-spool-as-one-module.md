@@ -25,14 +25,17 @@ routes and reasons, the unreadable retry count and the record traces.
 **D2. The head is derived from reads and settlements.** The oldest record waited on is the oldest entry the read
 in progress handed out that has not been removed or set aside. A read that reaches the end with every entry
 settled clears it. A read stopped early (a failed delivery, an unreadable file within its limit, cancellation)
-leaves it on the record the drain stopped on. Reading, removing and setting aside belong to one drain at a time,
-which `DrainWorker` already guarantees.
+leaves it on the record the drain stopped on. Reading, removing and setting aside belong to one drain at a time.
+`DrainWorker` runs one cycle at a time, except that the shutdown drain in `StopAsync` can overlap a cycle that
+outlived the host's stop token, so the spool locks its read state: an overlap can leave the age approximate,
+never the state corrupt.
 
-**D3. Nothing observable changes except one edge.** File layout, wire format, crash recovery, the cap, the
+**D3. Nothing observable changes except one edge, which is a fix.** File layout, wire format, crash recovery, the cap, the
 recheck interval, the drop reporting, log text, metrics and health signals are unchanged. An unreadable file set
 aside is still not released from the tally, because its size is unknown. The edge: while a rejected batch is
-redelivered record by record, the head now moves past each record as it is delivered, where it used to keep the
-batch head's age until the step ended.
+redelivered record by record, the head now moves past each record as it is delivered. It used to keep the batch's
+first record, already delivered, until the next cycle read the spool again, so a redelivery that stalled on a later
+record reported the older age through the whole backoff wait. The `CHANGELOG` lists it under Fixed.
 
 Rejected: keeping `SpoolHead` set per drain step by `DrainWorker`, which leaves the head protocol in the worker
 and the release-token protocol duplicated beside it.

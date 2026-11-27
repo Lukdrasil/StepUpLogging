@@ -33,7 +33,7 @@ public class DrainVisibilityTests
         (long)harness.Spool.OldestRecordAgeAt(harness.Time.GetUtcNow()).TotalSeconds;
 
     /// <summary>Spools a record created at <see cref="Noon"/> and runs one cycle the receiver answers with 503, so the drain waits on it.</summary>
-    private static async Task StalledOnRecordFromNoon(SpoolDrainHarness harness)
+    private static async Task StalledOnRecordFromNoonAsync(SpoolDrainHarness harness)
     {
         await harness.SpoolAsync(AuditedOperation(at: Noon));
         await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
@@ -84,6 +84,25 @@ public class DrainVisibilityTests
     }
 
     [Fact]
+    public async Task DrainWorker_RejectedBatchRedeliveryStallsOnALaterRecord_OldestAgeIsThatRecordsAge()
+    {
+        using var harness = new SpoolDrainHarness(
+            FakeAuditReceiver.Responding(
+                HttpStatusCode.UnprocessableEntity,
+                HttpStatusCode.OK,
+                HttpStatusCode.ServiceUnavailable),
+            options => options.DeliveryBatchSize = 64);
+        await harness.SpoolAsync(AuditedOperation(at: Noon));
+        await harness.SpoolAsync(AuditedOperation(at: Noon.AddSeconds(30)));
+        harness.Time.SetUtcNow(Noon.AddSeconds(90));
+
+        await harness.Worker.DrainAsync(TestContext.Current.CancellationToken);
+
+        Assert.Single(harness.SpooledFileNames());
+        Assert.Equal(60, OldestAgeSeconds(harness));
+    }
+
+    [Fact]
     public void SpoolHead_CreatedUtcInTheFuture_AgeIsZero()
     {
         var head = new SpoolHead();
@@ -129,7 +148,7 @@ public class DrainVisibilityTests
                 options.OldestRecordMaxAge = TimeSpan.FromSeconds(60);
                 if (configuredStatus is not null) options.OldestRecordStatus = configuredStatus.Value;
             });
-        await StalledOnRecordFromNoon(harness);
+        await StalledOnRecordFromNoonAsync(harness);
         harness.Time.SetUtcNow(Noon.AddSeconds(ageSeconds));
 
         Assert.Equal(expectedStatus, await HealthOf(harness));
@@ -139,7 +158,7 @@ public class DrainVisibilityTests
     public async Task HealthCheck_OldestRecordMaxAgeUnset_StalledHeadStaysHealthy()
     {
         using var harness = new SpoolDrainHarness(FakeAuditReceiver.Responding(HttpStatusCode.ServiceUnavailable));
-        await StalledOnRecordFromNoon(harness);
+        await StalledOnRecordFromNoonAsync(harness);
         harness.Time.SetUtcNow(Noon.AddDays(1));
 
         Assert.Equal(HealthStatus.Healthy, await HealthOf(harness));

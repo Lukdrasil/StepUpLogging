@@ -9,7 +9,9 @@ namespace Lukdrasil.StepUpLogging.Audit.EncryptedSpool;
 /// </summary>
 /// <remarks>
 /// Writers reserve and write concurrently. Reading, removing and setting aside belong to one drain
-/// at a time: the oldest record waiting is worked out from the read in progress.
+/// at a time: the oldest record waiting is worked out from the read in progress. The shutdown drain
+/// can still overlap a cycle that outlived the host's stop token, so the read state is locked: an
+/// overlap can leave the oldest age approximate, never the state corrupt.
 /// </remarks>
 internal sealed class Spool
 {
@@ -22,6 +24,7 @@ internal sealed class Spool
 
     /// <summary>The entries the read in progress handed out and nothing has removed or set aside yet, oldest first.</summary>
     private readonly List<SpoolEntry> _unsettled = [];
+    private readonly Lock _readGate = new();
     private bool _readToEnd;
 
     /// <summary>
@@ -78,37 +81,53 @@ internal sealed class Spool
     /// </summary>
     public IEnumerable<SpoolEntry> ReadOldestFirst()
     {
-        _unsettled.Clear();
-        _readToEnd = false;
+        lock (_readGate)
+        {
+            _unsettled.Clear();
+            _readToEnd = false;
+        }
 
         foreach (var entry in _reader.ReadOldestFirst())
         {
-            if (_unsettled.Count == 0)
+            lock (_readGate)
             {
-                _head.Seen(entry.CreatedUtc);
+                if (_unsettled.Count == 0)
+                {
+                    _head.Seen(entry.CreatedUtc);
+                }
+
+                _unsettled.Add(entry);
             }
 
-            _unsettled.Add(entry);
             yield return entry;
         }
 
-        _readToEnd = true;
-        ClearHeadIfAllSettled();
+        lock (_readGate)
+        {
+            _readToEnd = true;
+            ClearHeadIfAllSettled();
+        }
     }
 
     /// <summary>Deletes a record the endpoint confirmed, and frees its room at once.</summary>
-    public void Remove(SpoolEntry entry) =>
-        TakeOut(entry, path =>
-        {
-            File.Delete(path);
-            return path;
-        });
+    public void Remove(SpoolEntry entry)
+    {
+        var releaseToken = _tracker.ReleaseToken;
+        File.Delete(entry.FilePath);
+        Settled(entry, releaseToken);
+    }
 
     /// <summary>Moves a record no retry can deliver into <c>dead-letter/</c>, keeping its name, and returns where it now is.</summary>
-    public string SetAside(SpoolEntry entry) => TakeOut(entry, _deadLetters.Deposit);
+    public string SetAside(SpoolEntry entry)
+    {
+        var releaseToken = _tracker.ReleaseToken;
+        var destination = _deadLetters.Deposit(entry.FilePath);
+        Settled(entry, releaseToken);
+        return destination;
+    }
 
     /// <summary>Writes an admitted record and moves it from in flight onto the disk, or keeps it counted if the write fails.</summary>
-    internal async Task WriteAsync(SpoolRecord record)
+    private async Task WriteAsync(SpoolRecord record)
     {
         try
         {
@@ -125,34 +144,28 @@ internal sealed class Spool
         _tracker.Commit(record.Contents.Length);
     }
 
-    private string TakeOut(SpoolEntry entry, Func<string, string> move)
+    // The release token is taken before the file moves: a measure that runs in between may or may
+    // not have seen the file, and then this release is ignored rather than counted off twice.
+    private void Settled(SpoolEntry entry, int releaseToken)
     {
-        // The token is taken before the file moves: a measure that runs in between may or may not
-        // have seen the file, and then this release is ignored rather than counted off twice.
-        var token = _tracker.ReleaseToken;
-        var destination = move(entry.FilePath);
-
         // An unreadable file's size is unknown, so it stays counted until a measure finds it gone:
         // the tally may err high, never low.
         if (!entry.IsUnreadable)
         {
-            _tracker.Released(token, entry.Contents.Length);
+            _tracker.Released(releaseToken, entry.Contents.Length);
         }
 
-        Settled(entry);
-        return destination;
-    }
-
-    private void Settled(SpoolEntry entry)
-    {
-        _unsettled.Remove(entry);
-        if (_unsettled.Count > 0)
+        lock (_readGate)
         {
-            _head.Seen(_unsettled[0].CreatedUtc);
-            return;
-        }
+            _unsettled.Remove(entry);
+            if (_unsettled.Count > 0)
+            {
+                _head.Seen(_unsettled[0].CreatedUtc);
+                return;
+            }
 
-        ClearHeadIfAllSettled();
+            ClearHeadIfAllSettled();
+        }
     }
 
     // Settling the last entry handed out clears the head only once the read found nothing more:
@@ -164,18 +177,18 @@ internal sealed class Spool
             _head.Cleared();
         }
     }
-}
 
-/// <summary>Room asked for one record: the verdict, and for an admitted record the write that fills the room.</summary>
-internal readonly struct SpoolReservation(Spool spool, SpoolRecord record, ReservationVerdict verdict)
-{
-    /// <summary>Whether the record was admitted, and the usage it was judged against.</summary>
-    public ReservationVerdict Verdict => verdict;
+    /// <summary>Room asked for one record: the verdict, and for an admitted record the write that fills the room.</summary>
+    internal readonly struct SpoolReservation(Spool spool, SpoolRecord record, ReservationVerdict verdict)
+    {
+        /// <summary>Whether the record was admitted, and the usage it was judged against.</summary>
+        public ReservationVerdict Verdict => verdict;
 
-    /// <summary>Writes the record and returns only once it is durably on disk and in place (ADR 0020 D1-D2).</summary>
-    /// <exception cref="InvalidOperationException">The record was not admitted, so writing it would break the cap.</exception>
-    public Task WriteAsync() =>
-        verdict.Admitted
-            ? spool.WriteAsync(record)
-            : throw new InvalidOperationException("A record the spool refused room for cannot be written.");
+        /// <summary>Writes the record and returns only once it is durably on disk and in place (ADR 0020 D1-D2).</summary>
+        /// <exception cref="InvalidOperationException">The record was not admitted, so writing it would break the cap.</exception>
+        public Task WriteAsync() =>
+            verdict.Admitted
+                ? spool.WriteAsync(record)
+                : throw new InvalidOperationException("A record the spool refused room for cannot be written.");
+    }
 }

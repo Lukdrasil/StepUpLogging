@@ -19,7 +19,7 @@ public class SpoolTests
         SpoolMaxEntries = maxEntries
     };
 
-    private static async Task<Spool> SpoolHolding(TempSpoolDirectory root, params DateTimeOffset[] createdUtc)
+    private static async Task<Spool> SpoolHoldingAsync(TempSpoolDirectory root, params DateTimeOffset[] createdUtc)
     {
         var spool = new Spool(OptionsFor(root), new FakeTimeProvider());
         foreach (var instant in createdUtc)
@@ -83,7 +83,7 @@ public class SpoolTests
     public async Task Remove_DeliveredRecord_DeletesItsFileAndFreesItsRoom()
     {
         using var root = new TempSpoolDirectory();
-        var spool = await SpoolHolding(root, Noon);
+        var spool = await SpoolHoldingAsync(root, Noon);
 
         foreach (var entry in spool.ReadOldestFirst())
         {
@@ -99,7 +99,7 @@ public class SpoolTests
     public async Task SetAside_ReadableRecord_MovesItToDeadLetterAndFreesItsRoom()
     {
         using var root = new TempSpoolDirectory();
-        var spool = await SpoolHolding(root, Noon);
+        var spool = await SpoolHoldingAsync(root, Noon);
         var entry = spool.ReadOldestFirst().Single();
 
         var deadLetterPath = spool.SetAside(entry);
@@ -116,7 +116,7 @@ public class SpoolTests
     public async Task SetAside_UnreadableRecord_StaysCountedUntilMeasured()
     {
         using var root = new TempSpoolDirectory();
-        var spool = await SpoolHolding(root, Noon);
+        var spool = await SpoolHoldingAsync(root, Noon);
         var path = Path.Combine(OptionsFor(root).SpoolDirectory, FilesIn(OptionsFor(root).SpoolDirectory)[0]);
         SpoolEntry entry;
         using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None))
@@ -136,7 +136,7 @@ public class SpoolTests
     public async Task OldestRecordAgeAt_ReadInProgress_FollowsTheOldestRecordNotYetRemoved()
     {
         using var root = new TempSpoolDirectory();
-        var spool = await SpoolHolding(root, Noon, Noon.AddSeconds(30));
+        var spool = await SpoolHoldingAsync(root, Noon, Noon.AddSeconds(30));
         var now = Noon.AddSeconds(90);
         List<TimeSpan> ages = [];
 
@@ -154,7 +154,7 @@ public class SpoolTests
     public async Task OldestRecordAgeAt_RecordsReadAheadThenTheFirstRemoved_IsTheNextRecordsAge()
     {
         using var root = new TempSpoolDirectory();
-        var spool = await SpoolHolding(root, Noon, Noon.AddSeconds(30));
+        var spool = await SpoolHoldingAsync(root, Noon, Noon.AddSeconds(30));
         var now = Noon.AddSeconds(90);
         var read = spool.ReadOldestFirst().Take(2).ToList();
 
@@ -167,7 +167,7 @@ public class SpoolTests
     public async Task OldestRecordAgeAt_ReadStoppedOnARecordNotRemoved_KeepsThatRecordsAge()
     {
         using var root = new TempSpoolDirectory();
-        var spool = await SpoolHolding(root, Noon, Noon.AddSeconds(30), Noon.AddSeconds(60));
+        var spool = await SpoolHoldingAsync(root, Noon, Noon.AddSeconds(30), Noon.AddSeconds(60));
         var now = Noon.AddSeconds(90);
 
         foreach (var entry in spool.ReadOldestFirst())
@@ -187,7 +187,7 @@ public class SpoolTests
     public async Task OldestRecordAgeAt_LastRecordRemovedBeforeTheReadFoundNoMore_KeepsItsAgeUntilTheReadEnds()
     {
         using var root = new TempSpoolDirectory();
-        var spool = await SpoolHolding(root, Noon);
+        var spool = await SpoolHoldingAsync(root, Noon);
         var now = Noon.AddSeconds(90);
         using var read = spool.ReadOldestFirst().GetEnumerator();
         Assert.True(read.MoveNext());
@@ -204,7 +204,7 @@ public class SpoolTests
     public async Task OldestRecordAgeAt_EmptySpoolRead_IsZero()
     {
         using var root = new TempSpoolDirectory();
-        var spool = await SpoolHolding(root);
+        var spool = await SpoolHoldingAsync(root);
 
         Assert.Empty(spool.ReadOldestFirst());
 
