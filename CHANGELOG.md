@@ -6,7 +6,7 @@ Releases from 1.8.0 onward are recorded here. Entries backfilled from each relea
 `PackageReleaseNotes` and, where those were not updated per release, from the commits between tags.
 Tags before 1.8.0 predate this file.
 
-## [Unreleased]
+## [9.2.0] - 2026-11-28
 
 ### Added
 - `ClientIpLoggingOnClientError` (`Off`, `Prefix`, `Full`, default `Full`). A request answered with 400 to 499 logs the client address under the higher of this and `ClientIpLogging`: `ClientIp`, `ForwardedFor` and the four IP headers in `Headers`. Secrets stay redacted and the audit trail is unchanged. Set it to `Off` to keep the 9.1 output. See MIGRATION.md and ADR 0044.
