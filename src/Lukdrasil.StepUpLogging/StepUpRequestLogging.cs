@@ -161,15 +161,24 @@ internal sealed class StepUpRequestLogging(StepUpSettings settings, StepUpLoggin
             diagnosticContext.Set(LogProperties.RouteParameters, RequestPathRedaction.RedactRouteValues(request.RouteValues, path, redactedPath, patterns, redactions.Note));
         }
 
-        diagnosticContext.Set("Headers", RequestHeaderRedaction.RedactRequestHeaders(request.Headers, settings.SensitiveHeaders, patterns, redactions.Note));
-        SetIfPresent(diagnosticContext, LogProperties.ClientIp, RequestClient.Addresses(context, settings.TrustForwardedHeaders, settings.ClientIpLogging, patterns).ClientIp);
+        var status = StatusOf(context);
+        var clientIpMode = settings.ClientIpLoggingFor(status);
+        diagnosticContext.Set("Headers", RequestHeaderRedaction.RedactRequestHeaders(request.Headers, settings.SensitiveHeadersFor(status), patterns, redactions.Note));
+        SetIfPresent(diagnosticContext, LogProperties.ClientIp, RequestClient.Addresses(context, settings.TrustForwardedHeaders, clientIpMode, patterns).ClientIp);
+        var (remoteIp, remotePort) = RequestClient.Remote(context, settings.TrustForwardedHeaders, clientIpMode);
+        SetIfPresent(diagnosticContext, LogProperties.RemoteIp, remoteIp);
+        if (remotePort is { } port)
+        {
+            diagnosticContext.Set(LogProperties.RemotePort, port);
+        }
         if (redactions.Close())
         {
             activity?.SetTag("security.redaction_applied", true);
         }
 
-        var jti = context.User.FindFirst("jti")?.Value;
-        SetIfPresent(diagnosticContext, LogProperties.Jti, string.IsNullOrEmpty(jti) ? null : patterns.RedactProperty(LogProperties.Jti, jti));
+        var (jti, sid) = RequestClient.TokenIds(context.User, patterns);
+        SetIfPresent(diagnosticContext, LogProperties.Jti, jti);
+        SetIfPresent(diagnosticContext, LogProperties.Sid, sid);
 
         // The step-up trigger sink is asynchronous, so the request whose Error causes the step-up is not stepped up
         // yet when this runs. A 5xx status, or an exception's 500, is knowable here, so the failing request is captured too.

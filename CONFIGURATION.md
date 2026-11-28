@@ -42,7 +42,7 @@ A few things to know:
 - **Names are case-insensitive.** `"baselevel"` works like `"BaseLevel"`. Level names are the Serilog ones: `Verbose`, `Debug`, `Information`, `Warning`, `Error`, `Fatal`.
 - **Invalid values stop the app.** The host refuses to start and the error names each bad key and the value it got (ADR 0007). A typo in a level name, a duration of 0 or a broken regex is caught at startup, not hours later.
 - **Options are read once at startup.** A change needs a restart.
-- **The startup report.** When the logger is built, the library writes one Information line with the effective configuration (mode, levels, outputs, request summary). It also writes a Warning for each key under `SerilogStepUp` that matches no option (often a typo), and a Warning for an option that has no effect. Examples: `ConsoleFormat` set while `EnableConsoleLogging` is false, `RedactLogEventProperties` set with no `RedactionRegexes`, or `RequestSummaryDetail` changed while no request summary is on, or `RequestSummaryOnError` set to `Omit` while `AlwaysLogRequestSummary` is false. It also warns when `StepUpLevel` or `DiagnosticLevel` is not more verbose than `BaseLevel`, because then stepping up changes nothing.
+- **The startup report.** When the logger is built, the library writes one Information line with the effective configuration (mode, levels, outputs, client IP modes, request summary). It also writes a Warning for each key under `SerilogStepUp` that matches no option (often a typo), and a Warning for an option that has no effect. Examples: `ConsoleFormat` set while `EnableConsoleLogging` is false, `RedactLogEventProperties` set with no `RedactionRegexes`, or `RequestSummaryDetail` changed while no request summary is on, or `RequestSummaryOnError` set to `Omit` while `AlwaysLogRequestSummary` is false. It also warns when `StepUpLevel` or `DiagnosticLevel` is not more verbose than `BaseLevel`, because then stepping up changes nothing.
 
 The encrypted spool audit sink is the one exception. Its options are set only in code. See [Audit and the encrypted spool](#audit-and-the-encrypted-spool).
 
@@ -233,23 +233,50 @@ Example: an access log in the short format, without the health and readiness pro
 |---|---|---|---|
 | `RedactionRegexes` | string[] | `[]` | Regular expressions (text patterns) to redact. They are applied, ignoring case, to the request path, query string, headers, route values and request body. Each entry must be a valid regex. Keep the list short and each pattern narrow, because every pattern costs CPU on every request. |
 | `RedactLogEventProperties` | bool | `false` | Also applies `RedactionRegexes` to the string properties of your own log events, for example `logger.LogInformation("token={Token}", t)` (ADR 0022). It does not touch message text, so `$"token={t}"` (string interpolation) is never redacted. Do not put secrets in interpolated messages. Has no effect while `RedactionRegexes` is empty. |
-| `RedactionExemptProperties` | string[] | `[]` | Property names that the patterns skip, for ids like `Jti` that a broad pattern (for example a bare UUID) would hide. Case-sensitive. The request inputs (path, query, headers, route values, User-Agent, `X-Forwarded-For`, body) are always redacted whatever this list says (ADR 0031). |
+| `RedactionExemptProperties` | string[] or not set | not set, which means `["Jti", "Sid"]` | Property names that the patterns skip, for ids like `Jti` and `Sid` that a broad pattern (for example a bare UUID) would hide. Case-sensitive. A list you set replaces the default; `[""]` exempts nothing (ADR 0045). The request inputs (path, query, headers, route values, User-Agent, `X-Forwarded-For`, body) are always redacted whatever this list says (ADR 0031). |
 | `AdditionalSensitiveHeaders` | string[] | `[]` | Extra header names whose values are always hidden in the logged headers. Case-insensitive. |
 
 These headers are always hidden, whatever you configure:
 `Authorization`, `Cookie`, `X-API-Key`, `X-Auth-Token`, `X-Access-Token`, `Authorization-Token`, `Proxy-Authorization`, `WWW-Authenticate`, `Sec-WebSocket-Key`.
 
-Example: hide e-mail addresses and an API key header of your own.
+Example: hide e-mail addresses and an API key header of your own, and keep an `OrderId` property of your own events in clear. A list you set replaces the default, so it names `Jti` and `Sid` again.
 
 ```json
 {
   "SerilogStepUp": {
     "RedactionRegexes": [ "[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}" ],
     "RedactLogEventProperties": true,
-    "RedactionExemptProperties": [ "Jti" ],
+    "RedactionExemptProperties": [ "Jti", "Sid", "OrderId" ],
     "AdditionalSensitiveHeaders": [ "X-Partner-Key" ]
   }
 }
+```
+
+### Token ids: `Jti` and `Sid`
+
+The request summary (from `RequestSummaryDetail` `Compact`) and the request completion event carry two ids of the caller's token, so you can find every request of one token or one session (ADR 0045):
+
+| Field | `Minimal` key | Taken from | Left out when |
+|---|---|---|---|
+| `Jti` | `jti` | the `jti` claim | the claim is absent or empty |
+| `Sid` | `sid` | the `sid` claim, else `ClaimTypes.Sid` (the type the JWT handler maps `sid` to while `MapInboundClaims` is on) | neither claim is there, or it is empty |
+
+Only the inbound caller's token (`HttpContext.User`) is read. Outbound summaries, audit records and your own events get neither field. Nothing needs to be set to turn them on.
+
+Both are pseudonymous ids, not secrets, so the redaction patterns skip them by default. `RedactionExemptProperties` takes the field name (`Jti`, `Sid`), also for a `Minimal` summary, because the summary is redacted before the short keys apply. To have your patterns mask them again, set a list without them, or `[""]` to exempt nothing:
+
+```json
+{
+  "SerilogStepUp": {
+    "RedactionRegexes": [ "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" ],
+    "RedactionExemptProperties": [ "" ]
+  }
+}
+```
+
+```bash
+SerilogStepUp__RedactionExemptProperties__0=        # an empty entry exempts nothing
+SerilogStepUp__RedactionExemptProperties__0=Sid     # or: mask Jti, keep Sid
 ```
 
 ## Client IP
@@ -259,6 +286,7 @@ A full IP address is personal data under GDPR. From 9.0.0 the library writes no 
 | Option | Type | Default | What it does |
 |---|---|---|---|
 | `ClientIpLogging` | enum `ClientIpMode` | `Off` | How much of the client IP goes into the logs. |
+| `ClientIpLoggingOnClientError` | enum `ClientIpMode` | `Full` | How much of the client IP goes into the logs for a client error request (status 400 to 499). The higher of this and `ClientIpLogging` applies. `Off` turns it off. |
 | `ClientIpAudit` | enum `ClientIpMode` | `Off` | How much of the client IP goes into `AuditEvent.SourceIp` of audit records. |
 | `TrustForwardedHeaders` | bool | `false` | Where the client IP comes from (ADR 0008). See below. |
 
@@ -272,9 +300,10 @@ What each mode writes:
 
 | Output | Governed by | `Off` | `Prefix` | `Full` |
 |---|---|---|---|---|
-| `ClientIp` in the request summary and in the completion event | `ClientIpLogging` | left out | network prefix, for example `203.0.113.0/24` | full address |
-| `ForwardedFor` (only in the `Full` request summary) | `ClientIpLogging` | left out | each entry masked to its prefix, entries that do not parse left out | full value, redacted |
-| `X-Forwarded-For`, `Forwarded`, `X-Real-IP`, `X-Original-For` in the logged `Headers` | `ClientIpLogging` | redacted | redacted | logged as received |
+| `ClientIp` in the request summary and in the completion event | `ClientIpLogging`, on a client error request the higher of it and `ClientIpLoggingOnClientError` | left out | network prefix, for example `203.0.113.0/24` | full address |
+| `ForwardedFor` (only in the `Full` request summary) | as `ClientIp` | left out | each entry masked to its prefix, entries that do not parse left out | full value, redacted |
+| `X-Forwarded-For`, `Forwarded`, `X-Real-IP`, `X-Original-For` in the logged `Headers` | as `ClientIp` | redacted | redacted | logged as received |
+| `RemoteIp` (with `TrustForwardedHeaders`) and `RemotePort` in the request summary and in the completion event | as `ClientIp` | left out | left out | connection address and source port |
 | `AuditEvent.SourceIp` | `ClientIpAudit` | left out | network prefix | full address |
 
 Details worth knowing:
@@ -287,6 +316,8 @@ Details worth knowing:
 - **The library never changes the request's headers.** Redaction applies only to the copy that is logged, so forwarding the headers to a backend still works.
 - **Other IP headers are yours to add.** A header such as `CF-Connecting-IP` is not covered by these options. Add it to `AdditionalSensitiveHeaders`.
 - **Audit endpoints.** An audit endpoint that checks `SourceIp` is a valid IP address rejects records under `Prefix`.
+- **Client error requests.** A request answered with a status from 400 to 499 may be an attack, so by default its logs carry the caller's full identity (ADR 0044): `ClientIp`, `ForwardedFor` and the four IP headers are written under the higher of `ClientIpLogging` and `ClientIpLoggingOnClientError`. 5xx and unhandled exceptions are not client errors. `Authorization`, `Cookie` and the other sensitive headers stay redacted. The audit trail is not affected. The legal basis is usually the legitimate interest in network and information security (GDPR Art. 6(1)(f), recital 49); documenting it and the retention is yours. Set `ClientIpLoggingOnClientError` to `Off` to turn this off.
+- **Connection address and port.** Whenever the effective mode is `Full`, the request summary and the completion event also write `RemotePort`, the connection's source port (Minimal key `rport`), which an ISP needs to trace a client behind carrier-grade NAT. With `TrustForwardedHeaders` they also write `RemoteIp`, the connection address the client cannot forge (Minimal key `rip`). Without it `ClientIp` already is that address.
 - **Not covered.** `client.address` on trace spans, and any address your own code puts into log events or into an audit record's `Data`.
 
 Upgrading from 8.x: to keep the old behaviour, set both options to `Full`.
@@ -312,7 +343,34 @@ Example: audit the IP but do not log it.
 }
 ```
 
-Here audit records get the full address taken from `X-Forwarded-For` (set by your own proxy), while the logs carry no client IP and the four IP headers are redacted.
+Here audit records get the full address taken from `X-Forwarded-For` (set by your own proxy), while the logs carry no client IP and the four IP headers are redacted. A client error request still logs the full address, because `ClientIpLoggingOnClientError` defaults to `Full`.
+
+Example: on a client error request log only the client prefix, and no address on other requests.
+
+```json
+{
+  "SerilogStepUp": {
+    "ClientIpLogging": "Off",
+    "ClientIpLoggingOnClientError": "Prefix"
+  }
+}
+```
+
+Example: log a client error request like any other (the 9.1 behaviour).
+
+```json
+{
+  "SerilogStepUp": {
+    "ClientIpLoggingOnClientError": "Off"
+  }
+}
+```
+
+```bash
+SerilogStepUp__ClientIpLoggingOnClientError=Off
+```
+
+`ClientIpLoggingOnClientError` can only raise the mode. With `ClientIpLogging` `Full`, a client error request is logged in full whatever it says.
 
 ## Outputs: OTLP, console, file
 

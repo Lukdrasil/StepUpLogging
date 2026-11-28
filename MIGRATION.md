@@ -1,3 +1,36 @@
+# Migrating to v9.2.0
+
+## A client error request logs the caller's full address
+
+**What changed.** `ClientIpLoggingOnClientError` defaults to `Full`. A request answered with a status from 400 to 499
+logs `ClientIp`, `ForwardedFor` and the four IP headers in full, plus the new `RemotePort` (and `RemoteIp` with
+`TrustForwardedHeaders`), even when `ClientIpLogging` is `Off`. Requests with any other status are logged as before.
+
+**Why.** A 4xx is the most common trace of an attack, and investigating one needs the address. The usual legal basis
+is the legitimate interest in network and information security (GDPR Art. 6(1)(f), recital 49). See ADR 0044.
+
+**Migrate.** To keep the 9.1 output, turn it off:
+
+```json
+{ "SerilogStepUp": { "ClientIpLoggingOnClientError": "Off" } }
+```
+
+With `ClientIpLogging` set to `Full`, the logs now also carry `RemotePort` on every request, and `RemoteIp` too when `TrustForwardedHeaders` is on.
+
+## `Jti` and `Sid` skip the redaction patterns by default
+
+**What changed.** The inbound request summary and the completion event now write `Sid`, the caller token's `sid`
+claim, next to `Jti`. `RedactionExemptProperties` defaults to `["Jti", "Sid"]`, so a broad pattern (a bare UUID,
+say) no longer masks either. A list you configure replaces the default.
+
+**Why.** Both are pseudonymous correlation keys, and a masked id links nothing. See ADR 0045.
+
+**Migrate.** To have the patterns mask them again, configure an exempt list without them, or exempt nothing:
+
+```json
+{ "SerilogStepUp": { "RedactionExemptProperties": [ "" ] } }
+```
+
 # Migrating to v9.0.0
 
 ## The client address is off by default

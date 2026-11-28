@@ -39,6 +39,7 @@ public class OptionsValidationTests
     [InlineData("RequestSummaryOnError")]
     [InlineData("ClientIpLogging")]
     [InlineData("ClientIpAudit")]
+    [InlineData("ClientIpLoggingOnClientError")]
     public void UndefinedEnumNumber_FailsValidationOnStart(string option)
     {
         Assert.Throws<OptionsValidationException>(
@@ -402,18 +403,39 @@ public class OptionsValidationTests
     }
 
     [Fact]
+    public void ClientIpLoggingOnClientError_DefaultsToFull()
+    {
+        Assert.Equal(ClientIpMode.Full, new StepUpLoggingOptions().ClientIpLoggingOnClientError);
+    }
+
+    [Fact]
     public void ConsoleTraceFormat_DefaultsToTraceId()
     {
         Assert.Equal(ConsoleTraceFormat.TraceId, new StepUpLoggingOptions().ConsoleTraceFormat);
     }
 
     [Fact]
-    public void RedactionExemptProperties_DefaultsToEmpty()
+    public void RedactionExemptProperties_NotConfigured_ExemptsJtiAndSid()
     {
-        var exempt = new StepUpLoggingOptions().RedactionExemptProperties;
+        using var host = BuildHost();
 
-        Assert.NotNull(exempt);
-        Assert.Empty(exempt);
+        Assert.Equal(["Jti", "Sid"], host.Services.GetRequiredService<CompiledRedactionPatterns>().ExemptProperties.Order());
+    }
+
+    [Fact]
+    public void RedactionExemptProperties_Configured_ReplacesTheDefault()
+    {
+        using var host = BuildHost(("SerilogStepUp:RedactionExemptProperties:0", "UserId"));
+
+        Assert.Equal(["UserId"], host.Services.GetRequiredService<CompiledRedactionPatterns>().ExemptProperties);
+    }
+
+    [Fact]
+    public void RedactionExemptProperties_ConfiguredBlank_ExemptsNothing()
+    {
+        using var host = BuildHost(("SerilogStepUp:RedactionExemptProperties:0", ""));
+
+        Assert.Empty(host.Services.GetRequiredService<CompiledRedactionPatterns>().ExemptProperties);
     }
 
     [Fact]

@@ -43,7 +43,7 @@ internal sealed class RequestSummaryWriter(StepUpSettings settings, CompiledReda
         var path = ExcludedPaths.NormalizedPath(context.Request);
         return settings.ExcludedPaths.Contains(path)
             ? null
-            : InboundRequestSummary.From(context, path, statusCode, elapsedMs, settings.RequestSummaryDetail, settings.TrustForwardedHeaders, settings.ClientIpLogging, patterns);
+            : InboundRequestSummary.From(context, path, statusCode, elapsedMs, settings.RequestSummaryDetail, settings.TrustForwardedHeaders, settings.ClientIpLoggingFor(statusCode), patterns);
     }
 
     /// <summary>Writes the summary of one call through the client named <paramref name="clientName"/>; <paramref name="response"/> is null when it failed.</summary>

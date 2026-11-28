@@ -34,7 +34,8 @@ public class RequestSummaryWriterTests
         return context;
     }
 
-    private static object? Scalar(LogEvent logEvent, string name) => ((ScalarValue)logEvent.Properties[name]).Value;
+    private static object? Scalar(LogEvent logEvent, string name)
+        => logEvent.Properties.TryGetValue(name, out var value) ? ((ScalarValue)value).Value : null;
 
     [Fact]
     public void Write_WritesSummaryToSummaryLogger()
@@ -153,6 +154,69 @@ public class RequestSummaryWriterTests
         var summary = Assert.Single(sink.Events);
         Assert.Equal("Inbound", Scalar(summary, "dir"));
         Assert.False(summary.Properties.ContainsKey("Direction"));
+    }
+
+    private static HttpContext ProxiedRequest()
+    {
+        var context = Request("/api/orders");
+        context.Connection.RemoteIpAddress = IPAddress.Parse("203.0.113.7");
+        context.Connection.RemotePort = 51234;
+        context.Request.Headers["X-Forwarded-For"] = "198.51.100.9, 10.0.0.1";
+        return context;
+    }
+
+    private static LogEvent InboundSummary(int status, StepUpLoggingOptions options)
+    {
+        var sink = new CaptureSink();
+        using var logger = LoggerOver(sink);
+        TestSummaries.Writer(logger, options).WriteInbound(ProxiedRequest(), status, 1.0);
+        return Assert.Single(sink.Events);
+    }
+
+    [Fact]
+    public void WriteInbound_ClientErrorRequest_WritesTheFullClientIdentity_ByDefault()
+    {
+        var summary = InboundSummary(403, new StepUpLoggingOptions());
+
+        Assert.Equal("203.0.113.7", Scalar(summary, "ClientIp"));
+        Assert.Equal("198.51.100.9, 10.0.0.1", Scalar(summary, "ForwardedFor"));
+        Assert.Equal(51234L, Scalar(summary, "RemotePort"));
+    }
+
+    [Fact]
+    public void WriteInbound_SuccessfulRequest_WritesNoClientIdentity_ByDefault()
+    {
+        var summary = InboundSummary(200, new StepUpLoggingOptions());
+
+        Assert.Null(Scalar(summary, "ClientIp"));
+        Assert.Null(Scalar(summary, "ForwardedFor"));
+        Assert.Null(Scalar(summary, "RemotePort"));
+    }
+
+    [Fact]
+    public void WriteInbound_ClientErrorRequest_WritesNoClientIdentity_WhenOnClientErrorIsOff()
+    {
+        var summary = InboundSummary(404, new StepUpLoggingOptions { ClientIpLoggingOnClientError = ClientIpMode.Off });
+
+        Assert.Null(Scalar(summary, "ClientIp"));
+    }
+
+    [Fact]
+    public void WriteInbound_ClientErrorRequest_WritesTheTrustedForwardedAddressAndTheConnectionAddress()
+    {
+        var summary = InboundSummary(401, new StepUpLoggingOptions { TrustForwardedHeaders = true });
+
+        Assert.Equal("198.51.100.9", Scalar(summary, "ClientIp"));
+        Assert.Equal("203.0.113.7", Scalar(summary, "RemoteIp"));
+    }
+
+    [Fact]
+    public void WriteInbound_ClientErrorRequest_MinimalDetail_WritesTheConnectionUnderShortKeys()
+    {
+        var summary = InboundSummary(401, new StepUpLoggingOptions { TrustForwardedHeaders = true, RequestSummaryDetail = RequestSummaryDetail.Minimal });
+
+        Assert.Equal("203.0.113.7", Scalar(summary, "rip"));
+        Assert.Equal(51234L, Scalar(summary, "rport"));
     }
 
     [Fact]

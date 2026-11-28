@@ -214,6 +214,7 @@ The file sink is enabled by the `logFilePath` parameter of `AddStepUpLogging`: d
 | `AdditionalExcludePaths` | none | Added to `ExcludePaths` (to the defaults when `ExcludePaths` is not configured), so `SerilogStepUp__AdditionalExcludePaths__0=/.well-known/*` adds one path without restating the defaults |
 | `TrustForwardedHeaders` | `false` | `true` takes `ClientIp` from `X-Forwarded-For`, which any client can forge unless your proxy overwrites it |
 | `ClientIpLogging` | `Off` | `Prefix` logs the client prefix (`203.0.113.0/24`, `2001:db8:1234::/48`); `Full` logs the address and the IP headers unchanged, as 8.x did |
+| `ClientIpLoggingOnClientError` | `Full` | the mode for a request answered with 400-499, when higher than `ClientIpLogging`; `Off` turns it off |
 | `ClientIpAudit` | `Off` | `Prefix` or `Full` writes `SourceIp` on audit events; independent of `ClientIpLogging` |
 | `TreatServerErrorStatusAsError` | `true` | `false` logs a 5xx without an exception at `Warning`, so it no longer steps up or flushes. Unhandled exceptions are still `Error` |
 
@@ -225,7 +226,7 @@ The file sink is enabled by the `logFilePath` parameter of `AddStepUpLogging`: d
 | `PreErrorBufferSize`, `PreErrorMaxContexts` | `100`, `1024` | The memory bound: at most size × contexts held events. Too small loses the oldest events of a long request or the requests of a busy instance |
 | `RedactionRegexes` | none | Each pattern is applied to request paths, query strings, route values, headers and bodies, at a CPU cost per request |
 | `RedactLogEventProperties` | `false` | `true` also applies the patterns to the string properties of every exported application event, at a CPU cost per event |
-| `RedactionExemptProperties` | none | Listed property names, such as `Jti`, skip the patterns on every event and on the request summary. A secret logged under a listed name is exported in clear; request paths, query strings, headers, route values and bodies are always redacted |
+| `RedactionExemptProperties` | `["Jti", "Sid"]` | Listed property names skip the patterns on every event and on the request summary. A secret logged under a listed name is exported in clear; request paths, query strings, headers, route values and bodies are always redacted |
 | `ServiceVersion`, `ServiceInstanceId` | none | Added to every event when set |
 | `EnrichWithThreadId`, `EnrichWithProcessId`, `EnrichWithCallStack` | `false` | More properties on every event; call stacks are expensive |
 | `CaptureScopesOnException` | `true` | `false` stops recording scopes on every thrown exception; events logging an exception then lack the scopes of its throw site |
@@ -251,7 +252,7 @@ OpenTelemetry specification, so `Authorization=Basic%20QWxhZGRpbg%3D%3D` reaches
 
 When the logger is built, the library writes through its own output, whatever the current level:
 
-- One `Information` line with the effective configuration. The OTLP endpoint is shown as scheme, host and port only.
+- One `Information` line with the effective configuration, including the client IP modes for logs, client error requests and audit. The OTLP endpoint is shown as scheme, host and port only.
   `WriteStartupSummary` `false` leaves this line out; the Warnings below are written either way.
 - A `Warning` for each key under `SerilogStepUp` that matches no option, such as a misspelled `BaseLvel` or
   `OtlpEndpoint`. The key is ignored.
@@ -324,11 +325,11 @@ The User-Agent is client-supplied and spoofable: `ClientKind` is a filtering lab
 
 **RequestSummaryDetail** (`Full` by default, `Compact` or `Minimal`) chooses the attached fields; the rendered message never changes. `Full` keeps every property the summary had before 6.3.0. `Minimal` writes the `Compact` fields under short keys, the template included (`{dir} {mth} {path} {sc} {ms} ms {ck} {ua}`):
 
-| Key | `dir` | `mth` | `path` | `sc` | `ms` | `ck` | `ua` | `rt` | `ab` | `cid` | `ip` | `jti` | `hc` | `host` |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| Field | `Direction` | `Method` | `Path` | `StatusCode` | `ElapsedMs` | `ClientKind` | `UserAgent` | `Route` | `Aborted` | `ClientId` | `ClientIp` | `Jti` | `HttpClientName` | `Host` |
+| Key | `dir` | `mth` | `path` | `sc` | `ms` | `ck` | `ua` | `rt` | `ab` | `cid` | `ip` | `jti` | `sid` | `hc` | `host` |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Field | `Direction` | `Method` | `Path` | `StatusCode` | `ElapsedMs` | `ClientKind` | `UserAgent` | `Route` | `Aborted` | `ClientId` | `ClientIp` | `Jti` | `Sid` | `HttpClientName` | `Host` |
 
-`IsRequestSummary` keeps its name. `ConsoleTextProperties` and `RedactionExemptProperties` match by key, so list the short key (`jti`, `sc`, ...) for a `Minimal` summary. With `Minimal` the `Text` console line writes short keys too (`t`, `l`, `tid` or `tp`, `src`, `msg`, `ex`), and `ConsoleTextProperties` defaults to `["jti", "mth", "path", "sc", "ms"]`:
+`IsRequestSummary` keeps its name. `ConsoleTextProperties` matches by key, so list the short key (`jti`, `sc`, ...) for a `Minimal` summary. The summary is redacted before the short keys apply, so `RedactionExemptProperties` takes the field name (`Jti`, `Sid`). With `Minimal` the `Text` console line writes short keys too (`t`, `l`, `tid` or `tp`, `src`, `msg`, `ex`), and `ConsoleTextProperties` defaults to `["jti", "mth", "path", "sc", "ms"]`:
 
 ```text
 t=17:13:45.110 l=INF tid=55b5a5163e2d4b008bfa8938d5189c3c msg="Outbound GET /v1/items 200 2.1677 ms Unknown MyApp/1.0" mth=GET path=/v1/items sc=200 ms=2.1677
@@ -340,9 +341,11 @@ t=17:13:45.110 l=INF tid=55b5a5163e2d4b008bfa8938d5189c3c msg="Outbound GET /v1/
 | `ClientKind`, `UserAgent` | yes | yes | User-Agent header, redacted; `(none)` when missing |
 | `Route` | yes | yes | the matched route template, e.g. `/orders/{id}` |
 | `Aborted` | yes | yes | `true` when the client aborted the request; left out otherwise |
-| `ClientId` | yes | yes | `azp` claim, else `client_id`; redacted like `Jti` |
-| `ClientIp` | yes | yes | `Connection.RemoteIpAddress`, or the first `X-Forwarded-For` entry with `TrustForwardedHeaders` (see [Security](#security)), written as `ClientIpLogging` says; left out under `Off` |
-| `Jti` | yes | yes | `jti` claim, redacted unless listed in `RedactionExemptProperties` |
+| `ClientId` | yes | yes | `azp` claim, else `client_id`; redacted unless listed in `RedactionExemptProperties` |
+| `ClientIp` | yes | yes | `Connection.RemoteIpAddress`, or the first `X-Forwarded-For` entry with `TrustForwardedHeaders` (see [Security](#security)), written as `ClientIpLogging` says (on a 4xx, `ClientIpLoggingOnClientError` when higher); left out under `Off` |
+| `RemoteIp`, `RemotePort` | yes | yes | the connection address (only with `TrustForwardedHeaders`) and source port; written only when the effective mode is `Full` |
+| `Jti` | yes | yes | `jti` claim; not redacted by default (`RedactionExemptProperties`) |
+| `Sid` | yes | yes | `sid` claim, else `ClaimTypes.Sid`; not redacted by default (`RedactionExemptProperties`) |
 | `Protocol`, `Scheme`, `Host` | | yes | request line; `Host` redacted |
 | `RequestContentLength`, `ResponseContentLength` | | yes | when known |
 | `IsAuthenticated`, `AuthScheme` | | yes | `User.Identity` |
@@ -370,7 +373,7 @@ Summary events are marked with the "IsRequestSummary" property and are processed
 | `RequestContentLength`, `ResponseContentLength` | | yes | when the content headers know it |
 | `ExceptionType` | | yes | full type name of the exception of a failed call |
 
-Never summarized, so an export does not cause another export: the library's audit client `Lukdrasil.StepUpLogging.Audit` and the OpenTelemetry OTLP exporter clients `OtlpTraceExporter`, `OtlpMetricExporter` and `OtlpLogExporter`. An `HttpClient` created with `new HttpClient()` is not covered, and outbound summaries carry no `Jti`. The option is read once at registration. See docs/adr/0032-request-summary-direction-detail-outbound.md.
+Never summarized, so an export does not cause another export: the library's audit client `Lukdrasil.StepUpLogging.Audit` and the OpenTelemetry OTLP exporter clients `OtlpTraceExporter`, `OtlpMetricExporter` and `OtlpLogExporter`. An `HttpClient` created with `new HttpClient()` is not covered, and outbound summaries carry no `Jti` or `Sid`. The option is read once at registration. See docs/adr/0032-request-summary-direction-detail-outbound.md.
 
 ### Example Request Summary Log
 
@@ -430,7 +433,9 @@ still log at Error.
 |---|---|
 | `Off` (default) | Nothing. `ClientIp`, `ForwardedFor` and `SourceIp` are left out, and the IP headers are redacted in the logged `Headers` |
 | `Prefix` | The client prefix: /24 for IPv4, /48 for IPv6, an IPv4-mapped address as IPv4. `ForwardedFor` is masked per entry. A value that does not parse is left out. The IP headers are redacted in the logged `Headers` |
-| `Full` | The address unchanged, as 8.x did |
+| `Full` | The address unchanged, as 8.x did, plus `RemotePort` (and `RemoteIp` with `TrustForwardedHeaders`) |
+
+A request answered with 400-499 uses `ClientIpLoggingOnClientError` (default `Full`) when it is higher than `ClientIpLogging`, so the logs of a likely attack carry the caller's full address and port (ADR 0044). Set it to `Off` to log 4xx requests like any other.
 
 The library only changes what it logs. Request headers reach your app and downstream services unchanged. See [CONFIGURATION.md](CONFIGURATION.md) for every option.
 
@@ -1314,11 +1319,12 @@ Every option, with its type and effect, is also listed in [CONFIGURATION.md](CON
 | `ExcludePaths` | `["/healthz", "/metrics", "/health"]` (applied only when not configured) | - | Paths to exclude from logging. A configured list replaces the defaults, `[]` excludes nothing |
 | `AdditionalExcludePaths` | `[]` | `SerilogStepUp__AdditionalExcludePaths__0` | Paths appended to the effective `ExcludePaths`, same matching; the defaults stay unless `ExcludePaths` is configured |
 | `RedactionRegexes` | `[]` | - | Regex patterns for redacting sensitive data. Always applied to request metadata and bodies; also applied to application log properties when `RedactLogEventProperties` is set — see [Security](#security) |
-| `RedactionExemptProperties` | `[]` | `SerilogStepUp__RedactionExemptProperties__0` | Property names (ordinal, case-sensitive) whose values are never redacted: the `RedactLogEventProperties` sweep skips them and `Jti` on the request summary keeps its value when listed. Request inputs are always redacted. See [Security](#security) |
+| `RedactionExemptProperties` | `["Jti", "Sid"]` | `SerilogStepUp__RedactionExemptProperties__0` | Property names (ordinal, case-sensitive) whose values are never redacted: the `RedactLogEventProperties` sweep skips them and `Jti` and `Sid` on the request summary keep their value when listed. A configured list replaces the default; `[""]` exempts nothing. Request inputs are always redacted. See [Security](#security) |
 | `RedactLogEventProperties` | `false` | - | Opt-in: also sweep the string-valued and URI-like (`PathString`, `QueryString`, `HostString`, `Uri`) scalar properties of application log events with `RedactionRegexes`, not just request metadata. See [Security](#security) |
 | `AdditionalSensitiveHeaders` | `[]` | - | Custom header names to redact in request logging |
 | `TrustForwardedHeaders` | `false` | - | When `true`, `ClientIp` is taken from the first `X-Forwarded-For` entry (v2 behavior). Only enable behind a proxy you control with `ForwardedHeadersMiddleware`. See [Security](#security). |
 | `ClientIpLogging` | `Off` | `SerilogStepUp__ClientIpLogging` | `Off`, `Prefix` or `Full`: how `ClientIp`, `ForwardedFor` and the IP headers are logged. See [IP Address Detection](#ip-address-detection) |
+| `ClientIpLoggingOnClientError` | `Full` | `SerilogStepUp__ClientIpLoggingOnClientError` | `Off`, `Prefix` or `Full`: the mode for a 4xx request when higher than `ClientIpLogging` |
 | `ClientIpAudit` | `Off` | `SerilogStepUp__ClientIpAudit` | `Off`, `Prefix` or `Full`: how audit `SourceIp` is written |
 | `TreatServerErrorStatusAsError` | `true` | - | When `false`, a request completing with status >= 500 but **no** exception is logged at Warning instead of Error, so it does not trigger step-up. Set this in a reverse proxy / BFF where most 5xx are relayed from a backend. An unhandled exception is still Error. |
 | **Hosting** |
@@ -1602,9 +1608,10 @@ enrichment. Do not log secrets in interpolated message templates.
 
 `RedactionExemptProperties` lists property names whose values the patterns never touch, for an
 identifier that a broad pattern would otherwise mask: with a UUID pattern, Keycloak's
-`jti` (`onrtac:<uuid>`) would come out as `onrtac:[REDACTED]`. Listing `Jti` keeps it on the
-request summary, the request completion event and, with `RedactLogEventProperties` on, in the
-sweep; the same UUID in the request path or in any other property is still redacted. Names match
+`jti` (`onrtac:<uuid>`) would come out as `onrtac:[REDACTED]`. The default list, `["Jti", "Sid"]`,
+keeps the token id and the session id on the request summary, the request completion event and,
+with `RedactLogEventProperties` on, in the sweep; a configured list replaces the default, and
+`[""]` exempts nothing; the same UUID in the request path or in any other property is still redacted. Names match
 ordinal and case-sensitive, by name only: a secret you log under a listed name is exported in
 clear. The request path, query string, headers, route values and body are always redacted,
 whatever the list holds.
@@ -1613,7 +1620,7 @@ whatever the list holds.
 {
   "SerilogStepUp": {
     "RedactionRegexes": [ "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" ],
-    "RedactionExemptProperties": [ "Jti" ]
+    "RedactionExemptProperties": [ "Jti", "Sid" ]
   }
 }
 ```

@@ -40,7 +40,10 @@ internal sealed class RequestSummary
         ["Aborted"] = "ab",
         ["ClientId"] = "cid",
         ["ClientIp"] = "ip",
+        [LogProperties.RemoteIp] = "rip",
+        [LogProperties.RemotePort] = "rport",
         [LogProperties.Jti] = "jti",
+        [LogProperties.Sid] = "sid",
         ["HttpClientName"] = "hc",
         ["Host"] = "host",
     };

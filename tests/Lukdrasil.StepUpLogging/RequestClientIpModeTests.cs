@@ -109,4 +109,19 @@ public class RequestClientIpModeTests
 
         Assert.Equal(("::ffff:203.0.113.7", "198.51.100.9, unknown"), addresses);
     }
+
+    [Fact]
+    public void Full_WritesAKnownPortWhenTheConnectionAddressIsUnknown()
+    {
+        var context = new DefaultHttpContext();
+        context.Connection.RemotePort = 51234;
+
+        Assert.Equal((null, 51234), RequestClient.Remote(context, trustForwardedHeaders: true, ClientIpMode.Full));
+    }
+
+    [Fact]
+    public void ClientIpMode_IsOrderedFromLeastToMostDisclosure()
+    {
+        Assert.Equal([ClientIpMode.Off, ClientIpMode.Prefix, ClientIpMode.Full], Enum.GetValues<ClientIpMode>().Order());
+    }
 }

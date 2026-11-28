@@ -22,8 +22,7 @@ namespace Lukdrasil.StepUpLogging.Tests;
 
 /// <summary>
 /// Pins that the <c>jti</c> token identifier is redacted on the <c>EnrichDiagnosticContext</c> path
-/// (the request-completion log), mirroring the summary-path redaction covered elsewhere. <c>jti</c>
-/// originates in a user-presented token and must never be logged verbatim.
+/// (the request-completion log) when it is not exempt, mirroring the summary-path redaction covered elsewhere.
 /// </summary>
 public class JtiRedactionTests
 {

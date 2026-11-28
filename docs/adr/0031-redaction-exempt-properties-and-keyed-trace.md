@@ -1,6 +1,6 @@
 # ADR 0031 - Redaction exempt properties and a keyed trace id in the Text console
 
-- Status: Accepted
+- Status: Accepted (D1 default amended by ADR 0045)
 - Date: 2026-10-20
 - Issue: #87
 - Amends: ADR 0022 D5, D6
