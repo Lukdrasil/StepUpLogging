@@ -30,3 +30,6 @@ Domain terms of `Lukdrasil.StepUpLogging`.
 - **client prefix**: (ADR 0042) the network, /24 for IPv4 and /48 for IPv6, written in CIDR form in place of the
   client address when `ClientIpLogging` or `ClientIpAudit` is `Prefix`. Avoid: anonymized IP, truncated IP,
   masked IP.
+- **client error request**: an inbound request answered with a status from 400 to 499. Its caller's identity is
+  logged as `ClientIpLoggingOnClientError` says, never less than `ClientIpLogging`. A 4xx is a suspicion, not proof
+  of an attack. Avoid: attack, suspicious request, failed request (ADR 0043: >= 400 or an exception).

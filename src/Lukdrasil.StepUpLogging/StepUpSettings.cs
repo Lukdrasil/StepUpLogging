@@ -16,7 +16,7 @@ internal sealed class StepUpSettings
         "Authorization-Token", "Proxy-Authorization", "WWW-Authenticate", "Sec-WebSocket-Key"
     ];
 
-    // Redacted in the logged headers unless ClientIpLogging is Full (ADR 0042 D5).
+    // Redacted in the logged headers unless the client IP mode of the request is Full (ADR 0042 D5, ADR 0044).
     private static readonly string[] ClientIpHeaders = ["X-Forwarded-For", "Forwarded", "X-Real-IP", "X-Original-For"];
 
     internal StepUpSettings(StepUpLoggingOptions options)
@@ -34,12 +34,12 @@ internal sealed class StepUpSettings
         DiagnosticDuration = TimeSpan.FromMinutes(options.DiagnosticDurationMinutes);
         Categories = new CategoryPolicy(options);
         ExcludedPaths = new ExcludedPaths(options.ExcludePaths ?? []);
-        SensitiveHeaders = new HashSet<string>(
-            [.. BuiltInSensitiveHeaders, .. options.ClientIpLogging == ClientIpMode.Full ? [] : ClientIpHeaders, .. options.AdditionalSensitiveHeaders ?? []],
-            StringComparer.OrdinalIgnoreCase);
+        ClientIpLogging = options.ClientIpLogging;
+        _clientErrorIpLogging = (ClientIpMode)Math.Max((int)options.ClientIpLogging, (int)options.ClientIpLoggingOnClientError);
+        _sensitiveHeaders = SensitiveHeadersUnder(ClientIpLogging, options.AdditionalSensitiveHeaders);
+        _clientErrorSensitiveHeaders = SensitiveHeadersUnder(_clientErrorIpLogging, options.AdditionalSensitiveHeaders);
         ActivityInstrumentation = options.EnableActivityInstrumentation;
         TrustForwardedHeaders = options.TrustForwardedHeaders;
-        ClientIpLogging = options.ClientIpLogging;
         ClientIpAudit = options.ClientIpAudit;
         RequestSummaryDetail = options.RequestSummaryDetail;
         AlwaysLogRequestSummary = options.AlwaysLogRequestSummary;
@@ -91,11 +91,27 @@ internal sealed class StepUpSettings
 
     internal ExcludedPaths ExcludedPaths { get; }
 
+    private readonly ClientIpMode _clientErrorIpLogging;
+    private readonly IReadOnlySet<string> _sensitiveHeaders;
+    private readonly IReadOnlySet<string> _clientErrorSensitiveHeaders;
+
     /// <summary>
-    /// The built-in sensitive headers, the client IP headers unless <see cref="StepUpLoggingOptions.ClientIpLogging"/>
+    /// The built-in sensitive headers, the client IP headers unless the client IP mode for <paramref name="status"/>
     /// is <see cref="ClientIpMode.Full"/>, plus <see cref="StepUpLoggingOptions.AdditionalSensitiveHeaders"/>.
     /// </summary>
-    internal IReadOnlySet<string> SensitiveHeaders { get; }
+    internal IReadOnlySet<string> SensitiveHeadersFor(int status) => IsClientError(status) ? _clientErrorSensitiveHeaders : _sensitiveHeaders;
+
+    /// <summary>
+    /// The client IP mode of the logs for a request answered with <paramref name="status"/>: on a client error
+    /// request (400 to 499) the higher of <c>ClientIpLogging</c> and <c>ClientIpLoggingOnClientError</c> (ADR 0044),
+    /// else <c>ClientIpLogging</c>.
+    /// </summary>
+    internal ClientIpMode ClientIpLoggingFor(int status) => IsClientError(status) ? _clientErrorIpLogging : ClientIpLogging;
+
+    private static bool IsClientError(int status) => status is >= 400 and <= 499;
+
+    private static HashSet<string> SensitiveHeadersUnder(ClientIpMode mode, string[]? additional)
+        => new([.. BuiltInSensitiveHeaders, .. mode == ClientIpMode.Full ? [] : ClientIpHeaders, .. additional ?? []], StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Whether the library starts its own activities (<see cref="StepUpLoggingOptions.EnableActivityInstrumentation"/>).</summary>
     internal bool ActivityInstrumentation { get; }

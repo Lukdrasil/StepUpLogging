@@ -214,6 +214,7 @@ The file sink is enabled by the `logFilePath` parameter of `AddStepUpLogging`: d
 | `AdditionalExcludePaths` | none | Added to `ExcludePaths` (to the defaults when `ExcludePaths` is not configured), so `SerilogStepUp__AdditionalExcludePaths__0=/.well-known/*` adds one path without restating the defaults |
 | `TrustForwardedHeaders` | `false` | `true` takes `ClientIp` from `X-Forwarded-For`, which any client can forge unless your proxy overwrites it |
 | `ClientIpLogging` | `Off` | `Prefix` logs the client prefix (`203.0.113.0/24`, `2001:db8:1234::/48`); `Full` logs the address and the IP headers unchanged, as 8.x did |
+| `ClientIpLoggingOnClientError` | `Full` | the mode for a request answered with 400-499, when higher than `ClientIpLogging`; `Off` turns it off |
 | `ClientIpAudit` | `Off` | `Prefix` or `Full` writes `SourceIp` on audit events; independent of `ClientIpLogging` |
 | `TreatServerErrorStatusAsError` | `true` | `false` logs a 5xx without an exception at `Warning`, so it no longer steps up or flushes. Unhandled exceptions are still `Error` |
 
@@ -341,7 +342,8 @@ t=17:13:45.110 l=INF tid=55b5a5163e2d4b008bfa8938d5189c3c msg="Outbound GET /v1/
 | `Route` | yes | yes | the matched route template, e.g. `/orders/{id}` |
 | `Aborted` | yes | yes | `true` when the client aborted the request; left out otherwise |
 | `ClientId` | yes | yes | `azp` claim, else `client_id`; redacted like `Jti` |
-| `ClientIp` | yes | yes | `Connection.RemoteIpAddress`, or the first `X-Forwarded-For` entry with `TrustForwardedHeaders` (see [Security](#security)), written as `ClientIpLogging` says; left out under `Off` |
+| `ClientIp` | yes | yes | `Connection.RemoteIpAddress`, or the first `X-Forwarded-For` entry with `TrustForwardedHeaders` (see [Security](#security)), written as `ClientIpLogging` says (on a 4xx, `ClientIpLoggingOnClientError` when higher); left out under `Off` |
+| `RemoteIp`, `RemotePort` | yes | yes | the connection address (only with `TrustForwardedHeaders`) and source port; written only when the effective mode is `Full` |
 | `Jti` | yes | yes | `jti` claim, redacted unless listed in `RedactionExemptProperties` |
 | `Protocol`, `Scheme`, `Host` | | yes | request line; `Host` redacted |
 | `RequestContentLength`, `ResponseContentLength` | | yes | when known |
@@ -430,7 +432,9 @@ still log at Error.
 |---|---|
 | `Off` (default) | Nothing. `ClientIp`, `ForwardedFor` and `SourceIp` are left out, and the IP headers are redacted in the logged `Headers` |
 | `Prefix` | The client prefix: /24 for IPv4, /48 for IPv6, an IPv4-mapped address as IPv4. `ForwardedFor` is masked per entry. A value that does not parse is left out. The IP headers are redacted in the logged `Headers` |
-| `Full` | The address unchanged, as 8.x did |
+| `Full` | The address unchanged, as 8.x did, plus `RemotePort` (and `RemoteIp` with `TrustForwardedHeaders`) |
+
+A request answered with 400-499 uses `ClientIpLoggingOnClientError` (default `Full`) when it is higher than `ClientIpLogging`, so the logs of a likely attack carry the caller's full address and port (ADR 0044). Set it to `Off` to log 4xx requests like any other.
 
 The library only changes what it logs. Request headers reach your app and downstream services unchanged. See [CONFIGURATION.md](CONFIGURATION.md) for every option.
 
@@ -1319,6 +1323,7 @@ Every option, with its type and effect, is also listed in [CONFIGURATION.md](CON
 | `AdditionalSensitiveHeaders` | `[]` | - | Custom header names to redact in request logging |
 | `TrustForwardedHeaders` | `false` | - | When `true`, `ClientIp` is taken from the first `X-Forwarded-For` entry (v2 behavior). Only enable behind a proxy you control with `ForwardedHeadersMiddleware`. See [Security](#security). |
 | `ClientIpLogging` | `Off` | `SerilogStepUp__ClientIpLogging` | `Off`, `Prefix` or `Full`: how `ClientIp`, `ForwardedFor` and the IP headers are logged. See [IP Address Detection](#ip-address-detection) |
+| `ClientIpLoggingOnClientError` | `Full` | `SerilogStepUp__ClientIpLoggingOnClientError` | `Off`, `Prefix` or `Full`: the mode for a 4xx request when higher than `ClientIpLogging` |
 | `ClientIpAudit` | `Off` | `SerilogStepUp__ClientIpAudit` | `Off`, `Prefix` or `Full`: how audit `SourceIp` is written |
 | `TreatServerErrorStatusAsError` | `true` | - | When `false`, a request completing with status >= 500 but **no** exception is logged at Warning instead of Error, so it does not trigger step-up. Set this in a reverse proxy / BFF where most 5xx are relayed from a backend. An unhandled exception is still Error. |
 | **Hosting** |

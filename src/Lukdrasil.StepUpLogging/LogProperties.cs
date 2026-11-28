@@ -8,6 +8,8 @@ internal static class LogProperties
     public const string IsImmediate = "IsImmediate";
     public const string Jti = "Jti";
     public const string ClientIp = "ClientIp";
+    public const string RemoteIp = "RemoteIp";
+    public const string RemotePort = "RemotePort";
     public const string QueryString = "QueryString";
     public const string RouteParameters = "RouteParameters";
 

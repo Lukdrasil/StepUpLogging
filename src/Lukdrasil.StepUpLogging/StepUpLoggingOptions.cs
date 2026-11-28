@@ -88,13 +88,13 @@ public enum RequestSummaryDetail
     /// <summary>
     /// The template properties (<c>Direction</c>, <c>Method</c>, <c>Path</c>, <c>StatusCode</c>, <c>ElapsedMs</c>,
     /// <c>ClientKind</c>, <c>UserAgent</c>) plus, inbound, <c>Route</c>, <c>Aborted</c>, <c>ClientId</c>,
-    /// <c>ClientIp</c> and <c>Jti</c>; outbound, <c>HttpClientName</c> and <c>Host</c>.
+    /// <c>ClientIp</c>, <c>RemoteIp</c>, <c>RemotePort</c> and <c>Jti</c>; outbound, <c>HttpClientName</c> and <c>Host</c>.
     /// </summary>
     Compact = 1,
 
     /// <summary>
     /// The <see cref="Compact"/> fields under short keys: <c>dir</c>, <c>mth</c>, <c>path</c>, <c>sc</c>, <c>ms</c>,
-    /// <c>ck</c>, <c>ua</c>, <c>rt</c>, <c>ab</c>, <c>cid</c>, <c>ip</c>, <c>jti</c>, <c>hc</c> and <c>host</c>. The
+    /// <c>ck</c>, <c>ua</c>, <c>rt</c>, <c>ab</c>, <c>cid</c>, <c>ip</c>, <c>rip</c>, <c>rport</c>, <c>jti</c>, <c>hc</c> and <c>host</c>. The
     /// template uses the short keys too, so the rendered message is the same. The <see cref="ConsoleLogFormat.Text"/>
     /// console line writes short keys too (<c>t=</c>, <c>l=</c>, <c>tid=</c> or <c>tp=</c>, <c>src=</c>, <c>msg=</c>,
     /// <c>ex=</c>), and the default <see cref="StepUpLoggingOptions.ConsoleTextProperties"/> is
@@ -482,6 +482,15 @@ public sealed class StepUpLoggingOptions
     /// <c>Headers</c>. The request's own headers are never changed. Default: <see cref="ClientIpMode.Off"/>.
     /// </summary>
     public ClientIpMode ClientIpLogging { get; set; } = ClientIpMode.Off;
+
+    /// <summary>
+    /// How much of the client IP the logs write for a client error request, one answered with a status from 400 to
+    /// 499 (ADR 0044): the higher of this and <see cref="ClientIpLogging"/> applies to the same fields. Under an
+    /// effective <see cref="ClientIpMode.Full"/> the logs also write <c>RemotePort</c>, and <c>RemoteIp</c> when
+    /// <see cref="TrustForwardedHeaders"/> is on. <see cref="ClientIpMode.Off"/> turns the escalation off. Default:
+    /// <see cref="ClientIpMode.Full"/>.
+    /// </summary>
+    public ClientIpMode ClientIpLoggingOnClientError { get; set; } = ClientIpMode.Full;
 
     /// <summary>
     /// How much of the client IP audit records carry in <see cref="AuditEvent.SourceIp"/> (ADR 0042), independent of

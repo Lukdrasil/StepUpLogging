@@ -1,3 +1,22 @@
+# Migrating to v9.2.0
+
+## A client error request logs the caller's full address
+
+**What changed.** `ClientIpLoggingOnClientError` defaults to `Full`. A request answered with a status from 400 to 499
+logs `ClientIp`, `ForwardedFor` and the four IP headers in full, plus the new `RemotePort` (and `RemoteIp` with
+`TrustForwardedHeaders`), even when `ClientIpLogging` is `Off`. Requests with any other status are logged as before.
+
+**Why.** A 4xx is the most common trace of an attack, and investigating one needs the address. The usual legal basis
+is the legitimate interest in network and information security (GDPR Art. 6(1)(f), recital 49). See ADR 0044.
+
+**Migrate.** To keep the 9.1 output, turn it off:
+
+```json
+{ "SerilogStepUp": { "ClientIpLoggingOnClientError": "Off" } }
+```
+
+With `ClientIpLogging` set to `Full`, the logs now also carry `RemotePort` on every request.
+
 # Migrating to v9.0.0
 
 ## The client address is off by default

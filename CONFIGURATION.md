@@ -259,6 +259,7 @@ A full IP address is personal data under GDPR. From 9.0.0 the library writes no 
 | Option | Type | Default | What it does |
 |---|---|---|---|
 | `ClientIpLogging` | enum `ClientIpMode` | `Off` | How much of the client IP goes into the logs. |
+| `ClientIpLoggingOnClientError` | enum `ClientIpMode` | `Full` | How much of the client IP goes into the logs for a client error request (status 400 to 499). The higher of this and `ClientIpLogging` applies. `Off` turns it off. |
 | `ClientIpAudit` | enum `ClientIpMode` | `Off` | How much of the client IP goes into `AuditEvent.SourceIp` of audit records. |
 | `TrustForwardedHeaders` | bool | `false` | Where the client IP comes from (ADR 0008). See below. |
 
@@ -287,6 +288,8 @@ Details worth knowing:
 - **The library never changes the request's headers.** Redaction applies only to the copy that is logged, so forwarding the headers to a backend still works.
 - **Other IP headers are yours to add.** A header such as `CF-Connecting-IP` is not covered by these options. Add it to `AdditionalSensitiveHeaders`.
 - **Audit endpoints.** An audit endpoint that checks `SourceIp` is a valid IP address rejects records under `Prefix`.
+- **Client error requests.** A request answered with a status from 400 to 499 may be an attack, so by default its logs carry the caller's full identity (ADR 0044): `ClientIp`, `ForwardedFor` and the four IP headers are written under the higher of `ClientIpLogging` and `ClientIpLoggingOnClientError`. 5xx and unhandled exceptions are not client errors. `Authorization`, `Cookie` and the other sensitive headers stay redacted. The audit trail is not affected. The legal basis is usually the legitimate interest in network and information security (GDPR Art. 6(1)(f), recital 49); documenting it and the retention is yours. Set `ClientIpLoggingOnClientError` to `Off` to turn this off.
+- **Connection address and port.** Whenever the effective mode is `Full`, the request summary and the completion event also write `RemotePort`, the connection's source port (Minimal key `rport`), which an ISP needs to trace a client behind carrier-grade NAT. With `TrustForwardedHeaders` they also write `RemoteIp`, the connection address the client cannot forge (Minimal key `rip`). Without it `ClientIp` already is that address.
 - **Not covered.** `client.address` on trace spans, and any address your own code puts into log events or into an audit record's `Data`.
 
 Upgrading from 8.x: to keep the old behaviour, set both options to `Full`.

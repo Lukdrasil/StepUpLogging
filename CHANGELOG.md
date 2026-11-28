@@ -8,6 +8,11 @@ Tags before 1.8.0 predate this file.
 
 ## [Unreleased]
 
+### Added
+- `ClientIpLoggingOnClientError` (`Off`, `Prefix`, `Full`, default `Full`). A request answered with 400 to 499 logs the client address under the higher of this and `ClientIpLogging`: `ClientIp`, `ForwardedFor` and the four IP headers in `Headers`. Secrets stay redacted and the audit trail is unchanged. Set it to `Off` to keep the 9.1 output. See MIGRATION.md and ADR 0044.
+- `RemotePort`, and with `TrustForwardedHeaders` `RemoteIp`, in the request summary (Minimal keys `rport`, `rip`) and the completion event whenever the effective client IP mode is `Full`.
+- The startup report names the client error mode.
+
 ### Changed
 - Dependencies: on `net11.0` Serilog.AspNetCore 11.0.0 and Microsoft.Extensions.Http.Resilience 11.0.1; on `net10.0` Serilog.AspNetCore stays 10.0.0 and Microsoft.Extensions.Http.Resilience moves to 10.11.1, so a .NET 10 project keeps the 10.x Microsoft.Extensions packages. Serilog.Sinks.OpenTelemetry 4.3.0 on both. A project that references `Microsoft.Extensions.Telemetry.Abstractions` directly at a lower version than the one Microsoft.Extensions.Http.Resilience brings gets restore error NU1605 and should raise that reference. The options, the log output and the audit wire format are unchanged.
 

@@ -12,7 +12,7 @@ namespace Lukdrasil.StepUpLogging;
 internal static class StartupReport
 {
     internal const string SummaryTemplate =
-        "StepUp logging: Mode {Mode:l}, BaseLevel {BaseLevel:l}, StepUpLevel {StepUpLevel:l} for {DurationSeconds} s; outputs {Outputs:l}; framework defaults {FrameworkCategoryDefaults:l}; client IP logs {ClientIpLogging:l}, audit {ClientIpAudit:l}; request summary {RequestSummary:l}";
+        "StepUp logging: Mode {Mode:l}, BaseLevel {BaseLevel:l}, StepUpLevel {StepUpLevel:l} for {DurationSeconds} s; outputs {Outputs:l}; framework defaults {FrameworkCategoryDefaults:l}; client IP logs {ClientIpLogging:l}, on client error {ClientIpLoggingOnClientError:l}, audit {ClientIpAudit:l}; request summary {RequestSummary:l}";
 
     internal const string UnknownKeyTemplate = "Unknown configuration key {Key:l} is ignored; see the StepUpLoggingOptions properties for valid keys.";
 
@@ -42,7 +42,7 @@ internal static class StartupReport
         {
             logger.Information(SummaryTemplate,
                 opts.Mode.ToString(), opts.BaseLevel, opts.StepUpLevel, opts.DurationSeconds, Outputs(opts, logFilePath),
-                opts.FrameworkCategoryDefaults.ToString(), opts.ClientIpLogging.ToString(), opts.ClientIpAudit.ToString(), RequestSummaryText(opts));
+                opts.FrameworkCategoryDefaults.ToString(), opts.ClientIpLogging.ToString(), opts.ClientIpLoggingOnClientError.ToString(), opts.ClientIpAudit.ToString(), RequestSummaryText(opts));
         }
 
         foreach (var key in UnknownKeys(section))

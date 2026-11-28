@@ -1,6 +1,6 @@
 # ADR 0042 - The client IP is off by default, and logs and audit choose separately between off, prefix and full
 
-- Status: Accepted
+- Status: Accepted (D1 extended by ADR 0044)
 - Date: 2026-11-27
 
 ## Context

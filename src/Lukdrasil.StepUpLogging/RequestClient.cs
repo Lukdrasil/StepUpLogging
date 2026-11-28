@@ -103,6 +103,22 @@ internal static class RequestClient
         return $"{new IPAddress(bytes)}/{prefixBytes * 8}";
     }
 
+    /// <summary>
+    /// The connection's address and source port, written only under <see cref="ClientIpMode.Full"/> (ADR 0044 D3).
+    /// The address is returned only when <paramref name="trustForwardedHeaders"/> is <c>true</c>: otherwise
+    /// <c>ClientIp</c> already is the connection address. The port is omitted when the server does not know it.
+    /// </summary>
+    internal static (string? RemoteIp, int? RemotePort) Remote(HttpContext httpContext, bool trustForwardedHeaders, ClientIpMode mode)
+    {
+        var connection = httpContext.Connection;
+        if (mode != ClientIpMode.Full || connection.RemoteIpAddress is not { } address)
+        {
+            return (null, null);
+        }
+
+        return (trustForwardedHeaders ? address.ToString() : null, connection.RemotePort > 0 ? connection.RemotePort : null);
+    }
+
     /// <summary>The raw User-Agent header, or <see langword="null"/> when it is absent or blank.</summary>
     internal static string? UserAgent(HttpRequest request)
     {

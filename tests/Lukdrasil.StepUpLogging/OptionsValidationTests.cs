@@ -39,6 +39,7 @@ public class OptionsValidationTests
     [InlineData("RequestSummaryOnError")]
     [InlineData("ClientIpLogging")]
     [InlineData("ClientIpAudit")]
+    [InlineData("ClientIpLoggingOnClientError")]
     public void UndefinedEnumNumber_FailsValidationOnStart(string option)
     {
         Assert.Throws<OptionsValidationException>(
@@ -399,6 +400,12 @@ public class OptionsValidationTests
         var options = new StepUpLoggingOptions();
 
         Assert.Equal((ClientIpMode.Off, ClientIpMode.Off), (options.ClientIpLogging, options.ClientIpAudit));
+    }
+
+    [Fact]
+    public void ClientIpLoggingOnClientError_DefaultsToFull()
+    {
+        Assert.Equal(ClientIpMode.Full, new StepUpLoggingOptions().ClientIpLoggingOnClientError);
     }
 
     [Fact]
