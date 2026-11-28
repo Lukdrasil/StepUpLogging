@@ -61,7 +61,7 @@ public class RequestSummaryOnErrorTests
             {
                 app.Use((context, next) =>
                 {
-                    context.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("azp", "rate-limited-client")], "Bearer"));
+                    context.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("azp", "rate-limited-client"), new Claim("jti", "token-1"), new Claim("sid", "session-1")], "Bearer"));
                     context.Connection.RemoteIpAddress = IPAddress.Parse("203.0.113.7");
                     context.Connection.RemotePort = 51234;
                     return next();
@@ -305,5 +305,18 @@ public class RequestSummaryOnErrorTests
         Assert.Equal("rate-limited-client", Scalar(completion, "cid"));
         Assert.False(completion.Properties.ContainsKey("ClientKind"));
         Assert.False(completion.Properties.ContainsKey("ip"));
+        Assert.Equal("token-1", Scalar(completion, "Jti"));
+        Assert.Equal("session-1", Scalar(completion, "Sid"));
+        Assert.False(completion.Properties.ContainsKey("jti"));
+        Assert.False(completion.Properties.ContainsKey("sid"));
+    }
+
+    [Fact]
+    public async Task Keep_TheCompletionEvent_WritesTheTokenSid()
+    {
+        var events = await ExportedAsync("/status/429");
+
+        Assert.Equal("session-1", Scalar(Assert.Single(events, IsCompletion), "Sid"));
+        Assert.Equal("session-1", Scalar(Assert.Single(events, IsSummary), "Sid"));
     }
 }

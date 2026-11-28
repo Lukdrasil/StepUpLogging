@@ -43,6 +43,7 @@ internal sealed class RequestSummary
         [LogProperties.RemoteIp] = "rip",
         [LogProperties.RemotePort] = "rport",
         [LogProperties.Jti] = "jti",
+        [LogProperties.Sid] = "sid",
         ["HttpClientName"] = "hc",
         ["Host"] = "host",
     };

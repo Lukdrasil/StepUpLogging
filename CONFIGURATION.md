@@ -233,7 +233,7 @@ Example: an access log in the short format, without the health and readiness pro
 |---|---|---|---|
 | `RedactionRegexes` | string[] | `[]` | Regular expressions (text patterns) to redact. They are applied, ignoring case, to the request path, query string, headers, route values and request body. Each entry must be a valid regex. Keep the list short and each pattern narrow, because every pattern costs CPU on every request. |
 | `RedactLogEventProperties` | bool | `false` | Also applies `RedactionRegexes` to the string properties of your own log events, for example `logger.LogInformation("token={Token}", t)` (ADR 0022). It does not touch message text, so `$"token={t}"` (string interpolation) is never redacted. Do not put secrets in interpolated messages. Has no effect while `RedactionRegexes` is empty. |
-| `RedactionExemptProperties` | string[] | `[]` | Property names that the patterns skip, for ids like `Jti` that a broad pattern (for example a bare UUID) would hide. Case-sensitive. The request inputs (path, query, headers, route values, User-Agent, `X-Forwarded-For`, body) are always redacted whatever this list says (ADR 0031). |
+| `RedactionExemptProperties` | string[] or not set | not set, which means `["Jti", "Sid"]` | Property names that the patterns skip, for ids like `Jti` and `Sid` that a broad pattern (for example a bare UUID) would hide. Case-sensitive. A list you set replaces the default; `[""]` exempts nothing (ADR 0045). The request inputs (path, query, headers, route values, User-Agent, `X-Forwarded-For`, body) are always redacted whatever this list says (ADR 0031). |
 | `AdditionalSensitiveHeaders` | string[] | `[]` | Extra header names whose values are always hidden in the logged headers. Case-insensitive. |
 
 These headers are always hidden, whatever you configure:
@@ -246,7 +246,7 @@ Example: hide e-mail addresses and an API key header of your own.
   "SerilogStepUp": {
     "RedactionRegexes": [ "[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}" ],
     "RedactLogEventProperties": true,
-    "RedactionExemptProperties": [ "Jti" ],
+    "RedactionExemptProperties": [ "Jti", "Sid" ],
     "AdditionalSensitiveHeaders": [ "X-Partner-Key" ]
   }
 }

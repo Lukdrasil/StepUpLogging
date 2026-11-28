@@ -415,12 +415,27 @@ public class OptionsValidationTests
     }
 
     [Fact]
-    public void RedactionExemptProperties_DefaultsToEmpty()
+    public void RedactionExemptProperties_NotConfigured_ExemptsJtiAndSid()
     {
-        var exempt = new StepUpLoggingOptions().RedactionExemptProperties;
+        using var host = BuildHost();
 
-        Assert.NotNull(exempt);
-        Assert.Empty(exempt);
+        Assert.Equal(["Jti", "Sid"], host.Services.GetRequiredService<CompiledRedactionPatterns>().ExemptProperties.Order());
+    }
+
+    [Fact]
+    public void RedactionExemptProperties_Configured_ReplacesTheDefault()
+    {
+        using var host = BuildHost(("SerilogStepUp:RedactionExemptProperties:0", "UserId"));
+
+        Assert.Equal(["UserId"], host.Services.GetRequiredService<CompiledRedactionPatterns>().ExemptProperties);
+    }
+
+    [Fact]
+    public void RedactionExemptProperties_ConfiguredBlank_ExemptsNothing()
+    {
+        using var host = BuildHost(("SerilogStepUp:RedactionExemptProperties:0", ""));
+
+        Assert.Empty(host.Services.GetRequiredService<CompiledRedactionPatterns>().ExemptProperties);
     }
 
     [Fact]

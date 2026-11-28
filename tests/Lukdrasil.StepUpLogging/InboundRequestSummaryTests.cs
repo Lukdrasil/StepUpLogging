@@ -19,7 +19,7 @@ public class InboundRequestSummaryTests
     private static readonly Serilog.ILogger Logger = new LoggerConfiguration().CreateLogger();
 
     private static readonly string[] CompactKeys =
-        ["Direction", "Method", "Path", "StatusCode", "ElapsedMs", "ClientKind", "UserAgent", "Route", "Aborted", "ClientId", "ClientIp", "Jti", "IsRequestSummary"];
+        ["Direction", "Method", "Path", "StatusCode", "ElapsedMs", "ClientKind", "UserAgent", "Route", "Aborted", "ClientId", "ClientIp", "Jti", "Sid", "IsRequestSummary"];
 
     private static readonly string[] FullOnlyKeys =
         ["Protocol", "Scheme", "Host", "RequestContentLength", "ResponseContentLength", "IsAuthenticated", "AuthScheme", "EndpointName", "QueryString", "RouteParameters", "ForwardedFor"];
@@ -54,7 +54,7 @@ public class InboundRequestSummaryTests
         }
 
         context.User = new ClaimsPrincipal(new ClaimsIdentity(
-            claims.Length > 0 ? claims : [new Claim("azp", "billing-ui"), new Claim("jti", "jti-1")], "Bearer"));
+            claims.Length > 0 ? claims : [new Claim("azp", "billing-ui"), new Claim("jti", "jti-1"), new Claim("sid", "sid-1")], "Bearer"));
         if (aborted)
         {
             var abort = new CancellationTokenSource();
@@ -87,7 +87,7 @@ public class InboundRequestSummaryTests
         var minimal = From(Context(), RequestSummaryDetail.Minimal);
 
         Assert.Equal(
-            ["dir", "mth", "path", "sc", "ms", "ck", "ua", "rt", "ab", "cid", "ip", "jti", "IsRequestSummary"],
+            ["dir", "mth", "path", "sc", "ms", "ck", "ua", "rt", "ab", "cid", "ip", "jti", "sid", "IsRequestSummary"],
             minimal.Properties.Keys);
         Assert.All(CompactKeys.SkipLast(1), key => Assert.Equal(
             compact.Properties[key].ToString(), minimal.Properties[RequestSummary.MinimalKeys[key]].ToString()));
@@ -157,6 +157,30 @@ public class InboundRequestSummaryTests
     }
 
     [Fact]
+    public void SidClaim_WritesSid()
+    {
+        var logEvent = From(Context(claims: [new Claim("sid", "session-1"), new Claim(ClaimTypes.Sid, "mapped-session")]));
+
+        Assert.Equal("session-1", Scalar(logEvent, "Sid"));
+    }
+
+    [Fact]
+    public void MappedSidClaim_IsTheFallback()
+    {
+        var logEvent = From(Context(claims: [new Claim(ClaimTypes.Sid, "mapped-session")]));
+
+        Assert.Equal("mapped-session", Scalar(logEvent, "Sid"));
+    }
+
+    [Fact]
+    public void NoSidClaim_LeavesSidOut()
+    {
+        var logEvent = From(Context(claims: [new Claim("jti", "jti-1")]));
+
+        Assert.False(logEvent.Properties.ContainsKey("Sid"));
+    }
+
+    [Fact]
     public void AbortedRequest_WritesAbortedTrue()
     {
         var logEvent = From(Context(aborted: true));
@@ -182,12 +206,12 @@ public class InboundRequestSummaryTests
             host: "secret-host.example",
             query: "?token=secret-q",
             forwardedFor: "secret-xff",
-            claims: [new Claim("azp", "secret-azp"), new Claim("jti", "secret-jti")]);
+            claims: [new Claim("azp", "secret-azp"), new Claim("jti", "secret-jti"), new Claim("sid", "secret-sid")]);
 
         var logEvent = From(context, RequestSummaryDetail.Full, patterns, "/orders/secret-p1");
 
         Assert.All(
-            new[] { "Path", "UserAgent", "ClientId", "Jti", "QueryString", "ForwardedFor", "Host" },
+            new[] { "Path", "UserAgent", "ClientId", "Jti", "Sid", "QueryString", "ForwardedFor", "Host" },
             name => Assert.Contains("[REDACTED]", (string)Scalar(logEvent, name)!, StringComparison.Ordinal));
         Assert.Contains("[REDACTED]", logEvent.Properties["RouteParameters"].ToString(), StringComparison.Ordinal);
         Assert.All(logEvent.Properties, p => Assert.DoesNotContain("secret-", p.Value.ToString(), StringComparison.Ordinal));

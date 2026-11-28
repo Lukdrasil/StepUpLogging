@@ -88,13 +88,13 @@ public enum RequestSummaryDetail
     /// <summary>
     /// The template properties (<c>Direction</c>, <c>Method</c>, <c>Path</c>, <c>StatusCode</c>, <c>ElapsedMs</c>,
     /// <c>ClientKind</c>, <c>UserAgent</c>) plus, inbound, <c>Route</c>, <c>Aborted</c>, <c>ClientId</c>,
-    /// <c>ClientIp</c>, <c>RemoteIp</c>, <c>RemotePort</c> and <c>Jti</c>; outbound, <c>HttpClientName</c> and <c>Host</c>.
+    /// <c>ClientIp</c>, <c>RemoteIp</c>, <c>RemotePort</c>, <c>Jti</c> and <c>Sid</c>; outbound, <c>HttpClientName</c> and <c>Host</c>.
     /// </summary>
     Compact = 1,
 
     /// <summary>
     /// The <see cref="Compact"/> fields under short keys: <c>dir</c>, <c>mth</c>, <c>path</c>, <c>sc</c>, <c>ms</c>,
-    /// <c>ck</c>, <c>ua</c>, <c>rt</c>, <c>ab</c>, <c>cid</c>, <c>ip</c>, <c>rip</c>, <c>rport</c>, <c>jti</c>, <c>hc</c> and <c>host</c>. The
+    /// <c>ck</c>, <c>ua</c>, <c>rt</c>, <c>ab</c>, <c>cid</c>, <c>ip</c>, <c>rip</c>, <c>rport</c>, <c>jti</c>, <c>sid</c>, <c>hc</c> and <c>host</c>. The
     /// template uses the short keys too, so the rendered message is the same. The <see cref="ConsoleLogFormat.Text"/>
     /// console line writes short keys too (<c>t=</c>, <c>l=</c>, <c>tid=</c> or <c>tp=</c>, <c>src=</c>, <c>msg=</c>,
     /// <c>ex=</c>), and the default <see cref="StepUpLoggingOptions.ConsoleTextProperties"/> is
@@ -223,14 +223,15 @@ public sealed class StepUpLoggingOptions
     /// <summary>
     /// Property names whose values are never passed through <see cref="RedactionRegexes"/>, for identifiers such as
     /// <c>Jti</c> that a broad pattern (a bare UUID, say) would otherwise mask. Names are matched ordinal and
-    /// case-sensitive; blank entries are ignored. Default: empty, so every value is redacted as before.
+    /// case-sensitive; blank entries are ignored. Default: <c>["Jti", "Sid"]</c>, applied after configuration (ADR 0045
+    /// D2). A configured list replaces the default; <c>[""]</c> exempts nothing.
     /// </summary>
     /// <remarks>
-    /// Applies to the <see cref="RedactLogEventProperties"/> sweep and to <c>Jti</c> on the request summary and the
+    /// Applies to the <see cref="RedactLogEventProperties"/> sweep and to <c>Jti</c> and <c>Sid</c> on the request summary and the
     /// request completion event. The request inputs — path, query string, headers, route values, <c>User-Agent</c>,
     /// <c>X-Forwarded-For</c> and the request body — are always redacted, whatever this list holds (ADR 0031 D1).
     /// </remarks>
-    public string[] RedactionExemptProperties { get; set; } = [];
+    public string[]? RedactionExemptProperties { get; set; }
 
     /// <summary>
     /// When true, applies <see cref="RedactionRegexes"/> to the string-valued and URI-like

@@ -226,7 +226,7 @@ The file sink is enabled by the `logFilePath` parameter of `AddStepUpLogging`: d
 | `PreErrorBufferSize`, `PreErrorMaxContexts` | `100`, `1024` | The memory bound: at most size × contexts held events. Too small loses the oldest events of a long request or the requests of a busy instance |
 | `RedactionRegexes` | none | Each pattern is applied to request paths, query strings, route values, headers and bodies, at a CPU cost per request |
 | `RedactLogEventProperties` | `false` | `true` also applies the patterns to the string properties of every exported application event, at a CPU cost per event |
-| `RedactionExemptProperties` | none | Listed property names, such as `Jti`, skip the patterns on every event and on the request summary. A secret logged under a listed name is exported in clear; request paths, query strings, headers, route values and bodies are always redacted |
+| `RedactionExemptProperties` | `["Jti", "Sid"]` | Listed property names skip the patterns on every event and on the request summary. A secret logged under a listed name is exported in clear; request paths, query strings, headers, route values and bodies are always redacted |
 | `ServiceVersion`, `ServiceInstanceId` | none | Added to every event when set |
 | `EnrichWithThreadId`, `EnrichWithProcessId`, `EnrichWithCallStack` | `false` | More properties on every event; call stacks are expensive |
 | `CaptureScopesOnException` | `true` | `false` stops recording scopes on every thrown exception; events logging an exception then lack the scopes of its throw site |
@@ -325,9 +325,9 @@ The User-Agent is client-supplied and spoofable: `ClientKind` is a filtering lab
 
 **RequestSummaryDetail** (`Full` by default, `Compact` or `Minimal`) chooses the attached fields; the rendered message never changes. `Full` keeps every property the summary had before 6.3.0. `Minimal` writes the `Compact` fields under short keys, the template included (`{dir} {mth} {path} {sc} {ms} ms {ck} {ua}`):
 
-| Key | `dir` | `mth` | `path` | `sc` | `ms` | `ck` | `ua` | `rt` | `ab` | `cid` | `ip` | `jti` | `hc` | `host` |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| Field | `Direction` | `Method` | `Path` | `StatusCode` | `ElapsedMs` | `ClientKind` | `UserAgent` | `Route` | `Aborted` | `ClientId` | `ClientIp` | `Jti` | `HttpClientName` | `Host` |
+| Key | `dir` | `mth` | `path` | `sc` | `ms` | `ck` | `ua` | `rt` | `ab` | `cid` | `ip` | `jti` | `sid` | `hc` | `host` |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Field | `Direction` | `Method` | `Path` | `StatusCode` | `ElapsedMs` | `ClientKind` | `UserAgent` | `Route` | `Aborted` | `ClientId` | `ClientIp` | `Jti` | `Sid` | `HttpClientName` | `Host` |
 
 `IsRequestSummary` keeps its name. `ConsoleTextProperties` and `RedactionExemptProperties` match by key, so list the short key (`jti`, `sc`, ...) for a `Minimal` summary. With `Minimal` the `Text` console line writes short keys too (`t`, `l`, `tid` or `tp`, `src`, `msg`, `ex`), and `ConsoleTextProperties` defaults to `["jti", "mth", "path", "sc", "ms"]`:
 
@@ -341,10 +341,11 @@ t=17:13:45.110 l=INF tid=55b5a5163e2d4b008bfa8938d5189c3c msg="Outbound GET /v1/
 | `ClientKind`, `UserAgent` | yes | yes | User-Agent header, redacted; `(none)` when missing |
 | `Route` | yes | yes | the matched route template, e.g. `/orders/{id}` |
 | `Aborted` | yes | yes | `true` when the client aborted the request; left out otherwise |
-| `ClientId` | yes | yes | `azp` claim, else `client_id`; redacted like `Jti` |
+| `ClientId` | yes | yes | `azp` claim, else `client_id`; redacted unless listed in `RedactionExemptProperties` |
 | `ClientIp` | yes | yes | `Connection.RemoteIpAddress`, or the first `X-Forwarded-For` entry with `TrustForwardedHeaders` (see [Security](#security)), written as `ClientIpLogging` says (on a 4xx, `ClientIpLoggingOnClientError` when higher); left out under `Off` |
 | `RemoteIp`, `RemotePort` | yes | yes | the connection address (only with `TrustForwardedHeaders`) and source port; written only when the effective mode is `Full` |
-| `Jti` | yes | yes | `jti` claim, redacted unless listed in `RedactionExemptProperties` |
+| `Jti` | yes | yes | `jti` claim; not redacted by default (`RedactionExemptProperties`) |
+| `Sid` | yes | yes | `sid` claim, else `ClaimTypes.Sid`; not redacted by default (`RedactionExemptProperties`) |
 | `Protocol`, `Scheme`, `Host` | | yes | request line; `Host` redacted |
 | `RequestContentLength`, `ResponseContentLength` | | yes | when known |
 | `IsAuthenticated`, `AuthScheme` | | yes | `User.Identity` |
@@ -372,7 +373,7 @@ Summary events are marked with the "IsRequestSummary" property and are processed
 | `RequestContentLength`, `ResponseContentLength` | | yes | when the content headers know it |
 | `ExceptionType` | | yes | full type name of the exception of a failed call |
 
-Never summarized, so an export does not cause another export: the library's audit client `Lukdrasil.StepUpLogging.Audit` and the OpenTelemetry OTLP exporter clients `OtlpTraceExporter`, `OtlpMetricExporter` and `OtlpLogExporter`. An `HttpClient` created with `new HttpClient()` is not covered, and outbound summaries carry no `Jti`. The option is read once at registration. See docs/adr/0032-request-summary-direction-detail-outbound.md.
+Never summarized, so an export does not cause another export: the library's audit client `Lukdrasil.StepUpLogging.Audit` and the OpenTelemetry OTLP exporter clients `OtlpTraceExporter`, `OtlpMetricExporter` and `OtlpLogExporter`. An `HttpClient` created with `new HttpClient()` is not covered, and outbound summaries carry no `Jti` or `Sid`. The option is read once at registration. See docs/adr/0032-request-summary-direction-detail-outbound.md.
 
 ### Example Request Summary Log
 
@@ -1318,7 +1319,7 @@ Every option, with its type and effect, is also listed in [CONFIGURATION.md](CON
 | `ExcludePaths` | `["/healthz", "/metrics", "/health"]` (applied only when not configured) | - | Paths to exclude from logging. A configured list replaces the defaults, `[]` excludes nothing |
 | `AdditionalExcludePaths` | `[]` | `SerilogStepUp__AdditionalExcludePaths__0` | Paths appended to the effective `ExcludePaths`, same matching; the defaults stay unless `ExcludePaths` is configured |
 | `RedactionRegexes` | `[]` | - | Regex patterns for redacting sensitive data. Always applied to request metadata and bodies; also applied to application log properties when `RedactLogEventProperties` is set — see [Security](#security) |
-| `RedactionExemptProperties` | `[]` | `SerilogStepUp__RedactionExemptProperties__0` | Property names (ordinal, case-sensitive) whose values are never redacted: the `RedactLogEventProperties` sweep skips them and `Jti` on the request summary keeps its value when listed. Request inputs are always redacted. See [Security](#security) |
+| `RedactionExemptProperties` | `["Jti", "Sid"]` | `SerilogStepUp__RedactionExemptProperties__0` | Property names (ordinal, case-sensitive) whose values are never redacted: the `RedactLogEventProperties` sweep skips them and `Jti` and `Sid` on the request summary keep their value when listed. A configured list replaces the default; `[""]` exempts nothing. Request inputs are always redacted. See [Security](#security) |
 | `RedactLogEventProperties` | `false` | - | Opt-in: also sweep the string-valued and URI-like (`PathString`, `QueryString`, `HostString`, `Uri`) scalar properties of application log events with `RedactionRegexes`, not just request metadata. See [Security](#security) |
 | `AdditionalSensitiveHeaders` | `[]` | - | Custom header names to redact in request logging |
 | `TrustForwardedHeaders` | `false` | - | When `true`, `ClientIp` is taken from the first `X-Forwarded-For` entry (v2 behavior). Only enable behind a proxy you control with `ForwardedHeadersMiddleware`. See [Security](#security). |
@@ -1607,9 +1608,10 @@ enrichment. Do not log secrets in interpolated message templates.
 
 `RedactionExemptProperties` lists property names whose values the patterns never touch, for an
 identifier that a broad pattern would otherwise mask: with a UUID pattern, Keycloak's
-`jti` (`onrtac:<uuid>`) would come out as `onrtac:[REDACTED]`. Listing `Jti` keeps it on the
-request summary, the request completion event and, with `RedactLogEventProperties` on, in the
-sweep; the same UUID in the request path or in any other property is still redacted. Names match
+`jti` (`onrtac:<uuid>`) would come out as `onrtac:[REDACTED]`. The default list, `["Jti", "Sid"]`,
+keeps the token id and the session id on the request summary, the request completion event and,
+with `RedactLogEventProperties` on, in the sweep; a configured list replaces the default, and
+`[""]` exempts nothing; the same UUID in the request path or in any other property is still redacted. Names match
 ordinal and case-sensitive, by name only: a secret you log under a listed name is exported in
 clear. The request path, query string, headers, route values and body are always redacted,
 whatever the list holds.
@@ -1618,7 +1620,7 @@ whatever the list holds.
 {
   "SerilogStepUp": {
     "RedactionRegexes": [ "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" ],
-    "RedactionExemptProperties": [ "Jti" ]
+    "RedactionExemptProperties": [ "Jti", "Sid" ]
   }
 }
 ```

@@ -17,6 +17,20 @@ is the legitimate interest in network and information security (GDPR Art. 6(1)(f
 
 With `ClientIpLogging` set to `Full`, the logs now also carry `RemotePort` on every request.
 
+## `Jti` and `Sid` skip the redaction patterns by default
+
+**What changed.** The inbound request summary and the completion event now write `Sid`, the caller token's `sid`
+claim, next to `Jti`. `RedactionExemptProperties` defaults to `["Jti", "Sid"]`, so a broad pattern (a bare UUID,
+say) no longer masks either. A list you configure replaces the default.
+
+**Why.** Both are pseudonymous correlation keys, and a masked id links nothing. See ADR 0045.
+
+**Migrate.** To have the patterns mask them again, configure an exempt list without them, or exempt nothing:
+
+```json
+{ "SerilogStepUp": { "RedactionExemptProperties": [ "" ] } }
+```
+
 # Migrating to v9.0.0
 
 ## The client address is off by default

@@ -178,6 +178,8 @@ internal sealed class StepUpRequestLogging(StepUpSettings settings, StepUpLoggin
 
         var jti = context.User.FindFirst("jti")?.Value;
         SetIfPresent(diagnosticContext, LogProperties.Jti, string.IsNullOrEmpty(jti) ? null : patterns.RedactProperty(LogProperties.Jti, jti));
+        var sid = InboundRequestSummary.SidOf(context.User);
+        SetIfPresent(diagnosticContext, LogProperties.Sid, string.IsNullOrEmpty(sid) ? null : patterns.RedactProperty(LogProperties.Sid, sid));
 
         // The step-up trigger sink is asynchronous, so the request whose Error causes the step-up is not stepped up
         // yet when this runs. A 5xx status, or an exception's 500, is knowable here, so the failing request is captured too.

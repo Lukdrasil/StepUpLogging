@@ -12,7 +12,7 @@ namespace Lukdrasil.StepUpLogging;
 internal static class InboundRequestSummary
 {
     // The summary fields the request completion event sets itself.
-    private static readonly HashSet<string> SetByCompletion = [LogProperties.ClientIp, LogProperties.RemoteIp, LogProperties.RemotePort, LogProperties.Jti, LogProperties.QueryString, LogProperties.RouteParameters];
+    private static readonly HashSet<string> SetByCompletion = [LogProperties.ClientIp, LogProperties.RemoteIp, LogProperties.RemotePort, LogProperties.Jti, LogProperties.Sid, LogProperties.QueryString, LogProperties.RouteParameters];
 
     /// <summary>The summary of the request in <paramref name="context"/>.</summary>
     internal static RequestSummary From(HttpContext context, string path, int statusCode, double elapsedMs, RequestSummaryDetail detail, bool trustForwardedHeaders, ClientIpMode clientIpMode, CompiledRedactionPatterns patterns)
@@ -23,7 +23,7 @@ internal static class InboundRequestSummary
             .With("Route", RouteOf(context))
             .WithTrue("Aborted", context.RequestAborted.IsCancellationRequested)
             .With("ClientId", Redacted(patterns, "ClientId", ClientIdOf(context.User)));
-        AddSharedCompact(summary, clientIp, RequestClient.Remote(context, trustForwardedHeaders, clientIpMode), Redacted(patterns, LogProperties.Jti, JtiOf(context.User)));
+        AddSharedCompact(summary, clientIp, RequestClient.Remote(context, trustForwardedHeaders, clientIpMode), Redacted(patterns, LogProperties.Jti, JtiOf(context.User)), Redacted(patterns, LogProperties.Sid, SidOf(context.User)));
         if (detail == RequestSummaryDetail.Full)
         {
             AddFull(summary, context, path, redactedPath, forwardedFor, patterns);
@@ -42,11 +42,16 @@ internal static class InboundRequestSummary
     internal static string? ClientIdOf(ClaimsPrincipal? user)
         => user?.FindFirst("azp")?.Value ?? user?.FindFirst("client_id")?.Value;
 
-    private static void AddSharedCompact(RequestSummary summary, string? clientIp, (string? RemoteIp, int? RemotePort) remote, string? jti)
+    /// <summary>The <c>sid</c> claim, else the <see cref="ClaimTypes.Sid"/> claim the JWT handler maps it to, else <see langword="null"/>.</summary>
+    internal static string? SidOf(ClaimsPrincipal? user)
+        => user?.FindFirst("sid")?.Value ?? user?.FindFirst(ClaimTypes.Sid)?.Value;
+
+    private static void AddSharedCompact(RequestSummary summary, string? clientIp, (string? RemoteIp, int? RemotePort) remote, string? jti, string? sid)
         => summary.With(LogProperties.ClientIp, clientIp)
             .With(LogProperties.RemoteIp, remote.RemoteIp)
             .With(LogProperties.RemotePort, remote.RemotePort)
-            .With(LogProperties.Jti, jti);
+            .With(LogProperties.Jti, jti)
+            .With(LogProperties.Sid, sid);
 
     private static void AddSharedFull(RequestSummary summary, string? queryString, IReadOnlyDictionary<string, object?>? routeParameters, string? forwardedFor)
         => summary.With(LogProperties.QueryString, queryString).With(LogProperties.RouteParameters, routeParameters).With("ForwardedFor", forwardedFor);

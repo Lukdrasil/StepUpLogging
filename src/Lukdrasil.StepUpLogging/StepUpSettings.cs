@@ -144,6 +144,7 @@ internal sealed class StepUpSettings
         options.ExcludePaths ??= ["/healthz", "/metrics", "/health"];
         options.ExcludePaths = [.. options.ExcludePaths, .. options.AdditionalExcludePaths ?? []];
         options.NeverStepUpCategories ??= ["Microsoft.EntityFrameworkCore.Database.Command"];
+        options.RedactionExemptProperties ??= [LogProperties.Jti, LogProperties.Sid];
         string[] textProperties = [LogProperties.Jti, "Method", "Path", "StatusCode", "ElapsedMs"];
         options.ConsoleTextProperties ??= options.RequestSummaryDetail == RequestSummaryDetail.Minimal
             ? [.. textProperties.Select(p => RequestSummary.MinimalKeys[p])]
