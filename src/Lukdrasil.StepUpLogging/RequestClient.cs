@@ -1,12 +1,13 @@
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Claims;
 using Microsoft.AspNetCore.Http;
 
 namespace Lukdrasil.StepUpLogging;
 
 /// <summary>
 /// The one rule for who sent a request (ADR 0008), shared by request logging, the request summary and the audit
-/// trail: the client address and the User-Agent.
+/// trail: the client address, the User-Agent and the ids of the caller's token.
 /// </summary>
 internal static class RequestClient
 {
@@ -111,13 +112,25 @@ internal static class RequestClient
     internal static (string? RemoteIp, int? RemotePort) Remote(HttpContext httpContext, bool trustForwardedHeaders, ClientIpMode mode)
     {
         var connection = httpContext.Connection;
-        if (mode != ClientIpMode.Full || connection.RemoteIpAddress is not { } address)
+        if (mode != ClientIpMode.Full)
         {
             return (null, null);
         }
 
-        return (trustForwardedHeaders ? address.ToString() : null, connection.RemotePort > 0 ? connection.RemotePort : null);
+        return (trustForwardedHeaders ? connection.RemoteIpAddress?.ToString() : null, connection.RemotePort > 0 ? connection.RemotePort : null);
     }
+
+    /// <summary>
+    /// The caller token's <c>jti</c> and its session id, the <c>sid</c> claim else the <see cref="ClaimTypes.Sid"/>
+    /// claim the JWT handler maps it to (ADR 0045 D1), each through <see cref="CompiledRedactionPatterns.RedactProperty"/>
+    /// and <see langword="null"/> when the claim is absent or empty.
+    /// </summary>
+    internal static (string? Jti, string? Sid) TokenIds(ClaimsPrincipal? user, CompiledRedactionPatterns patterns)
+        => (Redacted(patterns, LogProperties.Jti, user?.FindFirst("jti")?.Value),
+            Redacted(patterns, LogProperties.Sid, user?.FindFirst("sid")?.Value ?? user?.FindFirst(ClaimTypes.Sid)?.Value));
+
+    private static string? Redacted(CompiledRedactionPatterns patterns, string name, string? value)
+        => string.IsNullOrEmpty(value) ? null : patterns.RedactProperty(name, value);
 
     /// <summary>The raw User-Agent header, or <see langword="null"/> when it is absent or blank.</summary>
     internal static string? UserAgent(HttpRequest request)

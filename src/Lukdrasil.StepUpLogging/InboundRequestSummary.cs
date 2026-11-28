@@ -23,7 +23,7 @@ internal static class InboundRequestSummary
             .With("Route", RouteOf(context))
             .WithTrue("Aborted", context.RequestAborted.IsCancellationRequested)
             .With("ClientId", Redacted(patterns, "ClientId", ClientIdOf(context.User)));
-        AddSharedCompact(summary, clientIp, RequestClient.Remote(context, trustForwardedHeaders, clientIpMode), Redacted(patterns, LogProperties.Jti, JtiOf(context.User)), Redacted(patterns, LogProperties.Sid, SidOf(context.User)));
+        AddSharedCompact(summary, clientIp, RequestClient.Remote(context, trustForwardedHeaders, clientIpMode), RequestClient.TokenIds(context.User, patterns));
         if (detail == RequestSummaryDetail.Full)
         {
             AddFull(summary, context, path, redactedPath, forwardedFor, patterns);
@@ -42,16 +42,12 @@ internal static class InboundRequestSummary
     internal static string? ClientIdOf(ClaimsPrincipal? user)
         => user?.FindFirst("azp")?.Value ?? user?.FindFirst("client_id")?.Value;
 
-    /// <summary>The <c>sid</c> claim, else the <see cref="ClaimTypes.Sid"/> claim the JWT handler maps it to, else <see langword="null"/>.</summary>
-    internal static string? SidOf(ClaimsPrincipal? user)
-        => user?.FindFirst("sid")?.Value ?? user?.FindFirst(ClaimTypes.Sid)?.Value;
-
-    private static void AddSharedCompact(RequestSummary summary, string? clientIp, (string? RemoteIp, int? RemotePort) remote, string? jti, string? sid)
+    private static void AddSharedCompact(RequestSummary summary, string? clientIp, (string? RemoteIp, int? RemotePort) remote, (string? Jti, string? Sid) tokenIds)
         => summary.With(LogProperties.ClientIp, clientIp)
             .With(LogProperties.RemoteIp, remote.RemoteIp)
             .With(LogProperties.RemotePort, remote.RemotePort)
-            .With(LogProperties.Jti, jti)
-            .With(LogProperties.Sid, sid);
+            .With(LogProperties.Jti, tokenIds.Jti)
+            .With(LogProperties.Sid, tokenIds.Sid);
 
     private static void AddSharedFull(RequestSummary summary, string? queryString, IReadOnlyDictionary<string, object?>? routeParameters, string? forwardedFor)
         => summary.With(LogProperties.QueryString, queryString).With(LogProperties.RouteParameters, routeParameters).With("ForwardedFor", forwardedFor);
@@ -74,9 +70,6 @@ internal static class InboundRequestSummary
         => summary.With("IsAuthenticated", identity?.IsAuthenticated ?? false).With("AuthScheme", identity?.AuthenticationType);
 
     private static string? RouteOf(HttpContext context) => (context.GetEndpoint() as RouteEndpoint)?.RoutePattern.RawText;
-
-    /// <summary>The <c>jti</c> claim, else <see langword="null"/>.</summary>
-    internal static string? JtiOf(ClaimsPrincipal? user) => user?.FindFirst("jti")?.Value;
 
     private static string? Redacted(CompiledRedactionPatterns patterns, string name, string? value)
         => value is null ? null : patterns.RedactProperty(name, value);

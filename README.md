@@ -252,7 +252,7 @@ OpenTelemetry specification, so `Authorization=Basic%20QWxhZGRpbg%3D%3D` reaches
 
 When the logger is built, the library writes through its own output, whatever the current level:
 
-- One `Information` line with the effective configuration. The OTLP endpoint is shown as scheme, host and port only.
+- One `Information` line with the effective configuration, including the client IP modes for logs, client error requests and audit. The OTLP endpoint is shown as scheme, host and port only.
   `WriteStartupSummary` `false` leaves this line out; the Warnings below are written either way.
 - A `Warning` for each key under `SerilogStepUp` that matches no option, such as a misspelled `BaseLvel` or
   `OtlpEndpoint`. The key is ignored.

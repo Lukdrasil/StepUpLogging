@@ -15,7 +15,7 @@ is the legitimate interest in network and information security (GDPR Art. 6(1)(f
 { "SerilogStepUp": { "ClientIpLoggingOnClientError": "Off" } }
 ```
 
-With `ClientIpLogging` set to `Full`, the logs now also carry `RemotePort` on every request.
+With `ClientIpLogging` set to `Full`, the logs now also carry `RemotePort` on every request, and `RemoteIp` too when `TrustForwardedHeaders` is on.
 
 ## `Jti` and `Sid` skip the redaction patterns by default
 
