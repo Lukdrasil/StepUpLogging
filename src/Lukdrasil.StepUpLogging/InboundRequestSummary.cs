@@ -75,7 +75,8 @@ internal static class InboundRequestSummary
 
     private static string? RouteOf(HttpContext context) => (context.GetEndpoint() as RouteEndpoint)?.RoutePattern.RawText;
 
-    private static string? JtiOf(ClaimsPrincipal? user) => user?.FindFirst("jti")?.Value;
+    /// <summary>The <c>jti</c> claim, else <see langword="null"/>.</summary>
+    internal static string? JtiOf(ClaimsPrincipal? user) => user?.FindFirst("jti")?.Value;
 
     private static string? Redacted(CompiledRedactionPatterns patterns, string name, string? value)
         => value is null ? null : patterns.RedactProperty(name, value);

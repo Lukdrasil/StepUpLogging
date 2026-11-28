@@ -329,7 +329,7 @@ The User-Agent is client-supplied and spoofable: `ClientKind` is a filtering lab
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | Field | `Direction` | `Method` | `Path` | `StatusCode` | `ElapsedMs` | `ClientKind` | `UserAgent` | `Route` | `Aborted` | `ClientId` | `ClientIp` | `Jti` | `Sid` | `HttpClientName` | `Host` |
 
-`IsRequestSummary` keeps its name. `ConsoleTextProperties` and `RedactionExemptProperties` match by key, so list the short key (`jti`, `sc`, ...) for a `Minimal` summary. With `Minimal` the `Text` console line writes short keys too (`t`, `l`, `tid` or `tp`, `src`, `msg`, `ex`), and `ConsoleTextProperties` defaults to `["jti", "mth", "path", "sc", "ms"]`:
+`IsRequestSummary` keeps its name. `ConsoleTextProperties` matches by key, so list the short key (`jti`, `sc`, ...) for a `Minimal` summary. The summary is redacted before the short keys apply, so `RedactionExemptProperties` takes the field name (`Jti`, `Sid`). With `Minimal` the `Text` console line writes short keys too (`t`, `l`, `tid` or `tp`, `src`, `msg`, `ex`), and `ConsoleTextProperties` defaults to `["jti", "mth", "path", "sc", "ms"]`:
 
 ```text
 t=17:13:45.110 l=INF tid=55b5a5163e2d4b008bfa8938d5189c3c msg="Outbound GET /v1/items 200 2.1677 ms Unknown MyApp/1.0" mth=GET path=/v1/items sc=200 ms=2.1677

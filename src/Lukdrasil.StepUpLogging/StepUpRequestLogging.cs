@@ -176,7 +176,7 @@ internal sealed class StepUpRequestLogging(StepUpSettings settings, StepUpLoggin
             activity?.SetTag("security.redaction_applied", true);
         }
 
-        var jti = context.User.FindFirst("jti")?.Value;
+        var jti = InboundRequestSummary.JtiOf(context.User);
         SetIfPresent(diagnosticContext, LogProperties.Jti, string.IsNullOrEmpty(jti) ? null : patterns.RedactProperty(LogProperties.Jti, jti));
         var sid = InboundRequestSummary.SidOf(context.User);
         SetIfPresent(diagnosticContext, LogProperties.Sid, string.IsNullOrEmpty(sid) ? null : patterns.RedactProperty(LogProperties.Sid, sid));

@@ -61,7 +61,13 @@ public class RequestSummaryOnErrorTests
             {
                 app.Use((context, next) =>
                 {
-                    context.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("azp", "rate-limited-client"), new Claim("jti", "token-1"), new Claim("sid", "session-1")], "Bearer"));
+                    Claim[] sid = context.Request.Query["sid"].ToString() switch
+                    {
+                        "mapped" => [new Claim(ClaimTypes.Sid, "session-1")],
+                        "none" => [],
+                        _ => [new Claim("sid", "session-1")],
+                    };
+                    context.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("azp", "rate-limited-client"), new Claim("jti", "token-1"), .. sid], "Bearer"));
                     context.Connection.RemoteIpAddress = IPAddress.Parse("203.0.113.7");
                     context.Connection.RemotePort = 51234;
                     return next();
@@ -312,11 +318,51 @@ public class RequestSummaryOnErrorTests
     }
 
     [Fact]
+    public async Task DefaultExemption_KeepsJtiAndSidInClear_OnTheSummaryAndTheCompletionEvent()
+    {
+        var events = await ExportedAsync("/status/429", ("RedactionRegexes:0", "token|session"));
+
+        Assert.All(events.Where(e => IsSummary(e) || IsCompletion(e)), e =>
+        {
+            Assert.Equal("token-1", Scalar(e, "Jti"));
+            Assert.Equal("session-1", Scalar(e, "Sid"));
+        });
+    }
+
+    [Fact]
+    public async Task BlankExemptList_RedactsJtiAndSid()
+    {
+        var events = await ExportedAsync("/status/429", ("RedactionRegexes:0", "token|session"), ("RedactionExemptProperties:0", ""));
+
+        Assert.All(events.Where(e => IsSummary(e) || IsCompletion(e)), e =>
+        {
+            Assert.DoesNotContain("token", (string)Scalar(e, "Jti")!, StringComparison.Ordinal);
+            Assert.DoesNotContain("session", (string)Scalar(e, "Sid")!, StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
     public async Task Keep_TheCompletionEvent_WritesTheTokenSid()
     {
         var events = await ExportedAsync("/status/429");
 
         Assert.Equal("session-1", Scalar(Assert.Single(events, IsCompletion), "Sid"));
         Assert.Equal("session-1", Scalar(Assert.Single(events, IsSummary), "Sid"));
+    }
+
+    [Fact]
+    public async Task Keep_TheCompletionEvent_FallsBackToTheMappedSidClaim()
+    {
+        var events = await ExportedAsync("/status/429?sid=mapped");
+
+        Assert.Equal("session-1", Scalar(Assert.Single(events, IsCompletion), "Sid"));
+    }
+
+    [Fact]
+    public async Task Keep_TheCompletionEvent_WithoutASidClaim_LeavesSidOut()
+    {
+        var events = await ExportedAsync("/status/429?sid=none");
+
+        Assert.False(Assert.Single(events, IsCompletion).Properties.ContainsKey("Sid"));
     }
 }
