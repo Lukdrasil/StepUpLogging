@@ -112,6 +112,7 @@ public class RequestCompletionClientIpTests
             request.Headers.Add("X-Real-IP", "198.51.100.9");
             request.Headers.Add("X-Original-For", "198.51.100.9:5678");
             request.Headers.Add("Authorization", "Bearer secret");
+            request.Headers.Add("Cookie", "session=secret");
 
             var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
             Assert.Equal(status, (int)response.StatusCode);
@@ -187,9 +188,13 @@ public class RequestCompletionClientIpTests
     [Theory]
     [InlineData(ClientIpMode.Off, ClientIpMode.Off, null)]
     [InlineData(ClientIpMode.Off, ClientIpMode.Prefix, "203.0.113.0/24")]
+    [InlineData(ClientIpMode.Off, ClientIpMode.Full, "203.0.113.7")]
     [InlineData(ClientIpMode.Prefix, ClientIpMode.Off, "203.0.113.0/24")]
-    [InlineData(ClientIpMode.Full, ClientIpMode.Prefix, "203.0.113.7")]
+    [InlineData(ClientIpMode.Prefix, ClientIpMode.Prefix, "203.0.113.0/24")]
     [InlineData(ClientIpMode.Prefix, ClientIpMode.Full, "203.0.113.7")]
+    [InlineData(ClientIpMode.Full, ClientIpMode.Off, "203.0.113.7")]
+    [InlineData(ClientIpMode.Full, ClientIpMode.Prefix, "203.0.113.7")]
+    [InlineData(ClientIpMode.Full, ClientIpMode.Full, "203.0.113.7")]
     public async Task ClientErrorRequest_LogsTheHigherOfTheTwoModes(ClientIpMode clientIpLogging, ClientIpMode onClientError, string? expected)
     {
         var evt = await CompletionEventAsync(clientIpLogging, 403, onClientError);
@@ -203,8 +208,11 @@ public class RequestCompletionClientIpTests
         var headers = Headers(await CompletionEventAsync(ClientIpMode.Off, 401, ClientIpMode.Full));
 
         Assert.Equal("198.51.100.9, 10.0.0.1", headers["X-Forwarded-For"]);
+        Assert.Equal("for=198.51.100.9", headers["Forwarded"]);
         Assert.Equal("198.51.100.9", headers["X-Real-IP"]);
+        Assert.Equal("198.51.100.9:5678", headers["X-Original-For"]);
         Assert.Equal("[REDACTED]", headers["Authorization"]);
+        Assert.Equal("[REDACTED]", headers["Cookie"]);
     }
 
     [Fact]
@@ -212,7 +220,7 @@ public class RequestCompletionClientIpTests
     {
         var headers = Headers(await CompletionEventAsync(ClientIpMode.Off, 200, ClientIpMode.Full));
 
-        Assert.Equal("[REDACTED]", headers["X-Forwarded-For"]);
+        Assert.All(["X-Forwarded-For", "Forwarded", "X-Real-IP", "X-Original-For"], name => Assert.Equal("[REDACTED]", headers[name]));
     }
 
     [Theory]

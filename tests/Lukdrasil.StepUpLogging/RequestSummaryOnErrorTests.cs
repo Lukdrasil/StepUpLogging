@@ -1,3 +1,4 @@
+using System.Net;
 using System.Collections.Generic;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Builder;
@@ -61,6 +62,8 @@ public class RequestSummaryOnErrorTests
                 app.Use((context, next) =>
                 {
                     context.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("azp", "rate-limited-client")], "Bearer"));
+                    context.Connection.RemoteIpAddress = IPAddress.Parse("203.0.113.7");
+                    context.Connection.RemotePort = 51234;
                     return next();
                 });
                 app.UseStepUpRequestLogging();
@@ -81,6 +84,7 @@ public class RequestSummaryOnErrorTests
                 using var client = app.GetTestClient();
                 using var request = new HttpRequestMessage(HttpMethod.Get, path);
                 request.Headers.TryAddWithoutValidation("User-Agent", UserAgent);
+                request.Headers.Add("X-Forwarded-For", "198.51.100.9");
                 try
                 {
                     using var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
@@ -184,6 +188,26 @@ public class RequestSummaryOnErrorTests
         Assert.True(IsCompletion(completion));
         Assert.Equal(LogEventLevel.Error, completion.Level);
         Assert.Equal(UserAgent, Scalar(completion, "UserAgent"));
+    }
+
+    [Fact]
+    public async Task Omit_AClientErrorRequest_CarriesTheFullClientIdentityOnTheCompletionEvent()
+    {
+        var events = await ExportedAsync("/status/429", ("RequestSummaryOnError", "Omit"));
+
+        var completion = Assert.Single(events);
+        Assert.Equal("203.0.113.7", Scalar(completion, "ClientIp"));
+        Assert.Equal("198.51.100.9", Scalar(completion, "ForwardedFor"));
+        Assert.Equal(51234, Scalar(completion, "RemotePort"));
+    }
+
+    [Fact]
+    public async Task AnUnhandledException_IsNotAClientErrorRequest()
+    {
+        var events = await ExportedAsync("/throw");
+
+        Assert.Equal(2, events.Length);
+        Assert.All(events, e => Assert.Null(Scalar(e, "ClientIp")));
     }
 
     [Fact]
