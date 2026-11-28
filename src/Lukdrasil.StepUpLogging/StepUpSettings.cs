@@ -19,6 +19,10 @@ internal sealed class StepUpSettings
     // Redacted in the logged headers unless the client IP mode of the request is Full (ADR 0042 D5, ADR 0044).
     private static readonly string[] ClientIpHeaders = ["X-Forwarded-For", "Forwarded", "X-Real-IP", "X-Original-For"];
 
+    private readonly ClientIpMode _clientErrorIpLogging;
+    private readonly IReadOnlySet<string> _sensitiveHeaders;
+    private readonly IReadOnlySet<string> _clientErrorSensitiveHeaders;
+
     internal StepUpSettings(StepUpLoggingOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -90,10 +94,6 @@ internal sealed class StepUpSettings
     internal CategoryPolicy Categories { get; }
 
     internal ExcludedPaths ExcludedPaths { get; }
-
-    private readonly ClientIpMode _clientErrorIpLogging;
-    private readonly IReadOnlySet<string> _sensitiveHeaders;
-    private readonly IReadOnlySet<string> _clientErrorSensitiveHeaders;
 
     /// <summary>
     /// The built-in sensitive headers, the client IP headers unless the client IP mode for <paramref name="status"/>

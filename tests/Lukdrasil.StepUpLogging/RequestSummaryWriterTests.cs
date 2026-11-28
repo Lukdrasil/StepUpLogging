@@ -34,7 +34,8 @@ public class RequestSummaryWriterTests
         return context;
     }
 
-    private static object? Scalar(LogEvent logEvent, string name) => ((ScalarValue)logEvent.Properties[name]).Value;
+    private static object? Scalar(LogEvent logEvent, string name)
+        => logEvent.Properties.TryGetValue(name, out var value) ? ((ScalarValue)value).Value : null;
 
     [Fact]
     public void Write_WritesSummaryToSummaryLogger()
@@ -172,9 +173,6 @@ public class RequestSummaryWriterTests
         return Assert.Single(sink.Events);
     }
 
-    private static object? ScalarOrNull(LogEvent logEvent, string name)
-        => logEvent.Properties.TryGetValue(name, out var value) ? ((ScalarValue)value).Value : null;
-
     [Fact]
     public void WriteInbound_ClientErrorRequest_WritesTheFullClientIdentity_ByDefault()
     {
@@ -190,9 +188,9 @@ public class RequestSummaryWriterTests
     {
         var summary = InboundSummary(200, new StepUpLoggingOptions());
 
-        Assert.Null(ScalarOrNull(summary, "ClientIp"));
-        Assert.Null(ScalarOrNull(summary, "ForwardedFor"));
-        Assert.Null(ScalarOrNull(summary, "RemotePort"));
+        Assert.Null(Scalar(summary, "ClientIp"));
+        Assert.Null(Scalar(summary, "ForwardedFor"));
+        Assert.Null(Scalar(summary, "RemotePort"));
     }
 
     [Fact]
@@ -200,7 +198,7 @@ public class RequestSummaryWriterTests
     {
         var summary = InboundSummary(404, new StepUpLoggingOptions { ClientIpLoggingOnClientError = ClientIpMode.Off });
 
-        Assert.Null(ScalarOrNull(summary, "ClientIp"));
+        Assert.Null(Scalar(summary, "ClientIp"));
     }
 
     [Fact]
